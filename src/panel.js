@@ -24,7 +24,7 @@ async function load() {
 
 function updateStats(extra = '') {
   const n = index.tweets.length, v = index.vectorCount();
-  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement${extra}`;
+  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement${extra} · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
 }
 
 // ---------- recherche ----------

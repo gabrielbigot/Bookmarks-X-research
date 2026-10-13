@@ -4,7 +4,8 @@ import { cpSync, mkdirSync, rmSync, readdirSync } from 'node:fs';
 rmSync('dist', { recursive: true, force: true });
 mkdirSync('dist/ort', { recursive: true });
 
-const common = { bundle: true, minify: false, sourcemap: false, target: 'chrome120', logLevel: 'info' };
+const BUILD = new Date().toISOString().slice(0, 16).replace('T', ' ');
+const common = { define: { __BUILD__: JSON.stringify(BUILD) }, bundle: true, minify: false, sourcemap: false, target: 'chrome120', logLevel: 'info' };
 await build({ ...common, entryPoints: { background: 'src/background.js', panel: 'src/panel.js', offscreen: 'src/offscreen.js' }, format: 'esm', outdir: 'dist' });
 // Scripts de page : pas de modules ES.
 await build({ ...common, entryPoints: { inject: 'src/inject.js', content: 'src/content.js' }, format: 'iife', outdir: 'dist' });

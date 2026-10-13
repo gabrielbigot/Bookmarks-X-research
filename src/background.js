@@ -57,20 +57,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'startBackfill':
     case 'stopBackfill': {
       (async () => {
-        const patterns = X_TABS.map((u) => u.replace('/*', '/i/bookmarks*'));
-        let [tab] = await chrome.tabs.query({ url: patterns });
+        const ping = (t) => chrome.tabs.sendMessage(t.id, { type: 'ping' }).then((r) => ({ t, r }), () => null);
+        const find = async () => {
+          const tabs = await chrome.tabs.query({ url: X_TABS });
+          const rs = (await Promise.all(tabs.map(ping))).filter(Boolean);
+          return rs.find((x) => x.r?.hasRequest)?.t || rs.find((x) => x.r?.likely)?.t || null;
+        };
+        let tab = await find();
         if (!tab) {
           if (msg.type === 'stopBackfill') return sendResponse({ ok: false });
           tab = await chrome.tabs.create({ url: 'https://x.com/i/bookmarks', active: false });
-          await new Promise((resolve) => {
-            const onUpd = (id, info) => { if (id === tab.id && info.status === 'complete') { chrome.tabs.onUpdated.removeListener(onUpd); resolve(); } };
-            chrome.tabs.onUpdated.addListener(onUpd);
-            setTimeout(resolve, 20000);
-          });
+          // On attend que X ait chargé la page et fait sa requête Bookmarks (30 s max).
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 1000));
+            const got = await ping(tab);
+            if (got?.r?.hasRequest) break;
+          }
         }
-        // Le content script peut mettre un instant à être prêt : on réessaie.
         for (let i = 0; i < 10; i++) {
-          try { await chrome.tabs.sendMessage(tab.id, { type: msg.type }); return sendResponse({ ok: true }); }
+          try { await chrome.tabs.sendMessage(tab.id, { type: msg.type }); return sendResponse({ ok: true, url: tab.url }); }
           catch { await new Promise((r) => setTimeout(r, 1000)); }
         }
         sendResponse({ ok: false, reason: 'no-content-script' });

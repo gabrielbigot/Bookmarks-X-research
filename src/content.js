@@ -1,7 +1,11 @@
 // Monde isolé : relaie les tweets capturés vers l'extension, et affiche un bouton + overlay de recherche
 // directement sur la page Bookmarks de X.
 const TAG = 'xbs';
-const isBookmarksPage = () => location.pathname.startsWith('/i/bookmarks');
+let lastStatusReply = 0, lastCapture = { hasRequest: false, running: false };
+// X renomme/déplace la page (« Historique > Signets ») : on ne se fie pas qu'au chemin.
+const looksLikeBookmarks = () =>
+  /^\/i\/(bookmarks|history)/.test(location.pathname) || /(historique|history|signets|bookmarks)/i.test(document.title);
+const isBookmarksPage = () => looksLikeBookmarks() || lastCapture.hasRequest;
 const send = (msg) => { try { chrome.runtime.sendMessage(msg).catch(() => {}); } catch {} };
 
 window.addEventListener('message', (ev) => {
@@ -15,14 +19,14 @@ window.addEventListener('message', (ev) => {
 
 const ctl = (type) => window.postMessage({ src: TAG + '-ctl', type }, '*');
 
-chrome.runtime.onMessage.addListener((msg) => {
+chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg.type === 'startBackfill') ctl('start');
   if (msg.type === 'stopBackfill') ctl('stop');
+  if (msg.type === 'ping') { sendResponse({ ...lastCapture, likely: looksLikeBookmarks(), url: location.href }); }
 });
 
 // ---------- UI sur la page ----------
 let host, shadow, pill, statusEl, capEl, overlay;
-let lastStatusReply = 0, lastCapture = { hasRequest: false, running: false };
 
 function setStatus(d) {
   if (!statusEl) return;
@@ -86,13 +90,13 @@ window.addEventListener('message', (e) => { if (e.data?.xbs === 'close') toggleO
 
 function refreshCapture() {
   if (!capEl) return;
-  ctl('status');
   if (Date.now() - lastStatusReply > 3000 && lastStatusReply !== 0) capEl.textContent = '⚠ capture inactive';
   else if (lastStatusReply === 0) capEl.textContent = '⚠ script de capture non injecté — recharge la page';
   else capEl.textContent = lastCapture.hasRequest ? '● capture active' : '○ capture en attente (scrolle un peu)';
 }
 
 function sync() {
+  ctl('status'); // en permanence : permet au panneau de savoir quel onglet a capturé X
   if (isBookmarksPage()) {
     if (!host) buildUi();
     else if (!host.isConnected) document.documentElement.appendChild(host);
