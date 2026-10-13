@@ -70,16 +70,18 @@ const extId = new URL(sw.url()).host;
 
 const panel = await ctx.newPage();
 await panel.goto(`chrome-extension://${extId}/panel.html`);
-await panel.waitForSelector('.card');
+await panel.waitForSelector('.tw');
 await panel.waitForFunction(() => /8 bookmarks/.test(document.getElementById('stats').textContent));
 
+await panel.setViewportSize({ width: 760, height: 1100 });
+await panel.screenshot({ path: 'test/feed.png' });
 await panel.fill('#q', 'tokio');
 await panel.waitForTimeout(500);
-assert.match(await panel.locator('.card').first().innerText(), /tokio/i);
+assert.match(await panel.locator('.tw').first().innerText(), /tokio/i);
 
 await panel.fill('#q', 'from:@devops postgres');
 await panel.waitForTimeout(500);
-assert.equal(await panel.locator('.card').count(), 1);
+assert.equal(await panel.locator('.tw').count(), 1);
 
 await panel.fill('#q', 'qzxqzx');
 await panel.waitForTimeout(400);

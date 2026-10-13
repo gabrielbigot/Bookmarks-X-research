@@ -13,7 +13,16 @@ env.useBrowserCache = true;
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('ort/');
 env.backends.onnx.wasm.numThreads = 1; // pas de SharedArrayBuffer dans une page d'extension
 
-const emit = (msg) => chrome.runtime.sendMessage(msg).catch(() => {});
+// État interrogeable par le panneau (les messages envoyés avant son ouverture seraient perdus).
+const status = { model: 'idle', pct: 0, device: '', indexing: false, done: 0, total: 0, error: '' };
+const emit = (msg) => {
+  if (msg.type === 'modelProgress') { status.model = msg.ready ? 'ready' : 'loading'; if (msg.pct != null) status.pct = msg.pct; }
+  if (msg.type === 'modelDevice') status.device = msg.device;
+  if (msg.type === 'indexProgress') { status.indexing = true; status.done = msg.done; status.total = msg.total; }
+  if (msg.type === 'indexDone') { status.indexing = false; status.error = ''; }
+  if (msg.type === 'indexError') { status.indexing = false; status.model = status.model === 'ready' ? 'ready' : 'error'; status.error = msg.message; }
+  chrome.runtime.sendMessage(msg).catch(() => {});
+};
 
 let modelPromise;
 function loadModel() {
@@ -112,7 +121,8 @@ async function indexLoop() {
 }
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg?.type === 'off:index') { indexLoop(); return false; }
+  if (msg?.type === 'off:index') { if (msg.force) lastFailure = 0; indexLoop(); return false; }
+  if (msg?.type === 'off:status') { sendResponse(status); return false; }
   if (msg?.type === 'off:embedQuery') {
     embed([queryPrompt(msg.text)])
       .then(([v]) => sendResponse({ vec: Array.from(v) }))

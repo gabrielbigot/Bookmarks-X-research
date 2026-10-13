@@ -1,4 +1,5 @@
 // Recherche hybride : BM25 (mots-clés) + similarité cosinus (embeddings), fusionnées par RRF.
+import { decodeEntities, isStopword } from './text.js';
 export const DIM = 256;
 
 export function normalizeText(s) {
@@ -14,8 +15,8 @@ export function tokenize(s) {
 
 // Texte indexé pour un tweet (BM25 et embedding).
 export function tweetText(t) {
-  let s = `${t.name} (@${t.handle}) : ${t.text}`;
-  if (t.quoted) s += `\nCite @${t.quoted.handle} : ${t.quoted.text}`;
+  let s = `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}`;
+  if (t.quoted) s += `\nCite @${t.quoted.handle} : ${decodeEntities(t.quoted.text)}`;
   const alts = (t.media || []).map((m) => m.alt).filter(Boolean);
   if (alts.length) s += `\n${alts.join(' ')}`;
   return s;
@@ -115,7 +116,10 @@ export class Index {
   }
 
   bm25(text, allowed, limit = 200) {
-    const toks = tokenize(text);
+    const all = tokenize(text);
+    // Une phrase libre contient des mots vides ("je cherche des tweets…") qui polluent les mots-clés.
+    const kept = all.filter((t) => !isStopword(t));
+    const toks = kept.length ? kept : all;
     if (!toks.length) return [];
     const N = this.tweets.length;
     const k1 = 1.4, b = 0.75;
@@ -171,4 +175,9 @@ export function rrf(lists, weights = [], k = 60) {
 
 export function highlightTerms(text) {
   return [...new Set(tokenize(text))].filter((t) => t.length >= 3);
+}
+
+// Nombre de mots "utiles" : sert à pondérer le sémantique face aux mots-clés.
+export function contentWords(text) {
+  return tokenize(text).filter((t) => !isStopword(t)).length;
 }

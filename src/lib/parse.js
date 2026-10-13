@@ -1,3 +1,5 @@
+import { decodeEntities } from './text.js';
+
 // Parse les réponses GraphQL "Bookmarks" de X vers un format de tweet normalisé.
 // Volontairement défensif : X change souvent la forme de ses réponses.
 
@@ -37,9 +39,15 @@ export function normalizeTweet(raw, depth = 0) {
   const media = [];
   for (const m of mediaEntities) {
     if (m.url) text = text.split(m.url).join('');
-    media.push({ type: m.type, url: m.media_url_https, alt: m.ext_alt_text || '' });
+    const item = { type: m.type, url: m.media_url_https, alt: m.ext_alt_text || '', w: m.original_info?.width, h: m.original_info?.height };
+    const mp4 = (m.video_info?.variants ?? []).filter((v) => v.content_type === 'video/mp4');
+    if (mp4.length) { // meilleur débit raisonnable (≤ ~2,2 Mbit/s), sinon le plus léger
+      const ok = mp4.filter((v) => (v.bitrate ?? 0) <= 2_200_000).sort((a, b) => b.bitrate - a.bitrate);
+      item.video = (ok[0] ?? mp4.sort((a, b) => a.bitrate - b.bitrate)[0]).url;
+    }
+    media.push(item);
   }
-  text = text.replace(/[ \t]+\n/g, '\n').trim();
+  text = decodeEntities(text.replace(/[ \t]+\n/g, '\n').trim());
 
   const id = r.rest_id ?? legacy.id_str;
   const { handle, name, avatar } = userInfo(r);
@@ -57,6 +65,8 @@ export function normalizeTweet(raw, depth = 0) {
     media,
     lang: legacy.lang || '',
     stats: {
+      replies: legacy.reply_count ?? 0,
+      views: Number(r.views?.count) || 0,
       likes: legacy.favorite_count ?? 0,
       reposts: legacy.retweet_count ?? 0,
       bookmarks: legacy.bookmark_count ?? 0,

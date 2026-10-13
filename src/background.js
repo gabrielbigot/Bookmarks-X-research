@@ -16,9 +16,9 @@ async function ensureOffscreen() {
   }
 }
 
-async function kickIndexing() {
+async function kickIndexing(force = false) {
   await ensureOffscreen();
-  chrome.runtime.sendMessage({ type: 'off:index' }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'off:index', force }).catch(() => {});
 }
 
 chrome.action.onClicked.addListener(async () => {
@@ -52,7 +52,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         .then(sendResponse, (e) => sendResponse({ error: String(e) }));
       return true;
     }
-    case 'q:index': { kickIndexing(); return false; }
+    case 'q:index': { kickIndexing(!!msg.force); return false; }
+    case 'q:status': {
+      ensureOffscreen()
+        .then(() => chrome.runtime.sendMessage({ type: 'off:status' }))
+        .then(sendResponse, (e) => sendResponse({ model: 'error', error: String(e) }));
+      return true;
+    }
     case 'q:counts': { counts().then(sendResponse); return true; }
     case 'startBackfill':
     case 'stopBackfill': {
