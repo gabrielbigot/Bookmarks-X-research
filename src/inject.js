@@ -74,7 +74,7 @@ XHR.send = function () {
   }
   return xSend.apply(this, arguments);
 };
-console.debug('[xbs] interception fetch + XHR active');
+console.info('[xbs] interception fetch + XHR active');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

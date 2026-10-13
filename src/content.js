@@ -9,6 +9,7 @@ window.addEventListener('message', (ev) => {
   const d = ev.data;
   if (d.type === 'tweets') send({ type: 'captured', tweets: d.tweets });
   else if (d.type === 'backfill') { send({ ...d, type: 'backfillProgress' }); setStatus(d); }
+  else if (d.type === 'status') { lastStatusReply = Date.now(); lastCapture = d; }
   else if (d.type === 'error') console.warn('[xbs]', d.message);
 });
 
@@ -20,7 +21,8 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 // ---------- UI sur la page ----------
-let host, shadow, pill, statusEl, overlay;
+let host, shadow, pill, statusEl, capEl, overlay;
+let lastStatusReply = 0, lastCapture = { hasRequest: false, running: false };
 
 function setStatus(d) {
   if (!statusEl) return;
@@ -53,10 +55,12 @@ function buildUi() {
     <div class="pill">
       <button id="open" title="Alt+K">🔎 Recherche intelligente</button>
       <button id="sync" class="sec" title="Remonte tout l'historique en arrière-plan">⟳ Tout synchroniser</button>
+      <span class="st" id="cap"></span>
       <span class="st" id="st"></span>
     </div>
     <div class="ov" id="ov"></div>`;
   statusEl = shadow.getElementById('st');
+  capEl = shadow.getElementById('cap');
   overlay = shadow.getElementById('ov');
   shadow.getElementById('open').onclick = toggleOverlay;
   shadow.getElementById('sync').onclick = () => { statusEl.textContent = 'Démarrage…'; ctl('start'); };
@@ -80,11 +84,20 @@ window.addEventListener('keydown', (e) => {
 }, true);
 window.addEventListener('message', (e) => { if (e.data?.xbs === 'close') toggleOverlay(false); });
 
+function refreshCapture() {
+  if (!capEl) return;
+  ctl('status');
+  if (Date.now() - lastStatusReply > 3000 && lastStatusReply !== 0) capEl.textContent = '⚠ capture inactive';
+  else if (lastStatusReply === 0) capEl.textContent = '⚠ script de capture non injecté — recharge la page';
+  else capEl.textContent = lastCapture.hasRequest ? '● capture active' : '○ capture en attente (scrolle un peu)';
+}
+
 function sync() {
   if (isBookmarksPage()) {
     if (!host) buildUi();
     else if (!host.isConnected) document.documentElement.appendChild(host);
     host.style.display = '';
+    refreshCapture();
   } else if (host) {
     host.style.display = 'none';
     toggleOverlay(false);
