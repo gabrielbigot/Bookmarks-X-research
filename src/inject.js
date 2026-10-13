@@ -48,11 +48,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function runBackfill() {
   if (backfill.running) return;
+  backfill = { running: true, stop: false };
+  post('backfill', { state: 'running', pages: 0, total: 0, message: 'En attente du chargement de la page…' });
+  for (let i = 0; i < 50 && !lastReq && !backfill.stop; i++) await sleep(500); // X doit avoir fait sa 1re requête
   if (!lastReq) {
-    post('backfill', { state: 'need-page', message: 'Ouvre la page Bookmarks de X, puis relance la synchro.' });
+    backfill.running = false;
+    post('backfill', { state: 'need-page', message: 'Ouvre la page Bookmarks de X (connecté), puis relance la synchro.' });
     return;
   }
-  backfill = { running: true, stop: false };
   let cursor = lastCursor;
   let pages = 0, total = 0, empty = 0;
   post('backfill', { state: 'running', pages, total });

@@ -8,7 +8,7 @@ window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG) return;
   const d = ev.data;
   if (d.type === 'tweets') send({ type: 'captured', tweets: d.tweets });
-  else if (d.type === 'backfill') { send({ type: 'backfillProgress', ...d }); setStatus(d); }
+  else if (d.type === 'backfill') { send({ ...d, type: 'backfillProgress' }); setStatus(d); }
   else if (d.type === 'error') console.warn('[xbs]', d.message);
 });
 

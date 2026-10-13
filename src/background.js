@@ -56,14 +56,25 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case 'q:counts': { counts().then(sendResponse); return true; }
     case 'startBackfill':
     case 'stopBackfill': {
-      chrome.tabs.query({ url: X_TABS.map((u) => u.replace('/*', '/i/bookmarks*')) }).then(async (tabs) => {
-        if (!tabs.length) {
-          sendResponse({ ok: false, reason: 'no-tab' });
-          return;
+      (async () => {
+        const patterns = X_TABS.map((u) => u.replace('/*', '/i/bookmarks*'));
+        let [tab] = await chrome.tabs.query({ url: patterns });
+        if (!tab) {
+          if (msg.type === 'stopBackfill') return sendResponse({ ok: false });
+          tab = await chrome.tabs.create({ url: 'https://x.com/i/bookmarks', active: false });
+          await new Promise((resolve) => {
+            const onUpd = (id, info) => { if (id === tab.id && info.status === 'complete') { chrome.tabs.onUpdated.removeListener(onUpd); resolve(); } };
+            chrome.tabs.onUpdated.addListener(onUpd);
+            setTimeout(resolve, 20000);
+          });
         }
-        chrome.tabs.sendMessage(tabs[0].id, { type: msg.type });
-        sendResponse({ ok: true });
-      });
+        // Le content script peut mettre un instant à être prêt : on réessaie.
+        for (let i = 0; i < 10; i++) {
+          try { await chrome.tabs.sendMessage(tab.id, { type: msg.type }); return sendResponse({ ok: true }); }
+          catch { await new Promise((r) => setTimeout(r, 1000)); }
+        }
+        sendResponse({ ok: false, reason: 'no-content-script' });
+      })();
       return true;
     }
     case 'q:openBookmarks': {

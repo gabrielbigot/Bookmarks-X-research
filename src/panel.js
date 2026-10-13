@@ -155,11 +155,9 @@ let timer;
 $('q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 120); });
 
 $('sync').onclick = async () => {
+  $('progress').textContent = 'Démarrage (un onglet X s’ouvre en arrière-plan si besoin)…';
   const res = await chrome.runtime.sendMessage({ type: 'startBackfill' });
-  if (!res?.ok) {
-    $('progress').textContent = 'Ouvre d’abord x.com/i/bookmarks (une page s’ouvre), puis reclique.';
-    chrome.runtime.sendMessage({ type: 'q:openBookmarks' });
-  }
+  if (!res?.ok) $('progress').textContent = 'Impossible de démarrer : vérifie que tu es connecté à X, puis réessaie.';
 };
 $('stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopBackfill' });
 
