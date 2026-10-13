@@ -1,19 +1,21 @@
 {
   "manifest_version": 3,
   "name": "X Bookmarks – Recherche intelligente",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Recherche sémantique + mots-clés, 100 % locale, dans tes bookmarks X.",
   "permissions": [
     "unlimitedStorage",
     "offscreen",
-    "alarms"
+    "alarms",
+    "storage"
   ],
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
     "https://huggingface.co/*",
     "https://*.huggingface.co/*",
-    "https://*.hf.co/*"
+    "https://*.hf.co/*",
+    "https://pbs.twimg.com/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -65,5 +67,9 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  }
+  },
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ]
 }

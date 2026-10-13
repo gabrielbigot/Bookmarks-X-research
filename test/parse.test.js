@@ -30,5 +30,16 @@ test('parse : dernière page (pas de curseur) et tweets indisponibles ignorés',
 });
 
 test('parse : JSON inattendu ne plante pas', () => {
-  assert.deepEqual(parseBookmarksResponse({}), { tweets: [], cursorBottom: null });
+  assert.deepEqual(parseBookmarksResponse({}), { tweets: [], cursorBottom: null, unparsed: 0 });
+});
+
+test('parse : tweets illisibles comptés (format de X changé), tombstones non', () => {
+  const entry = (id, result) => ({ entryId: 'tweet-' + id, sortIndex: id, content: { itemContent: { tweet_results: { result } } } });
+  const { tweets, unparsed } = parseBookmarksResponse(page({ cursor: null, tweets: [
+    entry('1', { __typename: 'Tweet', rest_id: '1', weird: true }),        // forme inconnue -> illisible
+    entry('2', { __typename: 'TweetTombstone' }),                          // supprimé -> normal
+    entry('3', { __typename: 'TweetUnavailable' }),
+  ] }));
+  assert.equal(tweets.length, 0);
+  assert.equal(unparsed, 1);
 });

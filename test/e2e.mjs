@@ -1,37 +1,65 @@
-// Test de bout en bout : charge l'extension dans Chromium, simule x.com/i/bookmarks (réseau mocké),
-// vérifie capture -> IndexedDB -> synchro (pagination) -> recherche dans le panneau.
+// Test de bout en bout : charge l'extension dans Chromium, simule x.com (HTTPS local) et une API d'IA,
+// puis vérifie : capture, synchro complète / nouveautés / bookmarks supprimés, recherche, langage naturel,
+// clavier, recherches enregistrées, export/import (chiffré), IA (question, intention, résumé).
 // Lancer : npm run build && xvfb-run -a node test/e2e.mjs   (playwright doit être installé)
 import { chromium } from 'playwright';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import https from 'node:https';
 import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { demoPage, page } from './fixtures/bookmarks.js';
 
 const dist = path.resolve('dist');
 const tmp = mkdtempSync(path.join(tmpdir(), 'xbs-'));
 execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout ${tmp}/k.pem -out ${tmp}/c.pem -days 1 -subj /CN=x.com 2>/dev/null`);
 
-const MORE = [
-  ['2001', 'devops', 'DevOps', 'Kubernetes autoscaling with KEDA, event driven scaling tutorial', {}],
-  ['2002', 'devops', 'DevOps', 'Postgres vacuum tuning for very large tables', {}],
-];
+const mk = (id, handle, name, text, si) => ({
+  entryId: 'tweet-' + id, sortIndex: String(si),
+  content: { itemContent: { tweet_results: { result: { rest_id: id, core: { user_results: { result: { core: { screen_name: handle, name } } } },
+    legacy: { full_text: text, created_at: 'Wed Sep 17 10:00:00 +0000 2026', lang: 'en', entities: { urls: [] } } } } } },
+});
+const CHAIN = {
+  CUR_NEXT: () => ['P3', [mk('2001', 'devops', 'DevOps', 'Kubernetes autoscaling with KEDA, event driven scaling tutorial', 1000), mk('2002', 'devops', 'DevOps', 'Postgres vacuum tuning for very large tables', 999)]],
+  P3: () => ['P4', [mk('3001', 'misc', 'Misc', 'Rust async runtime benchmarks compared', 900), mk('3002', 'misc', 'Misc', 'Sourdough starter hydration tips', 899)]],
+  P4: () => [null, [mk('4001', 'misc', 'Misc', 'Final tweet about vector databases', 800)]],
+};
 const hits = [];
-// Faux x.com : x.com est résolu vers 127.0.0.1 (voir --host-resolver-rules).
+let drop = null; // id retiré côté « X » (bookmark supprimé)
+const llmLog = [];
+
 const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: readFileSync(`${tmp}/c.pem`) }, (req, res) => {
   const url = new URL(req.url, 'https://x.com');
+  // --- faux fournisseur d'IA (compatible OpenAI), avec CORS ---
+  if (url.pathname === '/v1/chat/completions') {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST,OPTIONS' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      const body = JSON.parse(raw);
+      const sys = body.messages[0].content, usr = body.messages.at(-1).content;
+      llmLog.push({ sys: sys.slice(0, 40), auth: req.headers.authorization });
+      let out = 'ok';
+      if (sys.includes('transformes une requête')) out = JSON.stringify({ topic: 'kubernetes', authors: ['devops'], sort: 'oldest', since: null, until: null, has: [] });
+      else if (sys.includes('juges la pertinence')) out = JSON.stringify({ scores: [0, 9, 1] });
+      else if (sys.includes('rédiges un résumé')) out = '**Infra**\nDu contenu sur le scheduler [1].';
+      else if (usr.includes('Question :')) out = 'Réponse mock : le scheduler de tokio a été amélioré [1].';
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: out } }] }));
+    });
+    return;
+  }
   if (/\/Bookmarks$/.test(url.pathname)) {
     const vars = JSON.parse(url.searchParams.get('variables') || '{}');
     hits.push(vars.cursor || null);
-    const body = vars.cursor === 'CUR_NEXT'
-      ? page({ cursor: null, tweets: MORE.map(([id, h, n, t], i) => ({
-          entryId: 'tweet-' + id, sortIndex: String(1000 - i),
-          content: { itemContent: { tweet_results: { result: { rest_id: id, core: { user_results: { result: { core: { screen_name: h, name: n } } } }, legacy: { full_text: t, created_at: 'Wed Sep 17 10:00:00 +0000 2026', lang: 'en', entities: { urls: [] } } } } } },
-        })) })
-      : demoPage('CUR_NEXT');
+    let body;
+    if (!vars.cursor) body = demoPage('CUR_NEXT');
+    else {
+      const [next, entries] = CHAIN[vars.cursor]();
+      body = page({ cursor: next, tweets: entries.filter((e) => e.entryId !== 'tweet-' + drop) });
+    }
     res.writeHead(200, { 'content-type': 'application/json' });
     return res.end(JSON.stringify(body));
   }
@@ -49,66 +77,162 @@ await new Promise((r) => server.listen(443, '127.0.0.1', r));
 
 const ctx = await chromium.launchPersistentContext(tmp + '/profile', {
   headless: false,
+  acceptDownloads: true,
   args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox',
-    '--host-resolver-rules=MAP x.com 127.0.0.1, MAP huggingface.co 127.0.0.1:1', '--ignore-certificate-errors', '--no-proxy-server'],
+    '--host-resolver-rules=MAP x.com 127.0.0.1, MAP llm.test 127.0.0.1, MAP huggingface.co 127.0.0.1:1', '--ignore-certificate-errors', '--no-proxy-server'],
 });
 
-const p = await ctx.newPage();
-await p.goto('https://x.com/i/bookmarks?via=fetch'); // scénario 1 : fetch
-await p.waitForTimeout(1500);
-// Le bouton injecté doit exister (shadow DOM fermé -> on vérifie via l'hôte).
-assert.ok(await p.evaluate(() => [...document.documentElement.children].some((e) => e.style.zIndex === '2147483646')), 'pill injecté');
+const waitFor = async (fn, what, ms = 45000) => {
+  const t0 = Date.now();
+  for (;;) {
+    if (await fn()) return;
+    if (Date.now() - t0 > ms) throw new Error('timeout : ' + what);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+};
+const sameHits = (a) => JSON.stringify(hits) === JSON.stringify(a);
 
-// Lance la synchro depuis la page (comme le bouton).
-await p.evaluate(() => window.postMessage({ src: 'xbs-ctl', type: 'start' }, '*'));
-await p.waitForTimeout(6000);
-assert.deepEqual(hits, [null, 'CUR_NEXT'], 'pagination par curseur');
+// ------------------------------------------------------------------ 1. capture + synchro complète (fetch)
+const p = await ctx.newPage();
+await p.goto('https://x.com/i/bookmarks?via=fetch');
+await p.waitForTimeout(1500);
+assert.ok(await p.evaluate(() => [...document.documentElement.children].some((e) => e.style.zIndex === '2147483646')), 'pill injecté');
+await p.evaluate(() => window.postMessage({ src: 'xbs-ctl', type: 'start', mode: 'full' }, '*'));
+// la page fait sa propre requête (null), puis la synchro repart du haut (null) et suit les curseurs
+await waitFor(() => sameHits([null, null, 'CUR_NEXT', 'P3', 'P4']), 'pagination complète');
+await p.waitForTimeout(1500);
 
 let [sw] = ctx.serviceWorkers();
 sw ??= await ctx.waitForEvent('serviceworker');
 const extId = new URL(sw.url()).host;
+const panelUrl = `chrome-extension://${extId}/panel.html`;
 
 const panel = await ctx.newPage();
-await panel.goto(`chrome-extension://${extId}/panel.html`);
+await panel.goto(panelUrl);
 await panel.waitForSelector('.tw');
-await panel.waitForFunction(() => /8 bookmarks/.test(document.getElementById('stats').textContent));
+await panel.waitForFunction(() => /11 bookmarks/.test(document.getElementById('stats').textContent));
 
-// Les runtimes ONNX (wasm) doivent être chargeables depuis l'extension (régression : variante asyncify absente).
+// Les runtimes ONNX (wasm) doivent être chargeables depuis l'extension.
 for (const v of ['', '.jsep', '.jspi', '.asyncify']) {
   const ok = await panel.evaluate((u) => import(u).then(() => true, (e) => String(e)), `chrome-extension://${extId}/ort/ort-wasm-simd-threaded${v}.mjs`);
   assert.equal(ok, true, `ort${v}.mjs : ${ok}`);
 }
 await panel.setViewportSize({ width: 760, height: 1100 });
 await panel.screenshot({ path: 'test/feed.png' });
+
+// ------------------------------------------------------------------ 2. recherche, langage naturel
 await panel.fill('#q', 'tokio');
 await panel.waitForTimeout(500);
 assert.match(await panel.locator('.tw').first().innerText(), /tokio/i);
-
 await panel.fill('#q', 'from:@devops postgres');
 await panel.waitForTimeout(500);
 assert.equal(await panel.locator('.tw').count(), 1);
-
-// Langage naturel : tri + auteur (« le plus ancien tweet de devops »).
 await panel.fill('#q', 'montre-moi le tweet le plus ancien de devops');
 await panel.waitForTimeout(500);
 assert.equal(await panel.locator('.tw').count(), 2, 'filtre auteur déduit du texte');
 assert.match(await panel.locator('#mode').innerText(), /Auteur : @devops/);
-await panel.locator('#mode button').click(); // « ✕ retirer »
-await panel.waitForTimeout(400);
-assert.ok((await panel.locator('.tw').count()) >= 0);
-
+await panel.locator('#mode button').click();
 await panel.fill('#q', 'qzxqzx');
 await panel.waitForTimeout(400);
 assert.match(await panel.locator('#results').innerText(), /Aucun résultat/);
 
+// filtres de la barre d'outils + tri
+await panel.fill('#q', '');
+await panel.click('.chip[data-type="link"]');
+await panel.waitForTimeout(300);
+assert.equal(await panel.locator('.tw').count(), 1, 'filtre « Liens » : un seul tweet avec lien');
+await panel.click('.chip[data-type="link"]');
+await panel.selectOption('#sort', 'likes');
+await panel.waitForTimeout(300);
+assert.ok((await panel.locator('.tw').count()) >= 6);
+await panel.selectOption('#sort', 'relevance');
+
+// ------------------------------------------------------------------ 3. clavier, historique, recherches enregistrées, redécouverte, thèmes
+await panel.focus('#q');
+await panel.keyboard.press('ArrowDown');
+assert.equal(await panel.evaluate(() => document.activeElement.classList.contains('tw')), true, '↓ depuis la recherche -> 1re carte');
+const first = await panel.evaluate(() => document.activeElement.dataset.row);
+await panel.keyboard.press('j');
+assert.notEqual(await panel.evaluate(() => document.activeElement.dataset.row), first, 'j -> carte suivante');
+await panel.keyboard.press('Escape');
+assert.equal(await panel.evaluate(() => document.activeElement.id), 'q');
+
+await panel.fill('#q', 'tokio');
+await panel.click('#save');
+await panel.waitForSelector('.saved .s');
+assert.equal(await panel.locator('.saved .s').count(), 1);
+await panel.click('#rand');
+assert.ok((await panel.locator('.tw').count()) > 0, 'au hasard');
+await panel.click('#yearago');
+assert.match(await panel.locator('#mode').innerText(), /Il y a un an|Rien de sauvegardé/);
+await panel.click('#themes');
+await panel.waitForTimeout(400);
+assert.match(await panel.locator('#mode').innerText(), /Pas assez de bookmarks indexés/);
+
+// ------------------------------------------------------------------ 4. export / import (clair et chiffré)
+await panel.fill('#q', '');
+await panel.click('#gear');
+const [dl1] = await Promise.all([panel.waitForEvent('download'), panel.click('#bk-export')]);
+const plain = JSON.parse(readFileSync(await dl1.path(), 'utf8'));
+assert.equal(plain.tweets.length, 11);
+await panel.setInputFiles('#bk-import', await dl1.path());
+await panel.waitForFunction(() => /0 nouveaux/.test(document.getElementById('bk-msg').textContent));
+await panel.fill('#bk-pass', 'pw');
+const [dl2] = await Promise.all([panel.waitForEvent('download'), panel.click('#bk-export')]);
+assert.ok(dl2.suggestedFilename().endsWith('.xbsbak'));
+const encBytes = readFileSync(await dl2.path());
+assert.ok(!encBytes.toString('latin1').includes('Kubernetes'), 'le fichier chiffré ne contient pas le texte en clair');
+await panel.setInputFiles('#bk-import', await dl2.path());
+await panel.waitForFunction(() => /0 nouveaux/.test(document.getElementById('bk-msg').textContent));
+await panel.fill('#bk-pass', 'mauvais');
+await panel.setInputFiles('#bk-import', await dl2.path());
+await panel.waitForFunction(() => /incorrect/.test(document.getElementById('bk-msg').textContent));
+await panel.keyboard.press('Escape');
+
+// ------------------------------------------------------------------ 5. IA (faux fournisseur)
+await panel.evaluate(() => chrome.storage.local.set({ settings: {
+  llm: { baseUrl: 'https://llm.test/v1', model: 'm', apiKey: 'secret-key' }, aiIntent: true, aiRerank: false, enrichLinks: false, imageSearch: false, autoSync: true } }));
+await panel.reload();
+await panel.waitForSelector('.tw');
+await panel.fill('#q', 'scheduler tokio');
+await panel.waitForSelector('#ask:not([hidden])');
+await panel.click('#ask');
+await panel.waitForSelector('.ans a.cite');
+assert.match(await panel.locator('.ans').innerText(), /Réponse mock/);
+assert.ok(llmLog.some((l) => l.auth === 'Bearer secret-key'), 'clé d’API envoyée');
+await panel.click('#ans-x');
+// compréhension par l'IA : tri + auteur + sujet
+await panel.fill('#q', 'les tweets les plus anciens de devops à propos de kubernetes');
+await waitFor(async () => /compris par l’IA/.test(await panel.locator('#mode').innerText()), 'intention IA', 15000);
+assert.match(await panel.locator('.tw').first().innerText(), /Kubernetes/);
+await panel.fill('#q', '');
+await panel.click('#digest');
+await panel.waitForSelector('.ans a.cite');
+assert.match(await panel.locator('.ans').innerText(), /Infra/);
+
+// les recherches enregistrées survivent à un rechargement
+await panel.reload();
+await panel.waitForSelector('.tw');
+assert.equal(await panel.locator('.saved .s').count(), 1);
 await panel.screenshot({ path: 'test/panel.png' });
 
-// Scénario 2 (page en XMLHttpRequest, comme le vrai X) : aucun onglet X ouvert, clic sur « Tout synchroniser » dans le panneau -> démarre seul.
+// ------------------------------------------------------------------ 6. synchro complète depuis le panneau (XHR, sans onglet X) + bookmarks supprimés
 await p.close();
 hits.length = 0;
+drop = '2002'; // ce bookmark n'existe plus côté X
 await panel.click('#sync');
-await panel.waitForFunction(() => /terminée/.test(document.getElementById('progress').textContent), null, { timeout: 30000 });
-assert.deepEqual(hits, [null, 'CUR_NEXT'], 'synchro lancée depuis le panneau sans onglet X');
-console.log('E2E OK — requêtes Bookmarks:', hits);
+await waitFor(() => sameHits([null, null, 'CUR_NEXT', 'P3', 'P4']), 'synchro complète depuis le panneau');
+await panel.waitForFunction(() => /Synchro terminée/.test(document.getElementById('progress').textContent), null, { timeout: 30000 });
+await panel.waitForSelector('#banners .bn:has-text("n’existent plus")');
+await panel.click('#banners .bn button:has-text("Les retirer")');
+await panel.waitForFunction(() => /10 bookmarks/.test(document.getElementById('stats').textContent));
+
+// ------------------------------------------------------------------ 7. nouveautés seulement : s'arrête dès que tout est connu
+hits.length = 0;
+await panel.click('#news');
+await panel.waitForFunction(() => /Nouveautés terminée/.test(document.getElementById('progress').textContent), null, { timeout: 40000 });
+assert.ok(sameHits([null, 'CUR_NEXT']), 'incrémental : 2 pages seulement, obtenu ' + JSON.stringify(hits));
+
+console.log('E2E OK');
 await ctx.close();
 server.close();

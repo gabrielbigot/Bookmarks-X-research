@@ -12,22 +12,107 @@
       <div class="row">
         <div class="search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.25 3.75a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm-8.5 6.5a8.5 8.5 0 1 1 15.18 5.27l4.78 4.78-1.42 1.42-4.78-4.78A8.5 8.5 0 0 1 1.75 10.25z"/></svg>
-          <input id="q" type="search" placeholder="Décris ce que tu cherches… (from:@user  has:link  since:2026-01-01)" autocomplete="off" autofocus>
+          <input id="q" type="search" list="hist" placeholder="Décris ce que tu cherches… (from:@user  has:link  since:2026-01-01)" autocomplete="off" autofocus>
+          <datalist id="hist"></datalist>
         </div>
-        <button id="close" title="Fermer (Échap)" hidden>✕</button>
+        <button id="save" class="ghost icon" title="Enregistrer cette recherche" hidden>★</button>
+        <button id="ask" class="primary" title="Poser la question à l'IA (Ctrl+Entrée)" hidden>Demander</button>
+        <button id="gear" class="ghost icon" title="Réglages, sauvegarde, IA…">⚙</button>
+        <button id="close" class="icon" title="Fermer (Échap)" hidden>✕</button>
       </div>
+      <div class="tools">
+        <select id="range" title="Période de publication">
+          <option value="all">Toute période</option><option value="7">7 jours</option><option value="30">30 jours</option><option value="365">1 an</option>
+        </select>
+        <button class="chip" data-type="link">Liens</button>
+        <button class="chip" data-type="media">Médias</button>
+        <button class="chip" data-type="video">Vidéos</button>
+        <button class="chip" id="imgmode" hidden title="Recherche dans le contenu des images (CLIP, requêtes en anglais)">🖼 Images</button>
+        <select id="sort" title="Tri">
+          <option value="relevance">Pertinence</option><option value="newest">Plus récents</option><option value="oldest">Plus anciens</option><option value="likes">Plus likés</option>
+        </select>
+        <span class="spacer"></span>
+        <button class="ghost" id="rand" title="Redécouvrir des bookmarks au hasard">🎲 Au hasard</button>
+        <button class="ghost" id="yearago" title="Ce que tu sauvegardais il y a un an">📅 Il y a 1 an</button>
+        <button class="ghost" id="themes" title="Regroupement automatique par thèmes">☰ Thèmes</button>
+        <button class="ghost" id="digest" title="Résumé IA de ta semaine de veille" hidden>📰 Résumé</button>
+      </div>
+      <div id="saved" class="saved"></div>
       <div class="bar">
         <span id="stats">Chargement…</span>
         <span class="spacer"></span>
-        <button id="sync" class="ghost">⟳ Tout synchroniser</button>
+        <button id="news" class="ghost" title="Récupère seulement les nouveaux bookmarks">↻ Nouveautés</button>
+        <button id="sync" class="ghost" title="Remonte tout l'historique (plus long)">⟳ Tout synchroniser</button>
         <button id="stop" class="ghost" hidden>■ Stop</button>
       </div>
       <div class="bar sub"><span id="progress"></span></div>
       <div class="bar sub"><span id="index"></span><button id="retry" class="ghost" hidden>Réessayer</button></div>
+      <div id="banners"></div>
       <div id="mode" class="mode"></div>
     </div>
   </header>
-  <main id="results" class="col"></main>
+  <main class="col">
+    <div id="answer"></div>
+    <div id="results"></div>
+  </main>
+
+  <dialog id="settings">
+    <form method="dialog" class="dlg">
+      <header class="dh"><b>Réglages</b><button class="ghost" value="close">Fermer ✕</button></header>
+
+      <section>
+        <h3>Sauvegarde & synchro entre appareils</h3>
+        <p class="hint">Tes bookmarks vivent dans ce navigateur. Exporte-les, ou pointe un dossier iCloud/Dropbox/Drive pour les retrouver ailleurs.</p>
+        <div class="grid">
+          <label>Mot de passe (optionnel, chiffre le fichier)<input id="bk-pass" type="password" autocomplete="new-password"></label>
+        </div>
+        <div class="btns">
+          <button type="button" id="bk-export">Exporter</button>
+          <label class="filebtn">Importer<input id="bk-import" type="file" accept=".json,.xbsbak" hidden></label>
+          <button type="button" id="bk-dir">Choisir un dossier…</button>
+          <button type="button" id="bk-save" disabled>Sauvegarder dedans</button>
+          <button type="button" id="bk-load" disabled>Charger depuis le dossier</button>
+        </div>
+        <p class="hint" id="bk-msg"></p>
+      </section>
+
+      <section>
+        <h3>IA (facultatif)</h3>
+        <p class="hint">Active les questions-réponses, le résumé, la compréhension des requêtes et le reclassement. Fonctionne avec toute API compatible OpenAI. Rien n'est envoyé tant que ce n'est pas configuré ; la clé reste sur cet appareil.</p>
+        <div class="btns">
+          <button type="button" data-preset="openrouter">OpenRouter</button>
+          <button type="button" data-preset="ollama">Ollama (local, gratuit)</button>
+          <button type="button" data-preset="openai">OpenAI</button>
+        </div>
+        <div class="grid">
+          <label>URL de l'API<input id="llm-url" placeholder="https://openrouter.ai/api/v1"></label>
+          <label>Modèle<input id="llm-model" placeholder="ex. anthropic/claude-haiku-4.5"></label>
+          <label>Clé d'API<input id="llm-key" type="password" autocomplete="off"></label>
+        </div>
+        <label class="chk"><input type="checkbox" id="ai-intent"> Comprendre mes requêtes avec l'IA (tri, auteur, dates)</label>
+        <label class="chk"><input type="checkbox" id="ai-rerank"> Reclasser les 20 meilleurs résultats avec l'IA</label>
+        <div class="btns"><button type="button" id="llm-test">Enregistrer & tester</button></div>
+        <p class="hint" id="llm-msg"></p>
+      </section>
+
+      <section>
+        <h3>Enrichissement</h3>
+        <label class="chk"><input type="checkbox" id="opt-links"> Indexer le titre et la description des pages liées <span class="hint">(demande l'accès aux sites ; lecture sans cookies)</span></label>
+        <label class="chk"><input type="checkbox" id="opt-images"> Recherche dans les images <span class="hint">(expérimental, CLIP ~150 Mo, requêtes en anglais)</span></label>
+        <label class="chk"><input type="checkbox" id="opt-auto"> Récupérer les nouveautés automatiquement quand un onglet X est ouvert</label>
+        <div class="btns"><button type="button" id="reindex">Tout réindexer</button></div>
+      </section>
+
+      <section>
+        <h3>Banc d'essai</h3>
+        <p class="hint">Mesure la qualité de la recherche. Format : <code>[{"q":"mémoire des agents","expect":["@karpathy","long-term memory"]}]</code> (ids, @auteurs ou fragments de texte).</p>
+        <textarea id="bench-in" rows="4" spellcheck="false"></textarea>
+        <div class="btns"><button type="button" id="bench-run">Lancer</button></div>
+        <div id="bench-out"></div>
+      </section>
+    </form>
+  </dialog>
+
   <script type="module" src="panel.js"></script>
 </body>
 </html>

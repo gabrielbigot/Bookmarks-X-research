@@ -95,8 +95,11 @@ function findInstructions(json) {
   return [];
 }
 
+const GONE = /^(TweetTombstone|TweetUnavailable)$/;
+
 export function parseBookmarksResponse(json) {
   const tweets = [];
+  let unparsed = 0; // entrées de tweet que l'on n'a pas su lire (format de X changé ?)
   let cursorBottom = null;
   for (const ins of findInstructions(json)) {
     const entries = ins.entries ?? [];
@@ -118,9 +121,9 @@ export function parseBookmarksResponse(json) {
         if (t) {
           t.sortIndex = e.sortIndex ?? '';
           tweets.push(t);
-        }
+        } else if (!GONE.test(unwrap(raw)?.__typename || '') && !unwrap(raw)?.tombstone) unparsed++;
       }
     }
   }
-  return { tweets, cursorBottom };
+  return { tweets, cursorBottom, unparsed };
 }

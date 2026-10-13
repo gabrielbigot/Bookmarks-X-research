@@ -19,6 +19,7 @@ export function tweetText(t) {
   if (t.quoted) s += `\nCite @${t.quoted.handle} : ${decodeEntities(t.quoted.text)}`;
   const alts = (t.media || []).map((m) => m.alt).filter(Boolean);
   if (alts.length) s += `\n${alts.join(' ')}`;
+  if (t.linkText) s += `\nLiens : ${t.linkText}`;
   return s;
 }
 
@@ -55,35 +56,55 @@ export function passesFilters(t, f) {
   return true;
 }
 
+export const sortKey = (t) => (t.sortIndex || '').padStart(24, '0');
+
 export class Index {
   constructor() {
-    this.tweets = []; // docs, ordre = lignes
+    this.reset();
+  }
+
+  reset() {
+    this.tweets = []; // docs, ordre d'insertion = lignes
     this.rowById = new Map();
     this.postings = new Map(); // terme -> [[row, tf], ...]
     this.docLen = [];
-    this.avgLen = 0;
-    this.matrix = new Float32Array(0); // n * DIM
+    this.totalLen = 0;
+    this.cap = 0;
+    this.matrix = new Float32Array(0); // cap * DIM
     this.hasVec = new Uint8Array(0);
     this.vocab = null; // tableau trié, pour les préfixes
+    this._recent = null;
   }
 
-  build(tweets, vectorsById) {
-    this.tweets = tweets;
-    const n = tweets.length;
-    this.rowById = new Map();
-    this.postings = new Map();
-    this.docLen = new Array(n);
-    this.matrix = new Float32Array(n * DIM);
-    this.hasVec = new Uint8Array(n);
-    let total = 0;
-    for (let row = 0; row < n; row++) {
-      const t = tweets[row];
+  get avgLen() {
+    return this.tweets.length ? this.totalLen / this.tweets.length : 0;
+  }
+
+  _grow(n) {
+    if (n <= this.cap) return;
+    const cap = Math.max(n, Math.ceil(this.cap * 1.5), 1024);
+    const m = new Float32Array(cap * DIM);
+    m.set(this.matrix.subarray(0, this.tweets.length * DIM));
+    const h = new Uint8Array(cap);
+    h.set(this.hasVec.subarray(0, this.tweets.length));
+    this.matrix = m;
+    this.hasVec = h;
+    this.cap = cap;
+  }
+
+  // Ajoute des tweets (les ids déjà connus sont ignorés). Incrémental : pas de reconstruction.
+  add(tweets, vectorsById) {
+    const fresh = tweets.filter((t) => !this.rowById.has(t.id));
+    this._grow(this.tweets.length + fresh.length);
+    for (const t of fresh) {
+      const row = this.tweets.length;
+      this.tweets.push(t);
       this.rowById.set(t.id, row);
       const tf = new Map();
       const toks = tokenize(tweetText(t) + ' ' + (t.links || []).join(' '));
       for (const tok of toks) tf.set(tok, (tf.get(tok) || 0) + 1);
       this.docLen[row] = toks.length;
-      total += toks.length;
+      this.totalLen += toks.length;
       for (const [tok, c] of tf) {
         let p = this.postings.get(tok);
         if (!p) this.postings.set(tok, (p = []));
@@ -95,13 +116,36 @@ export class Index {
         this.hasVec[row] = 1;
       }
     }
-    this.avgLen = n ? total / n : 0;
-    this.vocab = null;
+    if (fresh.length) { this.vocab = null; this._recent = null; }
+    return fresh.length;
+  }
+
+  setVector(id, vec) {
+    const row = this.rowById.get(id);
+    if (row === undefined || !vec || vec.length !== DIM) return false;
+    this.matrix.set(vec, row * DIM);
+    this.hasVec[row] = 1;
+    return true;
+  }
+
+  build(tweets, vectorsById) {
+    this.reset();
+    this.add(tweets, vectorsById);
+  }
+
+  // Lignes triées par date de mise en bookmark (plus récent d'abord).
+  recentRows() {
+    if (!this._recent) {
+      const rows = this.tweets.map((_, i) => i);
+      rows.sort((a, b) => (sortKey(this.tweets[a]) < sortKey(this.tweets[b]) ? 1 : -1));
+      this._recent = rows;
+    }
+    return this._recent;
   }
 
   vectorCount() {
     let c = 0;
-    for (const x of this.hasVec) c += x;
+    for (let i = 0; i < this.tweets.length; i++) c += this.hasVec[i];
     return c;
   }
 

@@ -1,114 +1,241 @@
-import { getAllTweets, getAllVectors, counts } from './lib/db.js';
-import { Index, DIM, parseQuery, rrf, highlightTerms, normalizeText, contentWords } from './lib/search.js';
+import { getAllTweets, getMeta, setMeta, putTweets, clearVectors, getAllImgVectors } from './lib/db.js';
+import { Index, DIM, parseQuery, rrf, highlightTerms, normalizeText, contentWords, passesFilters } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
+import { refresh, fullLoad } from './lib/store.js';
+import { getSettings, setSettings, llmReady } from './lib/settings.js';
+import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
+import { kmeans, labelClusters } from './lib/cluster.js';
+import { encode, decode } from './lib/backup.js';
+import { score as evalScore, summarize } from './lib/evalbench.js';
 
 const $ = (id) => document.getElementById(id);
 const embed = new URLSearchParams(location.search).has('embed');
 const PAGE = 40;
+const IMGDIM = 512;
 
 const index = new Index();
 let seq = 0; // numéro de la recherche en cours (évite les rendus périmés)
 let shown = PAGE;
-let last = { rows: [], terms: [], label: '' };
+let last = { rows: [], terms: [], label: '', meta: {} };
+let settings;
 const qCache = new Map();
+const state = { range: 'all', types: new Set(), sort: 'relevance', ignoreAuthor: false, themeMask: null, themeLabel: '', imageMode: false };
+let imgIndex = null; // { ids, matrix }
 
 // ---------- chargement ----------
-const sortKey = (t) => (t.sortIndex || '').padStart(24, '0');
-
-async function load() {
-  const [tweets, vecs] = await Promise.all([getAllTweets(), getAllVectors()]);
-  tweets.sort((a, b) => (sortKey(a) < sortKey(b) ? 1 : -1)); // plus récemment bookmarké d'abord
-  index.build(tweets, vecs);
+async function load(full = false) {
+  if (full || !index.tweets.length) await fullLoad(index);
+  else await refresh(index);
   updateStats();
-  run();
 }
 
-function updateStats(extra = '') {
+function updateStats() {
   const n = index.tweets.length, v = index.vectorCount();
-  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement${extra} · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
+  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
 }
 
 // ---------- recherche ----------
-async function embedQuery(text) {
-  if (qCache.has(text)) return qCache.get(text);
-  const res = await chrome.runtime.sendMessage({ type: 'q:embed', text });
+async function embedQuery(text, kind) {
+  const key = (kind || 't') + '|' + text;
+  if (qCache.has(key)) return qCache.get(key);
+  const res = await chrome.runtime.sendMessage({ type: 'q:embed', text, kind });
   if (!res || res.error) throw new Error(res?.error || 'pas de réponse');
   const v = Float32Array.from(res.vec);
-  qCache.set(text, v);
-  if (qCache.size > 50) qCache.delete(qCache.keys().next().value);
+  qCache.set(key, v);
+  if (qCache.size > 80) qCache.delete(qCache.keys().next().value);
   return v;
 }
 
-let ignoreAuthor = false;
+const isoDay = (ms) => new Date(ms).toISOString().slice(0, 10);
 
-async function run() {
+// Filtres venant de la barre d'outils (période, types).
+function toolbarFilters() {
+  const f = {};
+  if (state.range !== 'all') f.since = isoDay(Date.now() - Number(state.range) * 86_400_000);
+  if (state.types.size) f.has = [...state.types];
+  return f;
+}
+
+function mergeFilters(a, b) {
+  const out = { ...a, ...b };
+  if (a.has || b.has) out.has = [...new Set([...(a.has || []), ...(b.has || [])])];
+  if (a.since && b.since) out.since = a.since > b.since ? a.since : b.since;
+  return out;
+}
+
+function maskFor(filters) {
+  let m = index.allowedMask(filters);
+  if (state.themeMask) {
+    if (!m) m = state.themeMask;
+    else { m = Uint8Array.from(m); for (let i = 0; i < m.length; i++) m[i] &= state.themeMask[i] || 0; }
+  }
+  return m;
+}
+
+// Recherche hybride sans rendu (utilisée par l'interface et par le banc d'essai).
+async function coreSearch(text, allowed, { mode = 'hybrid', weights } = {}) {
+  const kw = index.bm25(text, allowed);
+  if (mode === 'kw') return { rows: kw, kw, sem: [] };
+  const qv = await embedQuery(semanticQuery(text));
+  const sem = index.vector(qv, allowed);
+  if (mode === 'sem') return { rows: sem, kw, sem };
+  const long = contentWords(text) >= 3; // phrase libre : on se fie davantage au sens qu'aux mots exacts
+  return { rows: rrf([sem, kw], weights || (long ? [1.5, 0.7] : [1, 1])), kw, sem };
+}
+
+function sortRows(rows, how) {
+  const t = (r) => index.tweets[r[0]];
+  const by = {
+    newest: (a, b) => ((t(a).createdAt || '') < (t(b).createdAt || '') ? 1 : -1),
+    oldest: (a, b) => ((t(a).createdAt || '') < (t(b).createdAt || '') ? -1 : 1),
+    likes: (a, b) => (t(b).stats?.likes || 0) - (t(a).stats?.likes || 0),
+  }[how];
+  return by ? [...rows].sort(by) : rows;
+}
+
+const intentCache = new Map();
+function fromIntent(it) {
+  return {
+    text: (it.topic || '').trim(),
+    sort: it.sort === 'oldest' || it.sort === 'newest' ? it.sort : null,
+    authorTokens: (it.authors || []).map((a) => String(a).replace(/^@/, '')).filter(Boolean),
+    since: /^\d{4}-\d{2}-\d{2}$/.test(it.since || '') ? it.since : null,
+    until: /^\d{4}-\d{2}-\d{2}$/.test(it.until || '') ? it.until : null,
+    has: (it.has || []).filter((h) => ['link', 'media', 'video'].includes(h)),
+  };
+}
+
+async function run(opts = {}) {
   const my = ++seq;
   const raw = $('q').value.trim();
+  $('save').hidden = !raw;
   const parsed = parseQuery(raw);
-  let { text } = parsed;
-  const filters = { ...parsed.filters };
+  let text = parsed.text;
+  let filters = mergeFilters(parsed.filters, toolbarFilters());
   shown = PAGE;
 
-  // Langage naturel : « le tweet le plus vieux d'OpenAI » -> tri par date + filtre auteur.
-  const nl = interpret(text);
-  let sort = nl.sort;
-  let authors = [];
-  if (nl.author && !ignoreAuthor) {
-    authors = findAuthors(index.tweets, nl.author.token);
-    if (authors.length && authors.length <= 15) {
-      filters.fromAny = authors.map((a) => a.handle.toLowerCase());
-      text = nl.text.replace(nl.author.phrase.trim(), ' ');
-    } else authors = [];
+  // Compréhension de la requête : IA (si demandée) sinon règles (« le plus vieux d'OpenAI »).
+  let sort, authors = [], aiUsed = false;
+  if (opts.intent) {
+    const it = fromIntent(opts.intent);
+    aiUsed = true;
+    sort = it.sort;
+    text = it.text;
+    filters = mergeFilters(filters, { since: it.since || undefined, until: it.until || undefined, has: it.has.length ? it.has : undefined });
+    if (!state.ignoreAuthor) for (const tok of it.authorTokens) authors.push(...findAuthors(index.tweets, tok));
+  } else {
+    const nl = interpret(text);
+    sort = nl.sort;
+    text = nl.text;
+    if (nl.author && !state.ignoreAuthor) {
+      const found = findAuthors(index.tweets, nl.author.token);
+      if (found.length && found.length <= 15) {
+        authors = found;
+        text = nl.text.replace(nl.author.phrase.trim(), ' ');
+      }
+    }
+    if (!authors.length) text = nl.sort ? nl.text : parsed.text;
   }
-  if (!authors.length) text = sort ? nl.text : text; // le tri est retiré du texte, pas l'auteur non résolu
+  authors = [...new Map(authors.map((a) => [a.handle.toLowerCase(), a])).values()];
+  if (authors.length && authors.length <= 15) filters.fromAny = authors.map((a) => a.handle.toLowerCase());
+  else authors = [];
   text = text.replace(/\s+/g, ' ').trim();
-  const allowed = index.allowedMask(filters);
+  const allowed = maskFor(filters);
+  const userSort = state.sort !== 'relevance' ? state.sort : null;
+  const meta = { authors, ai: aiUsed };
+  const tag = aiUsed ? ' · compris par l’IA' : '';
 
-  const meta = { sort, authors };
-  const byDate = (rows) => [...rows].sort((a, b) => {
-    const x = index.tweets[a[0]].createdAt || '', y = index.tweets[b[0]].createdAt || '';
-    return sort === 'oldest' ? (x < y ? -1 : 1) : (x < y ? 1 : -1);
-  });
-
-  // Aucun mot utile : on liste (récents d'abord, ou triés par date si demandé).
+  // Aucun mot utile : on liste (récemment bookmarkés d'abord, ou triés si demandé).
   if (!text || contentWords(text) === 0) {
     let rows = [];
-    for (let i = 0; i < index.tweets.length; i++) if (!allowed || allowed[i]) rows.push([i, 0]);
-    if (sort) rows = byDate(rows);
-    rows = rows.slice(0, 2000);
-    last = { rows, terms: [], label: raw ? 'Filtres appliqués' : 'Derniers bookmarks', meta };
+    for (const i of index.recentRows()) if (!allowed || allowed[i]) rows.push([i, 0]);
+    const how = userSort || sort;
+    if (how) rows = sortRows(rows, how);
+    last = { rows: rows.slice(0, 2000), terms: [], label: (raw || state.themeMask ? 'Filtres appliqués' : 'Derniers bookmarks') + tag, meta };
+    return render();
+  }
+
+  // Recherche dans les images (CLIP).
+  if (state.imageMode) {
+    try {
+      const imgs = await loadImgIndex();
+      const qv = await embedQuery(text, 'image');
+      if (my !== seq) return;
+      const sc = [];
+      for (let i = 0; i < imgs.ids.length; i++) {
+        const row = index.rowById.get(imgs.ids[i]);
+        if (row === undefined || (allowed && !allowed[row])) continue;
+        let s = 0;
+        for (let d = 0; d < IMGDIM; d++) s += imgs.matrix[i * IMGDIM + d] * qv[d];
+        sc.push([row, s]);
+      }
+      sc.sort((a, b) => b[1] - a[1]);
+      last = { rows: sc.slice(0, 200), terms: [], label: `Images (CLIP, requêtes en anglais) — ${imgs.ids.length} images indexées`, meta };
+    } catch (e) {
+      last = { rows: [], terms: [], label: 'Recherche d’images indisponible : ' + e.message, meta };
+    }
     return render();
   }
 
   const terms = highlightTerms(text);
-  const kw = index.bm25(text, allowed);
-  last = { rows: kw, terms, label: 'Mots-clés (la recherche sémantique arrive…)', meta: { ...meta, sort: null } };
+  last = { rows: index.bm25(text, allowed), terms, label: 'Mots-clés (la recherche sémantique arrive…)' + tag, meta };
   render();
 
-  let rows = kw, label;
+  let rows = last.rows, label, why = new Map();
   if (!index.vectorCount()) {
     label = 'Mots-clés uniquement — aucun tweet indexé sémantiquement pour l’instant';
   } else {
     try {
-      const qv = await embedQuery(semanticQuery(text));
+      const r = await coreSearch(text, allowed);
       if (my !== seq) return;
-      const sem = index.vector(qv, allowed);
-      // Phrase libre (≥ 3 mots utiles) : on se fie davantage au sens qu'aux mots exacts.
-      const long = contentWords(text) >= 3;
-      rows = rrf([sem, kw], long ? [1.5, 0.7] : [1, 1]);
+      rows = r.rows;
       label = 'Hybride : sémantique + mots-clés';
+      const sr = new Map(r.sem.map(([row], i) => [row, i + 1])), kr = new Map(r.kw.map(([row], i) => [row, i + 1]));
+      for (const [row] of rows.slice(0, 120)) why.set(row, `sens ${sr.has(row) ? '#' + sr.get(row) : '–'} · mots ${kr.has(row) ? '#' + kr.get(row) : '–'}`);
     } catch (e) {
       if (my !== seq) return;
       label = 'Mots-clés uniquement (modèle indisponible : ' + e.message + ')';
     }
   }
-  if (sort) { // « le plus vieux … » : on trie par date les 40 résultats les plus pertinents
-    rows = byDate(rows.slice(0, 40));
-    label += ` · ${sort === 'oldest' ? 'du plus ancien au plus récent' : 'du plus récent au plus ancien'} parmi les 40 plus pertinents`;
+
+  // Reclassement IA des 20 meilleurs (facultatif).
+  if (settings.aiRerank && llmReady(settings) && rows.length > 1) {
+    try {
+      const top = rows.slice(0, 20);
+      const out = parseJsonLoose(await chat(settings.llm, rerankMessages(text, top.map(([r]) => index.tweets[r])), { json: true }));
+      if (my !== seq) return;
+      const sc = out.scores;
+      if (Array.isArray(sc) && sc.length === top.length) {
+        const reranked = top.map((r, i) => [r, Number(sc[i]) || 0, i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([r]) => r);
+        rows = [...reranked, ...rows.slice(20)];
+        label += ' · reclassé par l’IA';
+      }
+    } catch (e) {
+      label += ' · reclassement IA impossible (' + e.message + ')';
+    }
   }
-  last = { rows, terms, label, meta };
+
+  const how = userSort || sort;
+  if (how) { // « le plus vieux … » : on trie les résultats les plus pertinents
+    const pool = userSort ? rows.slice(0, 200) : rows.slice(0, 40);
+    rows = sortRows(pool, how);
+    label += ` · ${{ oldest: 'du plus ancien au plus récent', newest: 'du plus récent au plus ancien', likes: 'les plus likés d’abord' }[how]} parmi les ${pool.length} plus pertinents`;
+  }
+  last = { rows, terms, label: label + tag, meta, why };
   render();
+
+  // Compréhension par IA : on affiche d'abord le résultat des règles, puis on affine.
+  if (!opts.intent && settings.aiIntent && llmReady(settings) && parsed.text.split(/\s+/).length >= 4) {
+    try {
+      let it = intentCache.get(parsed.text);
+      if (!it) {
+        it = parseJsonLoose(await chat(settings.llm, intentMessages(parsed.text, isoDay(Date.now())), { json: true }));
+        intentCache.set(parsed.text, it);
+      }
+      if (my === seq) run({ intent: it });
+    } catch { /* on garde le résultat des règles */ }
+  }
 }
 
 function similarTo(row) {
@@ -203,10 +330,13 @@ function mediaHtml(media) {
 
 const avatarUrl = (u) => (u ? u.replace('_normal.', '_bigger.') : '');
 
-function card([row], terms) {
+function card([row], terms, pos) {
   const t = index.tweets[row];
   const el = document.createElement('article');
   el.className = 'tw';
+  el.tabIndex = 0;
+  el.dataset.row = row;
+  if (pos < 12) el.id = 't-' + (pos + 1);
   const st = t.stats || {};
   el.innerHTML = `
     <img class="av" loading="lazy" src="${esc(avatarUrl(t.avatar))}" alt="">
@@ -224,6 +354,7 @@ function card([row], terms) {
       <div class="ac">
         ${stat('', 'reply', st.replies)}${stat('rp', 'repost', st.reposts)}${stat('lk', 'like', st.likes)}${stat('', 'views', st.views)}${stat('', 'bookmark', st.bookmarks)}
         ${index.hasVec[row] ? '<button class="ghost sim">≈ Similaires</button>' : ''}
+        ${last.why?.get(row) ? `<span class="why" title="Rang dans la recherche sémantique / par mots-clés">${esc(last.why.get(row))}</span>` : ''}
       </div>
     </div>`;
   // Comme sur X : un clic sur la carte ouvre le tweet (sauf liens, vidéos, boutons).
@@ -236,6 +367,7 @@ function card([row], terms) {
   return el;
 }
 
+
 function render() {
   const box = $('results');
   box.replaceChildren();
@@ -246,15 +378,23 @@ function render() {
     const b = document.createElement('button');
     b.className = 'ghost';
     b.textContent = `Auteur : ${au.slice(0, 3).map((a) => '@' + a.handle).join(', ')}${au.length > 3 ? '…' : ''} ✕ retirer`;
-    b.onclick = () => { ignoreAuthor = true; run(); };
+    b.onclick = () => { state.ignoreAuthor = true; run(); };
     modeEl.append(' ', b);
   }
+  if (state.themeMask) {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = `Thème : ${state.themeLabel} ✕`;
+    b.onclick = () => { state.themeMask = null; run(); };
+    modeEl.append(' ', b);
+  }
+  $('ask').hidden = !llmReady(settings) || !$('q').value.trim();
   if (!last.rows.length) {
     box.innerHTML = `<div class="empty">${index.tweets.length ? 'Aucun résultat.' : 'Aucun bookmark capturé pour l’instant.<br>Ouvre x.com/i/bookmarks, puis clique « ⟳ Tout synchroniser ».'}</div>`;
     return;
   }
   const frag = document.createDocumentFragment();
-  for (const r of last.rows.slice(0, shown)) frag.appendChild(card(r, last.terms));
+  last.rows.slice(0, shown).forEach((r, i) => frag.appendChild(card(r, last.terms, i)));
   box.appendChild(frag);
   if (last.rows.length > shown) {
     const b = document.createElement('button');
@@ -265,47 +405,431 @@ function render() {
   }
 }
 
-// ---------- événements ----------
+// ---------- barre d'outils ----------
 let timer;
-$('q').addEventListener('input', () => { ignoreAuthor = false; clearTimeout(timer); timer = setTimeout(run, 120); });
+$('q').addEventListener('input', () => { state.ignoreAuthor = false; clearTimeout(timer); timer = setTimeout(run, 120); });
+$('range').onchange = (e) => { state.range = e.target.value; run(); };
+$('sort').onchange = (e) => { state.sort = e.target.value; run(); };
+document.querySelectorAll('.chip[data-type]').forEach((b) => {
+  b.onclick = () => {
+    const t = b.dataset.type;
+    state.types.has(t) ? state.types.delete(t) : state.types.add(t);
+    b.classList.toggle('on', state.types.has(t));
+    run();
+  };
+});
+$('imgmode').onclick = () => { state.imageMode = !state.imageMode; $('imgmode').classList.toggle('on', state.imageMode); run(); };
 
-$('sync').onclick = async () => {
+// ---------- historique & recherches enregistrées ----------
+const HKEY = 'xbs.history';
+function history() { try { return JSON.parse(localStorage.getItem(HKEY) || '[]'); } catch { return []; } }
+function pushHistory(q) {
+  q = q.trim();
+  if (q.length < 3) return;
+  try { localStorage.setItem(HKEY, JSON.stringify([q, ...history().filter((x) => x !== q)].slice(0, 30))); } catch {}
+  renderHistory();
+}
+function renderHistory() { $('hist').replaceChildren(...history().map((q) => Object.assign(document.createElement('option'), { value: q }))); }
+$('q').addEventListener('change', () => pushHistory($('q').value));
+
+let saved = [];
+function renderSaved() {
+  const box = $('saved');
+  box.replaceChildren(...saved.map((q, i) => {
+    const el = document.createElement('span');
+    el.className = 's';
+    el.textContent = '★ ' + q;
+    el.onclick = () => { $('q').value = q; state.ignoreAuthor = false; run(); };
+    const x = document.createElement('i');
+    x.textContent = '✕';
+    x.title = 'Supprimer';
+    x.onclick = async (e) => { e.stopPropagation(); saved.splice(i, 1); await setMeta('saved', saved); renderSaved(); };
+    el.append(x);
+    return el;
+  }));
+}
+$('save').onclick = async () => {
+  const q = $('q').value.trim();
+  if (!q || saved.includes(q)) return;
+  saved.push(q);
+  await setMeta('saved', saved);
+  renderSaved();
+};
+
+// ---------- clavier ----------
+document.addEventListener('keydown', (e) => {
+  const inInput = e.target.matches?.('input, textarea, select');
+  if (e.key === '/' && !inInput) { e.preventDefault(); $('q').focus(); return; }
+  if (e.key === 'Enter' && e.ctrlKey && e.target === $('q')) { $('ask').click(); return; }
+  const cards = () => [...document.querySelectorAll('.tw')];
+  if (e.target === $('q') && e.key === 'ArrowDown') { e.preventDefault(); cards()[0]?.focus(); return; }
+  const cur = e.target.closest?.('.tw');
+  if (!cur || inInput) return;
+  const move = (d) => { const cs = cards(); const n = cs[cs.indexOf(cur) + d]; if (n) { e.preventDefault(); n.focus(); n.scrollIntoView({ block: 'center' }); } };
+  if (e.key === 'j' || e.key === 'ArrowDown') move(1);
+  else if (e.key === 'k' || e.key === 'ArrowUp') move(-1);
+  else if (e.key === 'Enter' || e.key === 'o') window.open(index.tweets[cur.dataset.row].url, '_blank', 'noopener');
+  else if (e.key === 's') cur.querySelector('.sim')?.click();
+  else if (e.key === 'Escape') $('q').focus();
+});
+
+// ---------- bandeaux (format de X changé, bookmarks supprimés) ----------
+async function renderBanners() {
+  const box = $('banners');
+  box.replaceChildren();
+  const add = (cls, html, actions) => {
+    const el = document.createElement('div');
+    el.className = 'bn ' + cls;
+    el.innerHTML = html;
+    for (const [label, fn] of actions) {
+      const b = document.createElement('button');
+      b.className = 'ghost';
+      b.textContent = label;
+      b.onclick = fn;
+      el.append(b);
+    }
+    box.append(el);
+  };
+  const w = await getMeta('parseWarning');
+  if (w) add('err', `⚠ X a peut-être changé son format : ${w.unparsed} tweet(s) illisible(s). Si les nouveaux bookmarks n’apparaissent plus, le lecteur (<code>parse.js</code>) doit être mis à jour.`, [['Ignorer', async () => { await chrome.runtime.sendMessage({ type: 'q:clearWarning' }); renderBanners(); }]]);
+  const orphans = (await getMeta('orphans')) || [];
+  if (orphans.length) add('', `🗑 ${orphans.length} bookmark(s) n’existent plus sur X (retirés ou supprimés).`, [
+    ['Les retirer d’ici', async () => { await chrome.runtime.sendMessage({ type: 'q:orphansDelete' }); }],
+    ['Les garder', async () => { await chrome.runtime.sendMessage({ type: 'q:orphansDismiss' }); renderBanners(); }],
+  ]);
+}
+
+// ---------- redécouverte ----------
+function showRows(rows, label) {
+  seq++; shown = PAGE;
+  last = { rows: rows.map((r) => [r, 0]), terms: [], meta: {}, label };
+  $('answer').replaceChildren();
+  render();
+  window.scrollTo({ top: 0 });
+}
+$('rand').onclick = () => {
+  const old = index.tweets.map((t, i) => [t, i]).filter(([t]) => t.createdAt && Date.parse(t.createdAt) < Date.now() - 30 * 86_400_000).map(([, i]) => i);
+  const pool = old.length >= 8 ? old : index.tweets.map((_, i) => i);
+  const pick = [];
+  for (let n = 0; n < Math.min(8, pool.length); n++) pick.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  showRows(pick, '🎲 Bookmarks au hasard (cliquer à nouveau pour en tirer d’autres)');
+};
+$('yearago').onclick = () => {
+  const center = Date.now() - 365 * 86_400_000;
+  for (const win of [21, 60, 120]) {
+    const rows = index.tweets.map((t, i) => [t, i]).filter(([t]) => t.createdAt && Math.abs(Date.parse(t.createdAt) - center) <= win * 86_400_000).map(([, i]) => i);
+    if (rows.length) return showRows(rows.slice(0, 60), `📅 Il y a un an (± ${win} jours)`);
+  }
+  showRows([], '📅 Rien de sauvegardé autour de la même date l’an dernier');
+};
+
+// ---------- thèmes automatiques ----------
+let themes = null;
+async function showThemes() {
+  const withVec = [];
+  for (let i = 0; i < index.tweets.length; i++) if (index.hasVec[i]) withVec.push(i);
+  if (withVec.length < 30) return showRows([], '☰ Pas assez de bookmarks indexés pour former des thèmes (30 minimum)');
+  $('mode').textContent = 'Calcul des thèmes…';
+  await new Promise((r) => setTimeout(r, 30));
+  if (!themes || themes.n !== withVec.length) {
+    const k = Math.max(6, Math.min(30, Math.round(Math.sqrt(withVec.length / 2))));
+    const { assign } = kmeans(index.matrix, withVec, k);
+    const labels = labelClusters(index.tweets, withVec, assign, k, 3);
+    themes = { n: withVec.length, rows: withVec, assign, labels, names: null, k };
+  }
+  renderThemes();
+}
+function renderThemes() {
+  seq++;
+  $('answer').replaceChildren();
+  const box = $('results');
+  box.replaceChildren();
+  $('mode').textContent = `☰ ${themes.k} thèmes détectés automatiquement`;
+  const wrap = document.createElement('div');
+  wrap.className = 'themes';
+  if (llmReady(settings)) {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = themes.names ? '✨ Renommer avec l’IA' : '✨ Nommer les thèmes avec l’IA';
+    b.onclick = nameThemesWithAI;
+    wrap.append(b);
+  }
+  const groups = Array.from({ length: themes.k }, () => []);
+  themes.rows.forEach((row, i) => groups[themes.assign[i]].push(row));
+  groups.map((rows, c) => ({ rows, c })).filter((g) => g.rows.length).sort((a, b) => b.rows.length - a.rows.length).forEach(({ rows, c }) => {
+    const el = document.createElement('div');
+    el.className = 'th';
+    const name = themes.names?.[c] || themes.labels[c].join(' · ') || `Thème ${c + 1}`;
+    const authors = [...new Set(rows.slice(0, 40).map((r) => '@' + index.tweets[r].handle))].slice(0, 3).join(', ');
+    el.innerHTML = `<b>${esc(name)}</b><span>${rows.length} tweets · ${esc(authors)}</span>`;
+    el.onclick = () => {
+      const mask = new Uint8Array(index.tweets.length);
+      for (const r of rows) mask[r] = 1;
+      state.themeMask = mask;
+      state.themeLabel = name;
+      $('q').value = '';
+      run();
+    };
+    wrap.append(el);
+  });
+  box.append(wrap);
+}
+async function nameThemesWithAI() {
+  $('mode').textContent = 'Nommage des thèmes par l’IA…';
+  const groups = Array.from({ length: themes.k }, () => []);
+  themes.rows.forEach((row, i) => groups[themes.assign[i]].push(row));
+  const payload = groups.map((rows, c) => ({ terms: themes.labels[c], samples: rows.slice(0, 5).map((r) => decodeEntities(index.tweets[r].text).replace(/\s+/g, ' ').slice(0, 140)) }));
+  try {
+    const out = parseJsonLoose(await chat(settings.llm, themeNamesMessages(payload), { json: true }));
+    if (Array.isArray(out.names)) themes.names = out.names;
+  } catch (e) { $('mode').textContent = 'Nommage impossible : ' + e.message; return; }
+  renderThemes();
+}
+$('themes').onclick = showThemes;
+
+// ---------- IA : questions-réponses et résumé ----------
+function showAnswer(html, sourcesNote) {
+  const box = $('answer');
+  box.innerHTML = `<div class="ans"><div class="ah"><span>Réponse de l’IA — vérifie toujours les sources${sourcesNote ? ' · ' + sourcesNote : ''}</span><button class="ghost" id="ans-x">✕</button></div>${html}</div>`;
+  $('ans-x').onclick = () => box.replaceChildren();
+  box.querySelectorAll('a.cite').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    const el = document.getElementById('t-' + a.dataset.n);
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
+  }));
+}
+async function ask() {
+  if (!llmReady(settings)) return openSettings();
+  const question = $('q').value.trim();
+  if (!question) return;
+  showAnswer('<p>Réflexion…</p>');
+  await run();
+  const src = last.rows.slice(0, 12).map(([r]) => index.tweets[r]);
+  if (!src.length) return showAnswer('<p>Aucun tweet trouvé pour répondre.</p>');
+  try {
+    const out = await chat(settings.llm, askMessages(question, src));
+    showAnswer(renderMd(out, src.length), `${src.length} tweets utilisés`);
+  } catch (e) { showAnswer(`<p>⚠ ${esc(e.message)}</p>`); }
+}
+$('ask').onclick = ask;
+$('digest').onclick = async () => {
+  if (!llmReady(settings)) return openSettings();
+  const week = Date.now() - 7 * 86_400_000;
+  let rows = index.tweets.map((t, i) => [t, i]).filter(([t]) => t.createdAt && Date.parse(t.createdAt) >= week).map(([, i]) => i);
+  let label = 'les 7 derniers jours';
+  if (rows.length < 5) { rows = index.recentRows().slice(0, 30); label = 'tes 30 derniers bookmarks'; }
+  rows = rows.sort((a, b) => (index.tweets[b].stats?.likes || 0) - (index.tweets[a].stats?.likes || 0)).slice(0, 40);
+  showRows(rows, `📰 Résumé : ${label}`);
+  showAnswer('<p>Rédaction du résumé…</p>');
+  try {
+    const out = await chat(settings.llm, digestMessages(label, rows.map((r) => index.tweets[r])));
+    showAnswer(renderMd(out, Math.min(12, rows.length)), `${rows.length} tweets`);
+  } catch (e) { showAnswer(`<p>⚠ ${esc(e.message)}</p>`); }
+};
+
+// ---------- index d'images ----------
+async function loadImgIndex() {
+  const rows = (await getAllImgVectors()).filter((r) => r.vec?.length === IMGDIM);
+  if (!rows.length) throw new Error('aucune image indexée pour l’instant (activée dans les réglages ?)');
+  const matrix = new Float32Array(rows.length * IMGDIM);
+  rows.forEach((r, i) => matrix.set(r.vec, i * IMGDIM));
+  imgIndex = { ids: rows.map((r) => r.id), matrix };
+  return imgIndex;
+}
+
+// ---------- synchro ----------
+const startSync = async (mode) => {
   $('progress').textContent = 'Démarrage (un onglet X s’ouvre en arrière-plan si besoin)…';
-  const res = await chrome.runtime.sendMessage({ type: 'startBackfill' });
+  const res = await chrome.runtime.sendMessage({ type: 'startBackfill', mode });
   if (!res?.ok) $('progress').textContent = 'Impossible de démarrer : vérifie que tu es connecté à X, puis réessaie.';
 };
+$('sync').onclick = () => startSync('full');
+$('news').onclick = () => startSync('incremental');
 $('stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopBackfill' });
 
 if (embed) {
   document.body.classList.add('embed');
   $('close').hidden = false;
   $('close').onclick = () => parent.postMessage({ xbs: 'close' }, '*');
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') parent.postMessage({ xbs: 'close' }, '*'); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('settings').open) parent.postMessage({ xbs: 'close' }, '*'); });
   window.addEventListener('message', (e) => { if (e.data?.xbs === 'focus') $('q').focus(); });
 }
 
-let reloadTimer, lastHeavy = 0;
-const scheduleReload = (delay = 3000) => { clearTimeout(reloadTimer); reloadTimer = setTimeout(load, delay); };
+// ---------- réglages ----------
+const dlg = $('settings');
+async function openSettings() {
+  settings = await getSettings();
+  $('llm-url').value = settings.llm.baseUrl;
+  $('llm-model').value = settings.llm.model;
+  $('llm-key').value = settings.llm.apiKey;
+  $('ai-intent').checked = settings.aiIntent;
+  $('ai-rerank').checked = settings.aiRerank;
+  $('opt-links').checked = settings.enrichLinks;
+  $('opt-images').checked = settings.imageSearch;
+  $('opt-auto').checked = settings.autoSync;
+  const h = await getMeta('syncDir');
+  setDirUi(h);
+  dlg.showModal();
+}
+$('gear').onclick = openSettings;
 
-chrome.runtime.onMessage.addListener((m) => {
-  switch (m.type) {
-    case 'tweetsAdded': scheduleReload(); break;
-    case 'indexProgress':
-      if (Date.now() - lastHeavy > 60000) { lastHeavy = Date.now(); scheduleReload(500); }
-      pollStatus();
-      break;
-    case 'indexDone': scheduleReload(500); pollStatus(); break;
-    case 'indexError': case 'modelProgress': pollStatus(); break;
-    case 'backfillProgress': {
-      const running = m.state === 'running';
-      $('stop').hidden = !running;
-      $('sync').hidden = running;
-      $('progress').textContent = { running: `Synchro : ${m.total} tweets lus`, done: `Synchro terminée (${m.total})`, stopped: 'Synchro arrêtée' }[m.state] || m.message || '';
-      break;
-    }
-  }
+function applySettingsUi() {
+  $('digest').hidden = !llmReady(settings);
+  $('imgmode').hidden = !settings.imageSearch;
+  if (!settings.imageSearch && state.imageMode) { state.imageMode = false; $('imgmode').classList.remove('on'); }
+  $('ask').hidden = !llmReady(settings) || !$('q').value.trim();
+}
+
+const PRESETS = { openrouter: 'https://openrouter.ai/api/v1', ollama: 'http://localhost:11434/v1', openai: 'https://api.openai.com/v1' };
+document.querySelectorAll('[data-preset]').forEach((b) => {
+  b.onclick = () => {
+    $('llm-url').value = PRESETS[b.dataset.preset];
+    if (b.dataset.preset === 'ollama') $('llm-msg').textContent = 'Ollama : lance-le avec OLLAMA_ORIGINS="chrome-extension://*" ollama serve, puis indique le nom d’un modèle installé (ollama list).';
+  };
 });
 
+$('llm-test').onclick = async () => {
+  const llm = { baseUrl: $('llm-url').value.trim(), model: $('llm-model').value.trim(), apiKey: $('llm-key').value.trim() };
+  const msg = $('llm-msg');
+  msg.textContent = 'Test en cours…';
+  try {
+    if (!llm.baseUrl || !llm.model) throw new Error('URL et modèle requis.');
+    const origin = new URL(llm.baseUrl).origin;
+    const ok = (await chrome.permissions.contains({ origins: [origin + '/*'] })) || (await chrome.permissions.request({ origins: [origin + '/*'] }));
+    if (!ok) throw new Error('Accès refusé à ' + origin);
+    settings = await setSettings({ llm, aiIntent: $('ai-intent').checked, aiRerank: $('ai-rerank').checked });
+    const out = await chat(llm, [{ role: 'user', content: 'Réponds uniquement : ok' }]);
+    msg.textContent = '✓ Connecté. Réponse du modèle : ' + out.slice(0, 40);
+    applySettingsUi();
+  } catch (e) { msg.textContent = '⚠ ' + e.message; }
+};
+for (const id of ['ai-intent', 'ai-rerank']) {
+  $(id).onchange = async () => { settings = await setSettings({ aiIntent: $('ai-intent').checked, aiRerank: $('ai-rerank').checked }); };
+}
+$('opt-links').onchange = async (e) => {
+  if (e.target.checked && !(await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] }))) e.target.checked = false;
+  settings = await setSettings({ enrichLinks: e.target.checked });
+};
+$('opt-images').onchange = async (e) => { settings = await setSettings({ imageSearch: e.target.checked }); applySettingsUi(); };
+$('opt-auto').onchange = async (e) => { settings = await setSettings({ autoSync: e.target.checked }); };
+$('reindex').onclick = async () => {
+  if (!confirm('Recalculer tous les vecteurs ? (quelques minutes, en arrière-plan)')) return;
+  await clearVectors();
+  await load(true);
+  chrome.runtime.sendMessage({ type: 'q:index', force: true });
+  $('bk-msg').textContent = 'Réindexation lancée.';
+};
+
+// ---------- sauvegarde / dossier de synchro ----------
+const download = (bytes, name) => {
+  const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(new Blob([bytes])), download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+async function importTweets(tweets) {
+  let added = 0;
+  for (let i = 0; i < tweets.length; i += 1000) added += await putTweets(tweets.slice(i, i + 1000));
+  await load(true);
+  run();
+  chrome.runtime.sendMessage({ type: 'q:index' });
+  return added;
+}
+const bkMsg = (t) => { $('bk-msg').textContent = t; };
+
+$('bk-export').onclick = async () => {
+  const pass = $('bk-pass').value;
+  const tweets = await getAllTweets();
+  download(await encode(tweets, pass || undefined), `x-bookmarks-${isoDay(Date.now())}.${pass ? 'xbsbak' : 'json'}`);
+  bkMsg(`${tweets.length} bookmarks exportés${pass ? ' (chiffrés)' : ''}.`);
+};
+$('bk-import').onchange = async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const tweets = await decode(new Uint8Array(await f.arrayBuffer()), $('bk-pass').value);
+    const added = await importTweets(tweets);
+    bkMsg(`${tweets.length} bookmarks lus, ${added} nouveaux.`);
+  } catch (err) { bkMsg('⚠ ' + err.message); }
+};
+
+let dirHandle = null;
+function setDirUi(h) {
+  dirHandle = h || null;
+  $('bk-save').disabled = $('bk-load').disabled = !dirHandle;
+  if (dirHandle) bkMsg(`Dossier de synchro : ${dirHandle.name}`);
+}
+const dirFile = () => `x-bookmarks-backup.${$('bk-pass').value ? 'xbsbak' : 'json'}`;
+async function dirPermission() {
+  if ((await dirHandle.queryPermission({ mode: 'readwrite' })) === 'granted') return true;
+  return (await dirHandle.requestPermission({ mode: 'readwrite' })) === 'granted';
+}
+$('bk-dir').onclick = async () => {
+  if (!window.showDirectoryPicker) return bkMsg('⚠ Ce navigateur ne permet pas de choisir un dossier.');
+  try {
+    const h = await window.showDirectoryPicker({ mode: 'readwrite' });
+    await setMeta('syncDir', h);
+    setDirUi(h);
+  } catch { /* annulé */ }
+};
+$('bk-save').onclick = async () => {
+  try {
+    if (!(await dirPermission())) return bkMsg('⚠ Accès au dossier refusé.');
+    const tweets = await getAllTweets();
+    const w = await (await dirHandle.getFileHandle(dirFile(), { create: true })).createWritable();
+    await w.write(await encode(tweets, $('bk-pass').value || undefined));
+    await w.close();
+    bkMsg(`${tweets.length} bookmarks sauvegardés dans ${dirHandle.name}/${dirFile()}`);
+  } catch (err) { bkMsg('⚠ ' + err.message); }
+};
+$('bk-load').onclick = async () => {
+  try {
+    if (!(await dirPermission())) return bkMsg('⚠ Accès au dossier refusé.');
+    let file;
+    for (const ext of $('bk-pass').value ? ['xbsbak', 'json'] : ['json', 'xbsbak']) {
+      try { file = await (await dirHandle.getFileHandle(`x-bookmarks-backup.${ext}`)).getFile(); break; } catch {}
+    }
+    if (!file) return bkMsg('⚠ Aucune sauvegarde trouvée dans ce dossier.');
+    const tweets = await decode(new Uint8Array(await file.arrayBuffer()), $('bk-pass').value);
+    const added = await importTweets(tweets);
+    bkMsg(`${tweets.length} bookmarks lus depuis ${file.name}, ${added} nouveaux.`);
+  } catch (err) { bkMsg('⚠ ' + err.message); }
+};
+
+// ---------- banc d'essai ----------
+$('bench-in').value = '[\n  {"q": "mémoire des agents", "expect": ["long-term memory", "@karpathy"]}\n]';
+$('bench-run').onclick = async () => {
+  const out = $('bench-out');
+  let cases;
+  try { cases = JSON.parse($('bench-in').value); if (!Array.isArray(cases)) throw new Error(); } catch { out.textContent = '⚠ JSON invalide.'; return; }
+  const hasVec = index.vectorCount() > 0;
+  const configs = [
+    { name: 'Mots-clés seuls', mode: 'kw' },
+    ...(hasVec ? [
+      { name: 'Sémantique seul', mode: 'sem' },
+      { name: 'Hybride 1 : 1', mode: 'hybrid', weights: [1, 1] },
+      { name: 'Hybride 1,5 : 0,7 (défaut phrases)', mode: 'hybrid', weights: [1.5, 0.7] },
+      { name: 'Hybride 0,7 : 1,5', mode: 'hybrid', weights: [0.7, 1.5] },
+    ] : []),
+  ];
+  out.textContent = 'Calcul…';
+  const rows = [];
+  for (const cfg of configs) {
+    const scores = [];
+    for (const c of cases) {
+      try {
+        const r = await coreSearch(c.q, null, cfg);
+        scores.push(evalScore(r.rows.map(([row]) => index.tweets[row]), c.expect || []));
+      } catch { scores.push({ hit10: 0, rr: 0, firstRank: null }); }
+    }
+    const s = summarize(scores);
+    rows.push(`<tr><td>${esc(cfg.name)}</td><td>${(s.recall10 * 100).toFixed(0)} %</td><td>${s.mrr.toFixed(3)}</td></tr>`);
+  }
+  out.innerHTML = `<table><tr><th>Configuration (${cases.length} requêtes)</th><th>Rappel@10</th><th>MRR</th></tr>${rows.join('')}</table>` +
+    (hasVec ? '' : '<p class="hint">Aucun vecteur : seuls les mots-clés sont évalués.</p>');
+};
+
+// ---------- état du modèle / de l'indexation ----------
 async function pollStatus() {
   try {
     const st = await chrome.runtime.sendMessage({ type: 'q:status' });
@@ -313,15 +837,68 @@ async function pollStatus() {
     el.classList.toggle('err', st?.model === 'error' || (!!st?.error && !st?.indexing));
     $('retry').hidden = !(st?.error);
     if (!st) return;
-    if (st.error) el.textContent = 'Recherche sémantique indisponible : ' + st.error;
-    else if (st.model === 'loading') el.textContent = `Recherche sémantique : téléchargement du modèle ${st.pct ?? 0}% (une seule fois, ~300 Mo)…`;
-    else if (st.indexing) el.textContent = `Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + ')' : ''}…`;
-    else if (st.model === 'ready') el.textContent = 'Recherche sémantique prête' + (st.device ? ' (' + st.device + ')' : '');
-    else el.textContent = '';
+    const parts = [];
+    if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
+    else if (st.model === 'loading') parts.push(`Recherche sémantique : téléchargement du modèle ${st.pct ?? 0}% (une seule fois, ~300 Mo)…`);
+    else if (st.indexing) parts.push(`Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + ')' : ''}…`);
+    else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + ')' : ''));
+    if (st.enrich?.active) parts.push(`liens : ${st.enrich.done}/${st.enrich.total}`);
+    if (st.images?.active) parts.push(`images : ${st.images.done}/${st.images.total}`);
+    if (st.images?.error) parts.push('images : ' + st.images.error);
+    el.textContent = parts.join(' · ');
   } catch {}
 }
 $('retry').onclick = () => { chrome.runtime.sendMessage({ type: 'q:index', force: true }); setTimeout(pollStatus, 500); };
 setInterval(pollStatus, 2500);
-pollStatus();
 
-load().then(() => chrome.runtime.sendMessage({ type: 'q:index' }).catch(() => {}));
+// ---------- messages de l'extension ----------
+let reloadTimer, lastHeavy = 0, needFull = false;
+function scheduleReload(delay = 3000, full = false) {
+  needFull ||= full;
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(async () => {
+    const f = needFull; needFull = false;
+    await load(f);
+    if (!$('q').value.trim() && !$('answer').firstChild) run(); // la liste « derniers bookmarks » se met à jour ; une recherche en cours n'est jamais perturbée
+  }, delay);
+}
+
+chrome.runtime.onMessage.addListener((m) => {
+  switch (m.type) {
+    case 'tweetsAdded': scheduleReload(); break;
+    case 'tweetsEnriched': scheduleReload(500, true); pollStatus(); break;
+    case 'tweetsRemoved': scheduleReload(200, true); renderBanners(); break;
+    case 'orphans': case 'parseWarning': renderBanners(); break;
+    case 'indexProgress':
+      if (Date.now() - lastHeavy > 60000) { lastHeavy = Date.now(); scheduleReload(500); }
+      pollStatus();
+      break;
+    case 'indexDone': scheduleReload(500); pollStatus(); break;
+    case 'indexError': case 'modelProgress': case 'enrichProgress': case 'imageProgress': pollStatus(); break;
+    case 'backfillProgress': {
+      const running = m.state === 'running';
+      $('stop').hidden = !running;
+      $('sync').hidden = $('news').hidden = running;
+      const kind = m.mode === 'incremental' ? 'Nouveautés' : 'Synchro';
+      $('progress').textContent = { running: `${kind} : ${m.total} tweets lus`, done: `${kind} terminée (${m.total} lus)`, stopped: `${kind} arrêtée` }[m.state] || m.message || '';
+      break;
+    }
+  }
+});
+chrome.storage.onChanged.addListener(async (ch, area) => {
+  if (area === 'local' && ch.settings) { settings = await getSettings(); applySettingsUi(); }
+});
+
+// ---------- démarrage ----------
+(async () => {
+  settings = await getSettings();
+  saved = (await getMeta('saved')) || [];
+  renderSaved();
+  renderHistory();
+  applySettingsUi();
+  await load(true);
+  run();
+  renderBanners();
+  pollStatus();
+  chrome.runtime.sendMessage({ type: 'q:index' }).catch(() => {});
+})();

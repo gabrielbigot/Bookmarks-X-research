@@ -11,16 +11,21 @@ const send = (msg) => { try { chrome.runtime.sendMessage(msg).catch(() => {}); }
 window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG) return;
   const d = ev.data;
-  if (d.type === 'tweets') send({ type: 'captured', tweets: d.tweets });
+  if (d.type === 'tweets') {
+    const ack = (added) => window.postMessage({ src: TAG + '-ctl', type: 'ack', nonce: d.nonce, added }, '*');
+    try { chrome.runtime.sendMessage({ type: 'captured', tweets: d.tweets, runId: d.runId }).then((r) => ack(r?.added ?? null), () => ack(null)); }
+    catch { ack(null); }
+  } else if (d.type === 'warn') { send({ type: 'parseWarning', unparsed: d.unparsed, parsed: d.parsed, ops: d.ops }); capWarn = true; }
   else if (d.type === 'backfill') { send({ ...d, type: 'backfillProgress' }); setStatus(d); }
   else if (d.type === 'status') { lastStatusReply = Date.now(); lastCapture = d; }
   else if (d.type === 'error') console.warn('[xbs]', d.message);
 });
 
-const ctl = (type) => window.postMessage({ src: TAG + '-ctl', type }, '*');
+const ctl = (type, extra = {}) => window.postMessage({ src: TAG + '-ctl', type, ...extra }, '*');
+let capWarn = false;
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg.type === 'startBackfill') ctl('start');
+  if (msg.type === 'startBackfill') ctl('start', { mode: msg.mode });
   if (msg.type === 'stopBackfill') ctl('stop');
   if (msg.type === 'ping') { sendResponse({ ...lastCapture, likely: looksLikeBookmarks(), url: location.href }); }
 });
@@ -59,6 +64,7 @@ function buildUi() {
     <div class="pill">
       <button id="open" title="Alt+K">🔎 Recherche intelligente</button>
       <button id="sync" class="sec" title="Remonte tout l'historique en arrière-plan">⟳ Tout synchroniser</button>
+      <button id="news" class="sec" title="Ne récupère que les nouveautés">↻ Nouveautés</button>
       <span class="st" id="cap"></span>
       <span class="st" id="st"></span>
     </div>
@@ -67,7 +73,8 @@ function buildUi() {
   capEl = shadow.getElementById('cap');
   overlay = shadow.getElementById('ov');
   shadow.getElementById('open').onclick = toggleOverlay;
-  shadow.getElementById('sync').onclick = () => { statusEl.textContent = 'Démarrage…'; ctl('start'); };
+  shadow.getElementById('sync').onclick = () => { statusEl.textContent = 'Démarrage…'; ctl('start', { mode: 'full' }); };
+  shadow.getElementById('news').onclick = () => { statusEl.textContent = 'Démarrage…'; ctl('start', { mode: 'incremental' }); };
   overlay.onclick = (e) => { if (e.target === overlay) toggleOverlay(false); };
   document.documentElement.appendChild(host);
 }
@@ -92,6 +99,7 @@ function refreshCapture() {
   if (!capEl) return;
   if (Date.now() - lastStatusReply > 3000 && lastStatusReply !== 0) capEl.textContent = '⚠ capture inactive';
   else if (lastStatusReply === 0) capEl.textContent = '⚠ script de capture non injecté — recharge la page';
+  else if (capWarn) capEl.textContent = '⚠ format de X inconnu : certains tweets sont illisibles';
   else capEl.textContent = lastCapture.hasRequest ? '● capture active' : '○ capture en attente (scrolle un peu)';
 }
 
