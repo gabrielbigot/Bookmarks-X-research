@@ -1,0 +1,26 @@
+{
+  "name": "x-bookmarks-smart-search",
+  "version": "0.1.0",
+  "description": "Extension navigateur : recherche sémantique locale dans les bookmarks X",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gabrielbigot/Bookmarks-X-research.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gabrielbigot/Bookmarks-X-research/issues"
+  },
+  "homepage": "https://github.com/gabrielbigot/Bookmarks-X-research#readme",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "playwright": "^1.56.1"
+  },
+  "private": true,
+  "type": "module"
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recherche dans mes bookmarks</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header>
+    <div class="row">
+      <input id="q" type="search" placeholder="Cherche par idée, pas par mot exact…  (from:@user  has:link  since:2026-01-01)" autocomplete="off" autofocus>
+      <button id="close" title="Fermer (Échap)" hidden>✕</button>
+    </div>
+    <div class="bar">
+      <span id="stats">Chargement…</span>
+      <span id="progress"></span>
+      <span class="spacer"></span>
+      <button id="sync" class="ghost">⟳ Tout synchroniser</button>
+      <button id="stop" class="ghost" hidden>■ Stop</button>
+    </div>
+    <div id="mode" class="mode"></div>
+  </header>
+  <main id="results"></main>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>
