@@ -73,6 +73,11 @@ await panel.goto(`chrome-extension://${extId}/panel.html`);
 await panel.waitForSelector('.tw');
 await panel.waitForFunction(() => /8 bookmarks/.test(document.getElementById('stats').textContent));
 
+// Les runtimes ONNX (wasm) doivent être chargeables depuis l'extension (régression : variante asyncify absente).
+for (const v of ['', '.jsep', '.jspi', '.asyncify']) {
+  const ok = await panel.evaluate((u) => import(u).then(() => true, (e) => String(e)), `chrome-extension://${extId}/ort/ort-wasm-simd-threaded${v}.mjs`);
+  assert.equal(ok, true, `ort${v}.mjs : ${ok}`);
+}
 await panel.setViewportSize({ width: 760, height: 1100 });
 await panel.screenshot({ path: 'test/feed.png' });
 await panel.fill('#q', 'tokio');
