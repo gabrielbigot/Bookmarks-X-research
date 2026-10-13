@@ -52,3 +52,38 @@ test('BM25 : une phrase libre ne se laisse pas polluer par les mots vides', () =
   assert.equal(res[0], '2');
   assert.equal(contentWords('je cherche des tweets concernant la mémoire des agents IA'), 3); // mémoire, agents, ia
 });
+
+import { interpret, findAuthors } from '../src/lib/nlq.js';
+
+test('interpret : tri par date et auteur', () => {
+  let r = interpret("Trouve-moi le tweet le plus vieux d'OpenAI.");
+  assert.equal(r.sort, 'oldest');
+  assert.equal(r.author.token, 'openai');
+  r = interpret('les tweets les plus récents de karpathy sur les agents');
+  assert.equal(r.sort, 'newest');
+  assert.equal(r.author.token, 'karpathy');
+  r = interpret('the oldest post from @sama about gpt');
+  assert.equal(r.sort, 'oldest');
+  assert.equal(r.author.token, 'sama');
+  r = interpret('mémoire des agents'); // « des agents » ne doit pas devenir un tri
+  assert.equal(r.sort, null);
+});
+
+test('findAuthors : nom ou @handle', () => {
+  const tw = [
+    { handle: 'OpenAI', name: 'OpenAI' }, { handle: 'OpenAIDevs', name: 'OpenAI Developers' },
+    { handle: 'sama', name: 'Sam Altman' }, { handle: 'cerfiafr', name: 'Cerfia' },
+  ];
+  assert.deepEqual(findAuthors(tw, 'openai').map((a) => a.handle).sort(), ['OpenAI', 'OpenAIDevs']);
+  assert.deepEqual(findAuthors(tw, 'altman').map((a) => a.handle), ['sama']);
+  assert.deepEqual(findAuthors(tw, 'zz'), []);
+});
+
+test('semanticQuery : « montre-moi / donne-moi / show me »', () => {
+  assert.equal(semanticQuery('montre-moi les tweets sur les agents'), 'les agents');
+  assert.equal(semanticQuery('show me posts about rust'), 'rust');
+});
+test('contentWords : « montre-moi le tweet » est vide', () => {
+  assert.equal(contentWords('montre-moi le tweet'), 0);
+  assert.equal(contentWords("Trouve-moi le tweet le d'"), 0);
+});

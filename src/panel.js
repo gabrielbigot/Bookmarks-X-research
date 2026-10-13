@@ -1,6 +1,7 @@
 import { getAllTweets, getAllVectors, counts } from './lib/db.js';
 import { Index, DIM, parseQuery, rrf, highlightTerms, normalizeText, contentWords } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
+import { interpret, findAuthors } from './lib/nlq.js';
 
 const $ = (id) => document.getElementById(id);
 const embed = new URLSearchParams(location.search).has('embed');
@@ -39,40 +40,74 @@ async function embedQuery(text) {
   return v;
 }
 
+let ignoreAuthor = false;
+
 async function run() {
   const my = ++seq;
   const raw = $('q').value.trim();
-  const { text, filters } = parseQuery(raw);
-  const allowed = index.allowedMask(filters);
+  const parsed = parseQuery(raw);
+  let { text } = parsed;
+  const filters = { ...parsed.filters };
   shown = PAGE;
 
-  if (!text) { // pas de texte : récents (avec filtres éventuels)
-    const rows = [];
-    for (let i = 0; i < index.tweets.length && rows.length < 2000; i++) if (!allowed || allowed[i]) rows.push([i, 0]);
-    last = { rows, terms: [], label: raw ? 'Filtres appliqués' : 'Derniers bookmarks' };
+  // Langage naturel : « le tweet le plus vieux d'OpenAI » -> tri par date + filtre auteur.
+  const nl = interpret(text);
+  let sort = nl.sort;
+  let authors = [];
+  if (nl.author && !ignoreAuthor) {
+    authors = findAuthors(index.tweets, nl.author.token);
+    if (authors.length && authors.length <= 15) {
+      filters.fromAny = authors.map((a) => a.handle.toLowerCase());
+      text = nl.text.replace(nl.author.phrase.trim(), ' ');
+    } else authors = [];
+  }
+  if (!authors.length) text = sort ? nl.text : text; // le tri est retiré du texte, pas l'auteur non résolu
+  text = text.replace(/\s+/g, ' ').trim();
+  const allowed = index.allowedMask(filters);
+
+  const meta = { sort, authors };
+  const byDate = (rows) => [...rows].sort((a, b) => {
+    const x = index.tweets[a[0]].createdAt || '', y = index.tweets[b[0]].createdAt || '';
+    return sort === 'oldest' ? (x < y ? -1 : 1) : (x < y ? 1 : -1);
+  });
+
+  // Aucun mot utile : on liste (récents d'abord, ou triés par date si demandé).
+  if (!text || contentWords(text) === 0) {
+    let rows = [];
+    for (let i = 0; i < index.tweets.length; i++) if (!allowed || allowed[i]) rows.push([i, 0]);
+    if (sort) rows = byDate(rows);
+    rows = rows.slice(0, 2000);
+    last = { rows, terms: [], label: raw ? 'Filtres appliqués' : 'Derniers bookmarks', meta };
     return render();
   }
 
   const terms = highlightTerms(text);
   const kw = index.bm25(text, allowed);
-  last = { rows: kw, terms, label: 'Mots-clés (la recherche sémantique arrive…)' };
+  last = { rows: kw, terms, label: 'Mots-clés (la recherche sémantique arrive…)', meta: { ...meta, sort: null } };
   render();
 
+  let rows = kw, label;
   if (!index.vectorCount()) {
-    last.label = 'Mots-clés uniquement — aucun tweet indexé sémantiquement pour l’instant';
-    return render();
+    label = 'Mots-clés uniquement — aucun tweet indexé sémantiquement pour l’instant';
+  } else {
+    try {
+      const qv = await embedQuery(semanticQuery(text));
+      if (my !== seq) return;
+      const sem = index.vector(qv, allowed);
+      // Phrase libre (≥ 3 mots utiles) : on se fie davantage au sens qu'aux mots exacts.
+      const long = contentWords(text) >= 3;
+      rows = rrf([sem, kw], long ? [1.5, 0.7] : [1, 1]);
+      label = 'Hybride : sémantique + mots-clés';
+    } catch (e) {
+      if (my !== seq) return;
+      label = 'Mots-clés uniquement (modèle indisponible : ' + e.message + ')';
+    }
   }
-  try {
-    const qv = await embedQuery(semanticQuery(text));
-    if (my !== seq) return;
-    const sem = index.vector(qv, allowed);
-    // Phrase libre (≥ 3 mots utiles) : on se fie davantage au sens qu'aux mots exacts.
-    const long = contentWords(text) >= 3;
-    last = { rows: rrf([sem, kw], long ? [1.5, 0.7] : [1, 1]), terms, label: 'Hybride : sémantique + mots-clés' };
-  } catch (e) {
-    if (my !== seq) return;
-    last.label = 'Mots-clés uniquement (modèle indisponible : ' + e.message + ')';
+  if (sort) { // « le plus vieux … » : on trie par date les 40 résultats les plus pertinents
+    rows = byDate(rows.slice(0, 40));
+    label += ` · ${sort === 'oldest' ? 'du plus ancien au plus récent' : 'du plus récent au plus ancien'} parmi les 40 plus pertinents`;
   }
+  last = { rows, terms, label, meta };
   render();
 }
 
@@ -83,7 +118,7 @@ function similarTo(row) {
   const rows = index.vector(qv, null, 60).filter(([r]) => r !== row);
   seq++;
   shown = PAGE;
-  last = { rows, terms: [], label: `Similaires à @${t.handle} : « ${t.text.slice(0, 60).replace(/\s+/g, ' ')}… »` };
+  last = { rows, terms: [], meta: {}, label: `Similaires à @${t.handle} : « ${t.text.slice(0, 60).replace(/\s+/g, ' ')}… »` };
   render();
   window.scrollTo({ top: 0 });
 }
@@ -204,7 +239,16 @@ function card([row], terms) {
 function render() {
   const box = $('results');
   box.replaceChildren();
-  $('mode').textContent = last.label + (last.rows.length ? ` — ${last.rows.length >= 200 ? '200+' : last.rows.length} résultats` : '');
+  const modeEl = $('mode');
+  modeEl.textContent = last.label + (last.rows.length ? ` — ${last.rows.length >= 200 ? '200+' : last.rows.length} résultats` : '');
+  const au = last.meta?.authors;
+  if (au?.length) {
+    const b = document.createElement('button');
+    b.className = 'ghost';
+    b.textContent = `Auteur : ${au.slice(0, 3).map((a) => '@' + a.handle).join(', ')}${au.length > 3 ? '…' : ''} ✕ retirer`;
+    b.onclick = () => { ignoreAuthor = true; run(); };
+    modeEl.append(' ', b);
+  }
   if (!last.rows.length) {
     box.innerHTML = `<div class="empty">${index.tweets.length ? 'Aucun résultat.' : 'Aucun bookmark capturé pour l’instant.<br>Ouvre x.com/i/bookmarks, puis clique « ⟳ Tout synchroniser ».'}</div>`;
     return;
@@ -223,7 +267,7 @@ function render() {
 
 // ---------- événements ----------
 let timer;
-$('q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 120); });
+$('q').addEventListener('input', () => { ignoreAuthor = false; clearTimeout(timer); timer = setTimeout(run, 120); });
 
 $('sync').onclick = async () => {
   $('progress').textContent = 'Démarrage (un onglet X s’ouvre en arrière-plan si besoin)…';

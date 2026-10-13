@@ -18,7 +18,9 @@ const STOP = new Set((
   'est sont ete etre avoir ai as ont suis cherche chercher recherche rechercher trouve trouver retrouve retrouver voudrais veux ' +
   'tweet tweets post posts bookmark bookmarks publication publications parle parlent parler concernant concerne propos sujet ' +
   'the a an of and or to in on at for with about is are was were be been i me my we you he she it they that this these those ' +
-  'looking find some any talk talks talking tweet tweets'
+  'looking find some any talk talks talking tweet tweets ' +
+  'moi toi lui montre montrer donne donner affiche afficher liste lister fais faire peux peut stp svp please show give list display me tous toutes tout ceux celles voir ' +
+  'vieux ancien ancienne anciens recent recents derniere dernier derniers premier oldest newest latest earliest first last'
 ).split(/\s+/));
 
 export const isStopword = (t) => STOP.has(t);
@@ -27,7 +29,7 @@ export const isStopword = (t) => STOP.has(t);
 export function semanticQuery(q) {
   const s = q.trim();
   const stripped = s.replace(
-    /^(?:(?:je|j')\s*(?:cherche|recherche|voudrais retrouver|voudrais trouver|veux retrouver|veux trouver)|trouve(?:-moi)?|retrouve(?:-moi)?|i(?:'m| am) looking for|looking for|find(?: me)?)\s*(?:(?:des|les|un|une|le|la|some|the|a)\s+)?(?:tweets?|posts?|bookmarks?|publications?)?\s*(?:(?:qui\s+)?(?:parl(?:ent|e)|traitent|concernent|that\s+(?:talk|are)|talking)\s*(?:de|du|des|d'|à propos de|about)?|(?:concernant|sur|about|à propos de|à propos d')|(?:de|du|des))?\s*/i,
+    /^(?:(?:je|j')\s*(?:cherche|recherche|voudrais retrouver|voudrais trouver|veux retrouver|veux trouver)|(?:trouve|retrouve|montre|donne|affiche)(?:-moi)?|show(?: me)?|give me|i(?:'m| am) looking for|looking for|find(?: me)?)\s*(?:(?:des|les|un|une|le|la|some|the|a)\s+)?(?:tweets?|posts?|bookmarks?|publications?)?\s*(?:(?:qui\s+)?(?:parl(?:ent|e)|traitent|concernent|that\s+(?:talk|are)|talking)\s*(?:de|du|des|d'|à propos de|about)?|(?:concernant|sur|about|à propos de|à propos d')|(?:de|du|des))?\s*/i,
     '',
   );
   return stripped.length >= 3 ? stripped : s;

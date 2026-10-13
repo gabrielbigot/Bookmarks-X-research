@@ -42,6 +42,7 @@ export function parseQuery(q) {
 
 export function passesFilters(t, f) {
   if (f.from && t.handle.toLowerCase() !== f.from) return false;
+  if (f.fromAny && !f.fromAny.includes(t.handle.toLowerCase())) return false;
   if (f.lang && t.lang !== f.lang) return false;
   if (f.since && (!t.createdAt || t.createdAt.slice(0, 10) < f.since)) return false;
   if (f.until && (!t.createdAt || t.createdAt.slice(0, 10) > f.until)) return false;

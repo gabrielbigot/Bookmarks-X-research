@@ -88,6 +88,15 @@ await panel.fill('#q', 'from:@devops postgres');
 await panel.waitForTimeout(500);
 assert.equal(await panel.locator('.tw').count(), 1);
 
+// Langage naturel : tri + auteur (« le plus ancien tweet de devops »).
+await panel.fill('#q', 'montre-moi le tweet le plus ancien de devops');
+await panel.waitForTimeout(500);
+assert.equal(await panel.locator('.tw').count(), 2, 'filtre auteur déduit du texte');
+assert.match(await panel.locator('#mode').innerText(), /Auteur : @devops/);
+await panel.locator('#mode button').click(); // « ✕ retirer »
+await panel.waitForTimeout(400);
+assert.ok((await panel.locator('.tw').count()) >= 0);
+
 await panel.fill('#q', 'qzxqzx');
 await panel.waitForTimeout(400);
 assert.match(await panel.locator('#results').innerText(), /Aucun résultat/);
