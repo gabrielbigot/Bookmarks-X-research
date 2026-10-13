@@ -32,17 +32,49 @@ function handle(json) {
 }
 
 const origFetch = window.fetch;
+const note = (url, headers) => { lastReq = { url, headers }; };
+const seenOps = new Set(); // diagnostic : opérations GraphQL vues passer
+const spy = (url) => { const m = /\/graphql\/[^/]+\/(\w+)/.exec(url || ''); if (m && seenOps.size < 40) seenOps.add(m[1]); };
+
+// X utilise fetch OU XMLHttpRequest selon les versions : on intercepte les deux.
 window.fetch = async function (input, init) {
   const res = await origFetch.apply(this, arguments);
   try {
-    const url = typeof input === 'string' ? input : input?.url;
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url;
+    spy(url);
     if (url && BOOKMARKS_RE.test(url)) {
-      lastReq = { url, headers: { ...headersToObject(input instanceof Request ? input.headers : null), ...headersToObject(init?.headers) } };
+      note(url, { ...headersToObject(input instanceof Request ? input.headers : null), ...headersToObject(init?.headers) });
       res.clone().json().then(handle).catch(() => {});
     }
   } catch {}
   return res;
 };
+
+const XHR = XMLHttpRequest.prototype;
+const xOpen = XHR.open, xSet = XHR.setRequestHeader, xSend = XHR.send;
+XHR.open = function (method, url) {
+  this.__xbs = { url: String(url), headers: {} };
+  return xOpen.apply(this, arguments);
+};
+XHR.setRequestHeader = function (k, v) {
+  if (this.__xbs) this.__xbs.headers[k] = v;
+  return xSet.apply(this, arguments);
+};
+XHR.send = function () {
+  const info = this.__xbs;
+  if (info) spy(info.url);
+  if (info && BOOKMARKS_RE.test(info.url)) {
+    this.addEventListener('load', () => {
+      try {
+        note(new URL(info.url, location.origin).href, info.headers);
+        const json = this.responseType === 'json' ? this.response : JSON.parse(this.responseText);
+        handle(json);
+      } catch {}
+    });
+  }
+  return xSend.apply(this, arguments);
+};
+console.debug('[xbs] interception fetch + XHR active');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,7 +85,7 @@ async function runBackfill() {
   for (let i = 0; i < 50 && !lastReq && !backfill.stop; i++) await sleep(500); // X doit avoir fait sa 1re requête
   if (!lastReq) {
     backfill.running = false;
-    post('backfill', { state: 'need-page', message: 'Ouvre la page Bookmarks de X (connecté), puis relance la synchro.' });
+    post('backfill', { state: 'need-page', message: 'Aucune requête Bookmarks vue (connecté à X ? page /i/bookmarks ?). Opérations vues : ' + ([...seenOps].join(', ') || 'aucune') });
     return;
   }
   let cursor = lastCursor;

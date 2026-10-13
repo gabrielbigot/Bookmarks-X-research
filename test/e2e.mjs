@@ -36,8 +36,13 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
     return res.end(JSON.stringify(body));
   }
   res.writeHead(200, { 'content-type': 'text/html' });
+  const viaFetch = url.searchParams.get('via') === 'fetch';
   res.end(`<!doctype html><title>X</title><body><script>
-    setTimeout(() => fetch('/i/api/graphql/QID123/Bookmarks?variables=' + encodeURIComponent(JSON.stringify({count:20,includePromotedContent:false})), {headers:{authorization:'Bearer x','x-csrf-token':'t'}}), 800);
+    const u = '/i/api/graphql/QID123/Bookmarks?variables=' + encodeURIComponent(JSON.stringify({count:20,includePromotedContent:false}));
+    setTimeout(() => {
+      if (${viaFetch}) fetch(u, {headers:{authorization:'Bearer x','x-csrf-token':'t'}});
+      else { const x = new XMLHttpRequest(); x.open('GET', u); x.setRequestHeader('authorization','Bearer x'); x.setRequestHeader('x-csrf-token','t'); x.send(); }
+    }, 800);
   </script>Bookmarks mock</body>`);
 });
 await new Promise((r) => server.listen(443, '127.0.0.1', r));
@@ -49,7 +54,7 @@ const ctx = await chromium.launchPersistentContext(tmp + '/profile', {
 });
 
 const p = await ctx.newPage();
-await p.goto('https://x.com/i/bookmarks');
+await p.goto('https://x.com/i/bookmarks?via=fetch'); // scénario 1 : fetch
 await p.waitForTimeout(1500);
 // Le bouton injecté doit exister (shadow DOM fermé -> on vérifie via l'hôte).
 assert.ok(await p.evaluate(() => [...document.documentElement.children].some((e) => e.style.zIndex === '2147483646')), 'pill injecté');
@@ -82,7 +87,7 @@ assert.match(await panel.locator('#results').innerText(), /Aucun résultat/);
 
 await panel.screenshot({ path: 'test/panel.png' });
 
-// Scénario 2 : aucun onglet X ouvert, clic sur « Tout synchroniser » dans le panneau -> démarre seul.
+// Scénario 2 (page en XMLHttpRequest, comme le vrai X) : aucun onglet X ouvert, clic sur « Tout synchroniser » dans le panneau -> démarre seul.
 await p.close();
 hits.length = 0;
 await panel.click('#sync');
