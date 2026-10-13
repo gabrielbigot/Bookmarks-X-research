@@ -233,6 +233,34 @@ await panel.click('#news');
 await panel.waitForFunction(() => /Nouveautés terminée/.test(document.getElementById('progress').textContent), null, { timeout: 40000 });
 assert.ok(sameHits([null, 'CUR_NEXT']), 'incrémental : 2 pages seulement, obtenu ' + JSON.stringify(hits));
 
+// ------------------------------------------------------------------ 8. thèmes + « similaires » avec de faux vecteurs (3 groupes)
+await panel.evaluate(async () => {
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['tweets', 'vectors'], 'readwrite');
+  const topics = [['rust', 'cargo', 'tokio runtime'], ['pain', 'levain', 'boulangerie fermentation'], ['agents', 'memoire', 'llm vector store']];
+  for (let i = 0; i < 45; i++) {
+    const g = i % 3, id = 'th' + i;
+    tx.objectStore('tweets').put({ id, text: `${topics[g][0]} ${topics[g][1]} ${topics[g][2]} numero ${i}`, name: 'Th', handle: 'th' + g, links: [], media: [], stats: { likes: i },
+      createdAt: '2026-08-01T10:00:00.000Z', sortIndex: String(500 - i), url: 'https://x.com/th/status/' + id, capturedAt: Date.now() });
+    const v = new Float32Array(256); v[g] = 1; v[10 + (i % 7)] = 0.05;
+    tx.objectStore('vectors').put({ id, vec: v, model: 'fake' });
+  }
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload();
+await panel.waitForFunction(() => /45 indexés/.test(document.getElementById('stats').textContent) || /\b4[5-9] indexés|[5-9]\d indexés/.test(document.getElementById('stats').textContent));
+await panel.click('#themes');
+await panel.waitForSelector('.th');
+assert.ok((await panel.locator('.th').count()) >= 3, 'au moins 3 thèmes');
+const names = (await panel.locator('.th b').allInnerTexts()).join(' ');
+for (const w of ['rust', 'levain', 'agents']) assert.ok(names.includes(w), `thème « ${w} » dans : ${names}`);
+await panel.locator('.th', { hasText: 'levain' }).first().click();
+await panel.waitForSelector('.tw');
+assert.match(await panel.locator('#mode').innerText(), /Thème :/);
+assert.equal(await panel.locator('.tw').count(), 15, 'le thème « pain/levain » contient 15 tweets');
+await panel.locator('.tw .sim').first().click();
+assert.match(await panel.locator('#mode').innerText(), /Similaires à/);
+
 console.log('E2E OK');
 await ctx.close();
 server.close();
