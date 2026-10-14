@@ -1,7 +1,7 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
 import { parseYoutube, parseHistoryHeader } from './lib/youtube.js';
-import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, chunkSegments } from './lib/transcript.js';
+import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
 const BROWSE_RE = /\/youtubei\/v1\/browse(\?|$)/;
@@ -99,13 +99,14 @@ async function sapisidHash() {
 
 class HttpError extends Error { constructor(status) { super(`HTTP ${status}`); this.status = status; } }
 
-async function innertube(endpoint, body) {
-  const context = cfg('INNERTUBE_CONTEXT');
+async function innertube(endpoint, body, { client } = {}) {
+  let context = cfg('INNERTUBE_CONTEXT');
   if (!context) throw new Error('contexte YouTube introuvable (ytcfg)');
+  if (client && context) { const { clientNumber, ...c } = client; context = { ...context, client: { hl: context.client?.hl, gl: context.client?.gl, ...c } }; }
   const key = cfg('INNERTUBE_API_KEY');
   const headers = {
     'content-type': 'application/json', 'x-origin': location.origin, 'x-goog-authuser': String(cfg('SESSION_INDEX') ?? 0),
-    'x-youtube-client-name': String(cfg('INNERTUBE_CONTEXT_CLIENT_NAME') ?? 1), 'x-youtube-client-version': cfg('INNERTUBE_CLIENT_VERSION') || context.client?.clientVersion || '',
+    'x-youtube-client-name': String(client ? client.clientNumber : cfg('INNERTUBE_CONTEXT_CLIENT_NAME') ?? 1), 'x-youtube-client-version': client ? client.clientVersion : cfg('INNERTUBE_CLIENT_VERSION') || context.client?.clientVersion || '',
   };
   const visitor = cfg('VISITOR_DATA'); if (visitor) headers['x-goog-visitor-id'] = visitor;
   const auth = await sapisidHash(); if (auth) headers.authorization = auth;
@@ -171,34 +172,64 @@ async function runHistory(days) {
 }
 
 // ---- transcriptions ----
-// 1) panneau « Transcription » de la page vidéo : « next » donne le jeton, « get_transcript » les segments (sans jeton PO)
-// 2) repli : pistes de sous-titres du lecteur (timedtext json3)
-// Retourne { state: 'ok', chunks } | { state: 'none' } ; lève HttpError sur refus / limite de débit.
+// 1) panneau « Transcription » de la page vidéo : « next » donne le jeton, « get_transcript » les segments
+// 2) sous-titres du lecteur (« player », client web puis client Android) lus via timedtext (json3, sinon XML)
+// Retourne { state: 'ok', chunks } | { state: 'none' } (aucune transcription, certain) | { state: 'error' } ; `why` = étapes (diagnostic).
+// Lève HttpError sur limite de débit (429).
+const ANDROID = { clientName: 'ANDROID', clientVersion: '20.10.38', clientNumber: 3, androidSdkVersion: 30, osName: 'Android', osVersion: '11' };
+const rate = (e) => e instanceof HttpError && e.status === 429;
+
+async function trackSegments(track, why, tag) {
+  for (const fmt of ['json3', '']) {
+    try {
+      const u = track.url + (fmt && !/[?&]fmt=/.test(track.url) ? '&fmt=' + fmt : '');
+      const res = await origFetch(u, { credentials: 'include' });
+      if (!res.ok) { why.push(`${tag}:timedtext-http-${res.status}`); continue; }
+      const body = await res.text();
+      if (!body) { why.push(`${tag}:timedtext-vide`); continue; }
+      const segs = fmt ? parseJson3(safeJson(body)) : parseTimedTextXml(body);
+      if (segs.length) return segs;
+      why.push(`${tag}:timedtext-illisible`);
+    } catch (e) { why.push(`${tag}:timedtext-${e.message}`); }
+  }
+  return [];
+}
+
 async function fetchTranscript(videoId) {
-  let segs = [], params = null;
+  const why = [];
+  let segs = [], noPanel = false, noTracks = 0, tried = 0;
   try {
     const next = await innertube('next', { videoId });
-    params = findTranscriptParams(next.json);
-    if (params) segs = parseTranscript((await innertube('get_transcript', { params })).json);
-  } catch (e) { if (e instanceof HttpError && (e.status === 429 || e.status === 403 || e.status === 401)) throw e; }
+    const params = findTranscriptParams(next.json);
+    if (!params) { noPanel = true; why.push('next:pas-de-panneau'); }
+    else { segs = parseTranscript((await innertube('get_transcript', { params })).json); if (!segs.length) why.push('get_transcript:vide'); }
+  } catch (e) { if (rate(e)) throw e; why.push('next/get_transcript:' + e.message); }
   if (!segs.length) {
-    try {
-      const pl = (await innertube('player', { videoId, contentCheckOk: true, racyCheckOk: true })).json;
-      const track = pickTrack(captionTracks(pl));
-      if (track) {
-        const res = await origFetch(track.url + (track.url.includes('fmt=') ? '' : '&fmt=json3'), { credentials: 'include' });
-        if (res.ok) { const txt = await res.text(); if (txt) segs = parseJson3(safeJson(txt)); }
-      }
-    } catch (e) { if (e instanceof HttpError && e.status === 429) throw e; }
+    for (const [tag, client] of [['web', undefined], ['android', ANDROID]]) {
+      tried++;
+      try {
+        const pl = (await innertube('player', { videoId, contentCheckOk: true, racyCheckOk: true }, { client })).json;
+        const tracks = captionTracks(pl);
+        const st = pl?.playabilityStatus?.status;
+        if (!tracks.length) { noTracks++; why.push(`${tag}:aucune-piste${st && st !== 'OK' ? '(' + st + ')' : ''}`); continue; }
+        const track = pickTrack(tracks);
+        segs = await trackSegments(track, why, tag);
+        if (segs.length) break;
+      } catch (e) { if (rate(e)) throw e; why.push(`${tag}:${e.message}`); }
+    }
   }
   const chunks = chunkSegments(segs);
-  return chunks.length ? { state: 'ok', chunks } : { state: 'none' };
+  if (chunks.length) return { state: 'ok', chunks, why };
+  // « sans transcription » seulement si TOUTES les voies disent clairement qu'il n'y en a pas ; sinon c'est une erreur (on ne mémorise rien)
+  return { state: noPanel && noTracks === tried ? 'none' : 'error', why };
 }
 
 async function runTranscripts(ids) {
   if (busy) return;
   busy = true; stopFlag = false; currentRun = String(Date.now());
-  let done = 0, ok = 0, none = 0, strikes = 0;
+  let done = 0, ok = 0, none = 0, fail = 0, strikes = 0;
+  const reasons = new Map();
+  let lastWhy = '';
   progress('running', { transcripts: true, done, total: ids.length, ok });
   try {
     for (const id of ids) {
@@ -206,19 +237,21 @@ async function runTranscripts(ids) {
       try {
         const r = await fetchTranscript(id);
         strikes = 0;
-        if (r.state === 'ok') ok++; else none++;
-        post('transcript', { id: 'yt:' + id, state: r.state, chunks: r.chunks });
+        if (r.state === 'ok') ok++; else if (r.state === 'none') none++; else fail++;
+        if (r.state !== 'ok') { lastWhy = r.why.join(' | '); for (const w of r.why) reasons.set(w, (reasons.get(w) || 0) + 1); if (done < 3) console.warn('[xbs-yt] transcription', id, r.state, r.why); }
+        if (r.state !== 'error') post('transcript', { id: 'yt:' + id, state: r.state, chunks: r.chunks });
       } catch (e) {
-        if (++strikes >= 3) throw e; // refus répétés : on s'arrête là (limite de débit probable)
+        if (++strikes >= 3) throw e; // limite de débit : on s'arrête là
+        fail++;
       }
       done++;
-      progress('running', { transcripts: true, done, total: ids.length, ok });
+      progress('running', { transcripts: true, done, total: ids.length, ok, fail, last: ok === 0 && done >= 2 ? lastWhy : '' });
       await sleep(1200 + Math.random() * 1800);
     }
-    progress(stopFlag ? 'stopped' : 'done', { transcripts: true, total: ids.length, ok, none, done });
+    const top = [...reasons].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, n]) => `${k} ×${n}`).join(' ; ');
+    progress(stopFlag ? 'stopped' : 'done', { transcripts: true, total: ids.length, ok, none, fail, done, reasons: top });
   } catch (e) {
-    const limited = e instanceof HttpError;
-    progress('error', { message: limited ? `YouTube a refusé les requêtes (${e.message}) : réessaie plus tard (ce qui a été récupéré est conservé).` : e.message, transcripts: true });
+    progress('error', { message: e instanceof HttpError ? `YouTube limite les requêtes (${e.message}) : réessaie plus tard (ce qui a été récupéré est conservé).` : e.message, transcripts: true });
   } finally {
     busy = false; currentRun = null;
   }

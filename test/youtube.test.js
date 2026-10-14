@@ -205,7 +205,7 @@ test('statistiques YouTube : visionnages, temps estimé, chaînes, à regarder',
   assert.equal(fmtHours(3900), '1 h 05');
 });
 
-import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, chunkSegments, sampleChunks, bestChunk, chunksText, fmtTime } from '../src/lib/transcript.js';
+import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments, sampleChunks, bestChunk, chunksText, fmtTime } from '../src/lib/transcript.js';
 test('transcriptions : jeton, segments, json3, passages, extrait', () => {
   const next = { engagementPanels: [{ x: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: 'PARAMS1' } } } } } }] };
   assert.equal(findTranscriptParams(next), 'PARAMS1');
@@ -248,4 +248,12 @@ test('index : mots de la transcription et meilleur passage vectoriel', () => {
   assert.equal(idx.setChunkVecs('yt:a', new Float32Array(3), 1), false);
   assert.equal(passesFilters({ ...vid('c', 'x'), trState: 'ok' }, parseQuery('has:transcript').filters), true);
   assert.equal(passesFilters(vid('c', 'x'), parseQuery('has:transcript').filters), false);
+});
+
+test('transcriptions : XML timedtext et ancien format de cues', () => {
+  assert.deepEqual(parseTimedTextXml('<?xml?><transcript><text start="1.5" dur="2">Salut &amp; bienvenue &#39;ici&#39;</text><text start="9">  </text><text start="12.4">suite</text></transcript>'),
+    [{ t: 2, text: "Salut & bienvenue 'ici'" }, { t: 12, text: 'suite' }]);
+  assert.deepEqual(parseTimedTextXml('<timedtext><body><p t="2500" d="1000"><s>a</s><s> b</s></p></body></timedtext>'), [{ t: 3, text: 'a b' }]);
+  assert.deepEqual(parseTimedTextXml(''), []);
+  assert.deepEqual(parseTranscript({ cueGroups: [{ transcriptCueGroupRenderer: { cues: [{ transcriptCueRenderer: { cue: { simpleText: 'ancien' }, startOffsetMs: '3000' } }] } }] }), [{ t: 3, text: 'ancien' }]);
 });

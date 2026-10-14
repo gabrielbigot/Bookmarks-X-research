@@ -26,8 +26,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 function showStatus(d) {
   if (!statusEl) return;
   const t = {
-    running: d.transcripts ? `Transcriptions : ${d.done}/${d.total} (${d.ok} récupérées)…` : d.history ? `Historique : ${d.count ?? 0} visionnages lus${d.day ? ` (jusqu’au ${d.day})` : ''}…` : `${d.playlist ? d.playlist + ' — ' : ''}${d.count ?? 0} vidéos${d.lists ? ` (${d.listIndex}/${d.lists} playlists)` : ''}…`,
-    done: d.transcripts ? `Transcriptions terminées : ${d.ok} récupérées, ${d.none} sans transcription` : d.history ? `Historique terminé : ${d.total} lus` : `Terminé : ${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}`,
+    running: d.transcripts ? `Transcriptions : ${d.done}/${d.total} (${d.ok} récupérées${d.last ? ' ; ' + d.last : ''})…` : d.history ? `Historique : ${d.count ?? 0} visionnages lus${d.day ? ` (jusqu’au ${d.day})` : ''}…` : `${d.playlist ? d.playlist + ' — ' : ''}${d.count ?? 0} vidéos${d.lists ? ` (${d.listIndex}/${d.lists} playlists)` : ''}…`,
+    done: d.transcripts ? `Transcriptions terminées : ${d.ok} récupérées, ${d.none} sans transcription${d.fail ? `, ${d.fail} en échec` : ''}${d.reasons ? ' — ' + d.reasons : ''}` : d.history ? `Historique terminé : ${d.total} lus` : `Terminé : ${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}`,
     stopped: 'Synchro arrêtée', error: '⚠ ' + (d.message || 'erreur'),
   }[d.state];
   if (t) statusEl.textContent = t;

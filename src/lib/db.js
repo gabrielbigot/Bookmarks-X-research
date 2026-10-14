@@ -244,6 +244,7 @@ export async function reconcilePlaylist(playlistId, seenIds) {
 }
 
 // ---------- transcriptions YouTube ----------
+export const TR_VERSION = 2; // les « sans transcription » mémorisés par une version antérieure du lecteur sont ré-essayés
 const TR_RETRY = 30 * 86_400_000; // une vidéo « sans transcription » est ré-essayée au bout de 30 jours
 
 // chunks : [{ t, text }]. Marque aussi la vidéo (trState) pour que les listes n'aient pas à lire le texte.
@@ -259,7 +260,7 @@ export async function markNoTranscript(ids) {
   const db = await openDb();
   const tx = db.transaction('tweets', 'readwrite');
   const st = tx.objectStore('tweets');
-  await Promise.all(ids.map(async (id) => { const old = await wrap(st.get(id)); if (old && old.trState !== 'ok') st.put({ ...old, trState: 'none', trAt: Date.now() }); }));
+  await Promise.all(ids.map(async (id) => { const old = await wrap(st.get(id)); if (old && old.trState !== 'ok') st.put({ ...old, trState: 'none', trAt: Date.now(), trV: TR_VERSION }); }));
   await done(tx);
 }
 export async function getTranscripts(ids) {
@@ -286,7 +287,7 @@ export async function putTranscriptRows(rows) {
 // Vidéos à transcrire. scope : 'playlists' (dans au moins une playlist) | 'all' (+ historique).
 export async function pendingTranscriptIds(scope = 'playlists', limit = 400, now = Date.now()) {
   const ids = await scanTweets((t) => isVideoItem(t) && !t.unavailable && (scope === 'all' || (t.playlists || []).length > 0)
-    && (!t.trState || (t.trState === 'none' && now - (t.trAt || 0) > TR_RETRY)));
+    && (!t.trState || (t.trState === 'none' && (t.trV !== TR_VERSION || now - (t.trAt || 0) > TR_RETRY))));
   return ids.slice(0, limit);
 }
 

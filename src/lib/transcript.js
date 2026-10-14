@@ -23,6 +23,13 @@ export function parseTranscript(json) {
   (function walk(n, d = 0) {
     if (!isObj(n) || d > 40) return;
     if (Array.isArray(n)) { n.forEach((x) => walk(x, d + 1)); return; }
+    const cue = n.transcriptCueRenderer; // ancien format : { cue: { simpleText }, startOffsetMs }
+    if (cue) {
+      const text = clean(txt(cue.cue));
+      const ms = Number(cue.startOffsetMs);
+      if (text && Number.isFinite(ms)) out.push({ t: Math.round(ms / 1000), text });
+      return;
+    }
     const r = n.transcriptSegmentRenderer;
     if (r) {
       const text = clean(txt(r.snippet));
@@ -52,6 +59,23 @@ export function parseJson3(json) {
   for (const e of json?.events || []) {
     const text = clean((e.segs || []).map((s) => s.utf8 || '').join(''));
     if (text && Number.isFinite(e.tStartMs)) out.push({ t: Math.round(e.tStartMs / 1000), text });
+  }
+  return out;
+}
+
+const unent = (x) => x.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+  .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+// Sous-titres au format XML (timedtext : <text start="1.5" dur="2">…</text>, ou <p t="1500"><s>…</s></p>)
+export function parseTimedTextXml(xml) {
+  const out = [];
+  for (const m of String(xml || '').matchAll(/<text\b[^>]*\bstart="([\d.]+)"[^>]*>([\s\S]*?)<\/text>/g)) {
+    const text = clean(unent(m[2].replace(/<[^>]+>/g, '')));
+    if (text) out.push({ t: Math.round(parseFloat(m[1])), text });
+  }
+  if (out.length) return out;
+  for (const m of String(xml || '').matchAll(/<p\b[^>]*\bt="(\d+)"[^>]*>([\s\S]*?)<\/p>/g)) {
+    const text = clean(unent(m[2].replace(/<[^>]+>/g, '')));
+    if (text) out.push({ t: Math.round(+m[1] / 1000), text });
   }
   return out;
 }

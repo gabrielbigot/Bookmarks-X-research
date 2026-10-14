@@ -51,6 +51,7 @@ const dayLabel = (n) => n === 0 ? "Aujourd'hui" : n === 1 ? 'Hier' : DAYS_FR[new
 const dayIso = (n) => { const d = new Date(Date.now() - n * 864e5); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 Object.assign(V, { h2: ['Histoire de Rome en 10 minutes', 'Hist Chan'], h4: ['Conférence sur la mémoire', 'Hist Chan'], h5: ['Tutoriel pâtes fraîches', 'Cuisine Fun'], h6: ['Nouveauté du jour : zorglub', 'Hist Chan'], h7: ['Vieux sujet oublié', 'Hist Chan'] });
 let histNew = false;
+const PLAYER_ONLY = new Set(['p2']); // pas de panneau « Transcription » : sous-titres du lecteur (repli timedtext)
 // transcriptions : [début en ms, texte] ; les vidéos absentes d'ici n'ont pas de transcription
 const TRANSCRIPTS = {
   w1: [[0, 'Bonjour et bienvenue ' + 'blabla '.repeat(70)], [60000, 'Aujourd’hui on parle du cortex ' + 'blabla '.repeat(70)], [125000, 'et surtout du zorglubtranscript, un mot que le titre ne contient pas'], [200000, 'Merci d’avoir regardé jusqu’au bout']],
@@ -136,12 +137,14 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         const ep = url.pathname.split('/').pop();
         ytLog.push({ auth: req.headers.authorization || '', key: url.searchParams.get('key'), ctx: !!body.context, client: req.headers['x-youtube-client-version'], body: { ep, videoId: body.videoId, params: body.params } });
         res.writeHead(200, { 'content-type': 'application/json' });
-        if (ep === 'next') return res.end(JSON.stringify(TRANSCRIPTS[body.videoId] ? { engagementPanels: [{ engagementPanelSectionListRenderer: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: 'T_' + body.videoId } } } } } }] } : {}));
+        if (ep === 'next') return res.end(JSON.stringify(TRANSCRIPTS[body.videoId] && !PLAYER_ONLY.has(body.videoId) ? { engagementPanels: [{ engagementPanelSectionListRenderer: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: 'T_' + body.videoId } } } } } }] } : {}));
         if (ep === 'get_transcript') { const segs = TRANSCRIPTS[(body.params || '').slice(2)] || []; return res.end(JSON.stringify({ actions: [{ updateEngagementPanelAction: { content: { transcriptRenderer: { body: { transcriptSegmentListRenderer: { initialSegments: segs.map(([ms, text]) => ({ transcriptSegmentRenderer: { startMs: String(ms), snippet: { runs: [{ text }] } } })) } } } } } }] })); }
+        if (ep === 'player' && PLAYER_ONLY.has(body.videoId)) return res.end(JSON.stringify({ playabilityStatus: { status: 'OK' }, captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: `https://www.youtube.com/api/timedtext?v=${body.videoId}&lang=en`, languageCode: 'en', kind: 'asr' }] } } }));
         return res.end('{}');
       });
       return;
     }
+    if (url.pathname === '/api/timedtext') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ events: (TRANSCRIPTS[url.searchParams.get('v')] || []).map(([ms, t]) => ({ tStartMs: ms, segs: [{ utf8: t }] })) })); }
     res.writeHead(200, { 'content-type': 'text/html' });
     return res.end(ytPage());
   }
