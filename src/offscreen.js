@@ -23,7 +23,7 @@ const cur = () => modelOf(config.embedModel);
 // État interrogeable par le panneau (les messages envoyés avant son ouverture seraient perdus).
 const status = {
   modelKey: 'gemma1',
-  asleep: false, recycles: 0,
+  asleep: false, recycles: 0, dtype: '',
   model: 'idle', pct: 0, device: '', indexing: false, done: 0, total: 0, error: '',
   enrich: { active: false, done: 0, total: 0 },
   images: { active: false, done: 0, total: 0, error: '' },
@@ -66,9 +66,32 @@ async function loadGemma1(m) {
   return { kind: 'gemma1', tokenizer, model };
 }
 
+// Précisions à essayer, de la plus légère à la plus lourde. « q4 » n'est pas géré par le CPU (WASM) :
+// ERROR_CODE 9, « Could not find an implementation for GatherBlockQuantized » -> on passe à q8, puis fp32.
+const dtypesFor = (device, preferred) => (device === 'webgpu' ? [preferred, 'q8', 'fp32'] : ['q8', 'fp32']);
+
+// Essaie chaque appareil (GPU puis CPU) × chaque précision, jusqu'à ce qu'une combinaison fonctionne.
+async function withDeviceAndDtype(m, load) {
+  let lastErr;
+  for (const device of devices()) {
+    for (const dtype of dtypesFor(device, m.dtype)) {
+      try {
+        const r = await load(device, dtype);
+        status.device = device; status.dtype = dtype;
+        emit({ type: 'modelDevice', device });
+        return r;
+      } catch (e) {
+        lastErr = e;
+        console.warn(`[xbs] ${device}/${dtype} a échoué`, e);
+      }
+    }
+  }
+  throw lastErr;
+}
+
 // EmbeddingGemma 2 (transformers.js ≥ 4.3.1) : texte seul = pipeline feature-extraction (seul l'encodeur texte est chargé).
 async function loadGemma2(m) {
-  const extractor = await withDevice((device) => pipeline('feature-extraction', m.id, { device, dtype: m.dtype, progress_callback: progressCb }));
+  const extractor = await withDeviceAndDtype(m, (device, dtype) => pipeline('feature-extraction', m.id, { device, dtype, progress_callback: progressCb }));
   return { kind: 'gemma2', extractor };
 }
 
@@ -229,7 +252,7 @@ function loadGemma2Multi() {
   const m = modelOf('gemma2');
   g2Multi ??= (async () => {
     const processor = await AutoProcessor.from_pretrained(m.id, { progress_callback: progressCb });
-    const model = await withDevice((device) => AutoModel.from_pretrained(m.id, { device, dtype: m.dtype, progress_callback: progressCb }));
+    const model = await withDeviceAndDtype(m, (device, dtype) => AutoModel.from_pretrained(m.id, { device, dtype, progress_callback: progressCb }));
     return { processor, model };
   })().catch((e) => { g2Multi = undefined; throw e; });
   return g2Multi;

@@ -1023,7 +1023,7 @@ async function pollStatus() {
     if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
     else if (st.model === 'loading') parts.push(`Recherche sémantique : téléchargement du modèle ${st.pct ?? 0}% (une seule fois, ~300 Mo)…`);
     else if (st.indexing) parts.push(`Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + ')' : ''}…`);
-    else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + ')' : ''));
+    else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + (st.dtype ? ', ' + st.dtype : '') + ')' : ''));
     else if (st.asleep && !st.paused) parts.push('Recherche sémantique prête (modèle en veille : rechargé à la prochaine recherche)');
     if (st.enrich?.active) parts.push(`liens : ${st.enrich.done}/${st.enrich.total}`);
     if (st.images?.active) parts.push(`images : ${st.images.done}/${st.images.total}`);
