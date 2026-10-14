@@ -8,6 +8,7 @@ import { MODELS, modelOf } from './lib/models.js';
 import { jevIntent, jevRerank, decide, PERIOD_DAYS } from './lib/jev.js';
 import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
 import { kmeans, labelClusters } from './lib/cluster.js';
+import { bindThemeButton } from './lib/theme.js';
 import { encode, decodeFull, packVectors, unpackVectors } from './lib/backup.js';
 import { score as evalScore, summarize } from './lib/evalbench.js';
 
@@ -481,6 +482,7 @@ function render() {
 }
 
 // ---------- affichage : liste / grille, bandeau replié ----------
+bindThemeButton($('theme'));
 const VKEY = 'xbs.view';
 const view = (() => { try { return { mode: 'list', cols: 3, folded: false, ...JSON.parse(localStorage.getItem(VKEY) || '{}') }; } catch { return { mode: 'list', cols: 3, folded: false }; } })();
 if (embed) view.mode = 'list';
@@ -1091,6 +1093,8 @@ chrome.storage.onChanged.addListener(async (ch, area) => {
   renderSaved();
   renderHistory();
   applySettingsUi();
+  const initialQ = new URLSearchParams(location.search).get('q'); // lien depuis la page de statistiques
+  if (initialQ) $('q').value = initialQ;
   await load(true);
   run();
   renderBanners();

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Recherche dans mes bookmarks</title>
+  <script src="theme-boot.js"></script>
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
@@ -15,6 +16,8 @@
           <input id="q" type="search" list="hist" placeholder="Décris ce que tu cherches… (from:@user  has:link  since:2026-01-01)" autocomplete="off" autofocus>
           <datalist id="hist"></datalist>
         </div>
+        <a id="stats-link" class="ghost" href="stats.html" target="_blank" rel="noopener" title="Statistiques sur tes bookmarks">📊</a>
+        <button id="theme" class="ghost icon"></button>
         <button id="fold" class="ghost icon" title="Replier / déplier les filtres (Alt+F)">▴</button>
         <button id="save" class="ghost icon" title="Enregistrer cette recherche" hidden>★</button>
         <button id="ask" class="primary" title="Poser la question à l'IA (Ctrl+Entrée)" hidden>Demander</button>

@@ -1,5 +1,6 @@
 // Recherche hybride : BM25 (mots-clés) + similarité cosinus (embeddings), fusionnées par RRF.
 import { decodeEntities, isStopword } from './text.js';
+import { savedAtOf, dayKey } from './time.js';
 export const DIM = 256;
 
 export function normalizeText(s) {
@@ -28,7 +29,7 @@ export function parseQuery(q) {
   const filters = {};
   const rest = [];
   for (const part of q.split(/\s+/).filter(Boolean)) {
-    const m = part.match(/^(from|has|since|until|lang):(.+)$/i);
+    const m = part.match(/^(from|has|since|until|lang|saved):(.+)$/i);
     if (!m) { rest.push(part); continue; }
     const k = m[1].toLowerCase();
     const v = m[2].replace(/^@/, '');
@@ -37,6 +38,10 @@ export function parseQuery(q) {
     else if (k === 'since') filters.since = v;
     else if (k === 'until') filters.until = v;
     else if (k === 'lang') filters.lang = v.toLowerCase();
+    else if (k === 'saved') { // saved:2026-10-12  ou  saved:2026-10-01..2026-10-31 (date de mise en bookmark)
+      const [a, b] = v.split('..');
+      if (/^\d{4}-\d{2}-\d{2}$/.test(a)) filters.saved = { from: a, to: /^\d{4}-\d{2}-\d{2}$/.test(b || '') ? b : a };
+    }
   }
   return { text: rest.join(' '), filters };
 }
@@ -47,6 +52,12 @@ export function passesFilters(t, f) {
   if (f.lang && t.lang !== f.lang) return false;
   if (f.since && (!t.createdAt || t.createdAt.slice(0, 10) < f.since)) return false;
   if (f.until && (!t.createdAt || t.createdAt.slice(0, 10) > f.until)) return false;
+  if (f.saved) {
+    const ms = savedAtOf(t);
+    if (ms === null) return false;
+    const d = dayKey(ms);
+    if (d < f.saved.from || d > f.saved.to) return false;
+  }
   for (const h of f.has ?? []) {
     if (h === 'link' && !t.links.length && !t.quoted?.links?.length) return false;
     if (h === 'media' && !t.media.length) return false;

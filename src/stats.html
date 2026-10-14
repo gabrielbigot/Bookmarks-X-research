@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Statistiques de mes bookmarks</title>
+  <script src="theme-boot.js"></script>
+  <link rel="stylesheet" href="stats.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap bar">
+      <a class="back" href="panel.html" title="Retour à la recherche">← Recherche</a>
+      <h1>Statistiques</h1>
+      <div id="ranges" class="ranges" role="group" aria-label="Période"></div>
+      <span class="spacer"></span>
+      <button id="theme" class="icon" type="button"></button>
+    </div>
+  </header>
+  <main class="wrap" id="app" aria-live="polite"><p class="muted">Calcul des statistiques…</p></main>
+  <script type="module" src="stats.js"></script>
+</body>
+</html>

@@ -475,6 +475,100 @@ await panel.selectOption('#view', '3');
 await panel.evaluate(() => window.scrollTo(0, 0));
 await panel.screenshot({ path: 'test/grid.png' });
 
+// ------------------------------------------------------------------ 12. mode sombre + page de statistiques (jeu de données synthétique : 300 tweets sur 100 jours)
+await panel.evaluate(async () => {
+  const X_EPOCH = 1288834974657n, DAY = 86_400_000, now = Date.now();
+  const snow = (ms) => ((BigInt(ms) - X_EPOCH) << 22n).toString();
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['tweets', 'vectors', 'vectors_gemma2'], 'readwrite');
+  for (const st of ['tweets', 'vectors', 'vectors_gemma2']) tx.objectStore(st).clear();
+  const names = { a: 'Auteur A', b: 'Auteur B', c: 'Auteur C', d: 'Auteur D', e: 'Auteur E', f: 'Auteur F' };
+  for (let i = 0; i < 300; i++) {
+    const handle = i % 5 === 0 ? 'a' : i % 7 === 0 ? 'b' : ['c', 'd', 'e', 'f'][i % 4];
+    const saved = now - (i % 100) * DAY - ((i * 7) % 20) * 3_600_000; // 3 tweets par jour, à des heures variées
+    const pub = saved - (1 + (i % 9)) * DAY;
+    tx.objectStore('tweets').put({ id: 's' + i, name: names[handle], handle, lang: i % 2 ? 'fr' : 'en', createdAt: new Date(pub).toISOString(), sortIndex: snow(saved),
+      text: `Tweet numéro ${i} sur les agents et la mémoire ${i % 6 === 0 ? '#ia' : ''}`, url: `https://x.com/${handle}/status/s${i}`,
+      links: i % 3 === 1 ? ['https://blog' + (i % 3) + '.example.com/p' + (i % 5)] : [], media: i % 4 === 0 ? [{ type: i % 8 === 0 ? 'video' : 'photo', url: 'https://x/y.jpg' }] : [],
+      stats: { likes: (i * 37) % 5000, reposts: 1 }, capturedAt: now });
+  }
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+// thème : le bouton fait tourner auto -> sombre -> clair, et le fond change vraiment
+await panel.reload();
+await panel.waitForSelector('.tw');
+const bg = () => panel.evaluate(() => getComputedStyle(document.body).backgroundColor);
+await panel.evaluate(() => localStorage.setItem('xbs.theme', 'light'));
+await panel.reload(); await panel.waitForSelector('.tw');
+assert.equal(await bg(), 'rgb(255, 255, 255)', 'thème clair forcé');
+await panel.click('#theme'); // light -> auto
+await panel.click('#theme'); // auto -> dark
+assert.equal(await panel.evaluate(() => document.documentElement.dataset.theme), 'dark');
+assert.equal(await bg(), 'rgb(0, 0, 0)', 'thème sombre forcé');
+await panel.reload(); await panel.waitForSelector('.tw');
+assert.equal(await bg(), 'rgb(0, 0, 0)', 'le thème est mémorisé après rechargement');
+// opérateur saved: dans le panneau (3 tweets par jour)
+await panel.evaluate(() => localStorage.setItem('xbs.theme', 'light'));
+await panel.reload(); await panel.waitForSelector('.tw');
+const today = await panel.evaluate(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; });
+
+const stats = await ctx.newPage();
+await stats.setViewportSize({ width: 1360, height: 900 });
+await stats.goto(`chrome-extension://${extId}/stats.html`);
+await stats.waitForSelector('.kpis .tile.hero .v');
+const hero = async () => Number((await stats.locator('.tile.hero .v').innerText()).replace(/\D/g, ''));
+assert.equal(await hero(), 270, '90 jours = 90 × 3 bookmarks');
+assert.match(await stats.locator('.tile.hero .l').innerText(), /90 j/);
+assert.equal(await stats.locator('.note').count(), 0, 'dates d’enregistrement jugées fiables : pas d’avertissement');
+for (const t of ['Bookmarks par jour', 'Calendrier de l’année', 'Par jour de la semaine', 'Par heure de la journée', 'Types de tweets', 'Auteurs les plus enregistrés', 'Sites les plus cités', 'Tweets les plus likés']) {
+  assert.ok((await stats.locator('h3', { hasText: t }).count()) > 0, 'carte : ' + t);
+}
+const cells = await stats.locator('.cell.mk').count();
+assert.ok(cells >= 365 && cells <= 371, 'calendrier : ' + cells + ' cases');
+// filtre de période : un seul filtre scope tout
+await stats.click('#ranges button:has-text("Tout")');
+await waitFor(async () => (await hero()) === 300, 'filtre « Tout »', 8000);
+await stats.click('#ranges button:has-text("7 j")');
+await waitFor(async () => (await hero()) === 21, 'filtre « 7 j » (7 × 3)', 8000);
+await stats.click('#ranges button:has-text("90 j")');
+await waitFor(async () => (await hero()) === 270, 'retour à 90 j', 8000);
+// jumeau « tableau » : mêmes valeurs, sans dépendre de l'infobulle
+const c0 = stats.locator('.card').first();
+await c0.locator('.tbl-btn').click();
+assert.equal(await c0.locator('.tbl').isVisible(), true);
+assert.equal(await c0.locator('.viz').isVisible(), false);
+assert.ok((await c0.locator('.tbl tbody tr').count()) >= 90, 'une ligne par jour');
+await c0.locator('.tbl-btn').click();
+// infobulle sur une marque (survol d'une barre d'auteur)
+const authorCard = stats.locator('.card', { hasText: 'Auteurs les plus enregistrés' });
+await authorCard.locator('.mk').first().hover();
+await waitFor(async () => (await stats.locator('.tip').count()) > 0 && (await stats.locator('.tip').first().isVisible()), 'infobulle', 4000);
+assert.match(await stats.locator('.tip').first().innerText(), /Auteur A/);
+// clic sur la 1re barre d'auteur -> ouvre le panneau avec from:@a
+const [popup] = await Promise.all([ctx.waitForEvent('page'), authorCard.locator('.mk').first().click()]);
+await popup.waitForLoadState();
+assert.equal(await popup.locator('#q').inputValue(), 'from:@a', 'la requête passe au panneau');
+await popup.waitForSelector('.tw');
+assert.equal(await popup.locator('.tw .hd .nm', { hasText: 'Auteur A' }).count() > 0, true);
+await popup.close();
+// clic sur le carré « aujourd'hui » du calendrier -> saved:AAAA-MM-JJ -> exactement les 3 tweets du jour
+const [popup2] = await Promise.all([ctx.waitForEvent('page'), stats.locator('.cell.mk').last().click()]);
+await popup2.waitForLoadState();
+assert.equal(await popup2.locator('#q').inputValue(), 'saved:' + today);
+await popup2.waitForSelector('.tw');
+assert.equal(await popup2.locator('.tw').count(), 3, 'saved:aujourd’hui = 3 tweets');
+await popup2.close();
+// pastille (hashtag) -> chercher
+assert.ok((await stats.locator('.chip-s', { hasText: '#ia' }).count()) > 0, 'hashtag #ia');
+assert.ok((await stats.locator('.chip-s', { hasText: 'mémoire' }).count()) > 0, 'mot « mémoire » avec accent');
+// captures dans les deux thèmes (inspection visuelle)
+await stats.evaluate(() => { localStorage.setItem('xbs.theme', 'light'); document.documentElement.dataset.theme = 'light'; });
+await stats.screenshot({ path: 'test/stats-light.png', fullPage: true });
+await stats.click('#theme'); await stats.click('#theme'); // light -> auto -> dark
+assert.equal(await stats.evaluate(() => document.documentElement.dataset.theme), 'dark');
+assert.equal(await stats.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(13, 13, 13)');
+await stats.screenshot({ path: 'test/stats-dark.png', fullPage: true });
+
 console.log('E2E OK');
 await ctx.close();
 server.close();

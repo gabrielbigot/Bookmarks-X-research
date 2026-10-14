@@ -1,5 +1,6 @@
-:root{--bg:#fff;--fg:#0f1419;--mut:#536471;--line:#eff3f4;--hover:#f7f7f7;--acc:#1d9bf0;--mark:#fff3a3;--field:#eff3f4;--ok:#00ba7c;--like:#f91880;--repost:#00ba7c}
-@media (prefers-color-scheme:dark){:root{--bg:#000;--fg:#e7e9ea;--mut:#71767b;--line:#2f3336;--hover:#080808;--mark:#5c4b00;--field:#202327}}
+:root{color-scheme:light;--bg:#fff;--fg:#0f1419;--mut:#536471;--line:#eff3f4;--hover:#f7f7f7;--acc:#1d9bf0;--mark:#fff3a3;--field:#eff3f4;--ok:#00ba7c;--like:#f91880;--repost:#00ba7c}
+@media (prefers-color-scheme:dark){:root:where(:not([data-theme="light"])){color-scheme:dark;--bg:#000;--fg:#e7e9ea;--mut:#71767b;--line:#2f3336;--hover:#080808;--mark:#5c4b00;--field:#202327}}
+:root[data-theme="dark"]{color-scheme:dark;--bg:#000;--fg:#e7e9ea;--mut:#71767b;--line:#2f3336;--hover:#080808;--mark:#5c4b00;--field:#202327}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/20px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .col{max-width:600px;margin:0 auto}
@@ -157,3 +158,7 @@ body.grid .lc-img{aspect-ratio:2/1}
 
 /* les cartes hors écran ne sont pas rendues (liste longue = moins de mémoire et de calcul) */
 .tw{content-visibility:auto;contain-intrinsic-size:auto 260px}
+
+#theme,#stats-link{font-size:15px;padding:4px 10px;text-decoration:none;display:inline-flex;align-items:center}
+a#stats-link{color:var(--acc);border-radius:999px}
+a#stats-link:hover{background:color-mix(in srgb,var(--acc) 10%,transparent)}
