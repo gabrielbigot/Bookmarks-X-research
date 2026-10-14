@@ -226,3 +226,32 @@ export function highlightTerms(text) {
 export function contentWords(text) {
   return tokenize(text).filter((t) => !isStopword(t)).length;
 }
+
+// Trie des lignes [row, score] par date de publication / likes. Les tweets sans date passent toujours en dernier.
+export function sortRows(rows, tweets, how) {
+  const t = (r) => tweets[r[0]];
+  const date = (dir) => (a, b) => {
+    const x = t(a).createdAt, y = t(b).createdAt;
+    if (!x && !y) return 0;
+    if (!x) return 1;
+    if (!y) return -1;
+    return x === y ? 0 : (x < y ? -dir : dir);
+  };
+  const by = {
+    newest: date(-1), // décroissant
+    oldest: date(1), // croissant
+    likes: (a, b) => (t(b).stats?.likes || 0) - (t(a).stats?.likes || 0),
+  }[how];
+  return by ? [...rows].sort(by) : rows;
+}
+
+// Lot de résultats à trier quand l'utilisateur demande « le plus ancien / le plus récent… ».
+// Requête courte et précise (« openai ») avec beaucoup de correspondances de mots : on trie TOUTES ces correspondances.
+// Sinon : les `size` résultats les mieux classés par la fusion sens + mots-clés.
+export function selectPool(fused, kwRows, { words, size = 1500 } = {}) {
+  if (words <= 3 && kwRows.length >= 30) {
+    const kw = new Set(kwRows.map(([row]) => row));
+    return { pool: fused.filter(([row]) => kw.has(row)), kind: 'contenant les mots de la requête' };
+  }
+  return { pool: fused.slice(0, size), kind: 'les plus pertinents' };
+}

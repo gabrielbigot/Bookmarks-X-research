@@ -1,5 +1,5 @@
 import { getAllTweets, getMeta, setMeta, putTweets, clearVectors, getAllImgVectors } from './lib/db.js';
-import { Index, DIM, parseQuery, rrf, highlightTerms, normalizeText, contentWords, passesFilters } from './lib/search.js';
+import { Index, DIM, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
 import { refresh, fullLoad } from './lib/store.js';
@@ -74,25 +74,17 @@ function maskFor(filters) {
 }
 
 // Recherche hybride sans rendu (utilisée par l'interface et par le banc d'essai).
-async function coreSearch(text, allowed, { mode = 'hybrid', weights } = {}) {
-  const kw = index.bm25(text, allowed);
+async function coreSearch(text, allowed, { mode = 'hybrid', weights, limit = 200 } = {}) {
+  const kw = index.bm25(text, allowed, limit);
   if (mode === 'kw') return { rows: kw, kw, sem: [] };
   const qv = await embedQuery(semanticQuery(text));
-  const sem = index.vector(qv, allowed);
+  const sem = index.vector(qv, allowed, limit);
   if (mode === 'sem') return { rows: sem, kw, sem };
   const long = contentWords(text) >= 3; // phrase libre : on se fie davantage au sens qu'aux mots exacts
   return { rows: rrf([sem, kw], weights || (long ? [1.5, 0.7] : [1, 1])), kw, sem };
 }
 
-function sortRows(rows, how) {
-  const t = (r) => index.tweets[r[0]];
-  const by = {
-    newest: (a, b) => ((t(a).createdAt || '') < (t(b).createdAt || '') ? 1 : -1),
-    oldest: (a, b) => ((t(a).createdAt || '') < (t(b).createdAt || '') ? -1 : 1),
-    likes: (a, b) => (t(b).stats?.likes || 0) - (t(a).stats?.likes || 0),
-  }[how];
-  return by ? [...rows].sort(by) : rows;
-}
+const sortRows = (rows, how) => sortRowsBy(rows, index.tweets, how);
 
 const intentCache = new Map();
 function fromIntent(it) {
@@ -182,14 +174,16 @@ async function run(opts = {}) {
   last = { rows: index.bm25(text, allowed), terms, label: 'Mots-clés (la recherche sémantique arrive…)' + tag, meta };
   render();
 
-  let rows = last.rows, label, why = new Map();
+  let rows = last.rows, label, why = new Map(), kwAll = last.rows;
+  const wide = !!(userSort || sort); // tri demandé : il faut regarder toutes les correspondances, pas seulement les 200 meilleures
   if (!index.vectorCount()) {
     label = 'Mots-clés uniquement — aucun tweet indexé sémantiquement pour l’instant';
   } else {
     try {
-      const r = await coreSearch(text, allowed);
+      const r = await coreSearch(text, allowed, { limit: wide ? 5000 : 200 });
       if (my !== seq) return;
       rows = r.rows;
+      kwAll = r.kw;
       label = 'Hybride : sémantique + mots-clés';
       const sr = new Map(r.sem.map(([row], i) => [row, i + 1])), kr = new Map(r.kw.map(([row], i) => [row, i + 1]));
       for (const [row] of rows.slice(0, 120)) why.set(row, `sens ${sr.has(row) ? '#' + sr.get(row) : '–'} · mots ${kr.has(row) ? '#' + kr.get(row) : '–'}`);
@@ -217,10 +211,10 @@ async function run(opts = {}) {
   }
 
   const how = userSort || sort;
-  if (how) { // « le plus vieux … » : on trie les résultats les plus pertinents
-    const pool = userSort ? rows.slice(0, 200) : rows.slice(0, 40);
+  if (how) { // « le plus vieux … » : on trie par date l'ensemble des correspondances (pas seulement les 200 premières)
+    const { pool, kind } = selectPool(rows, kwAll, { words: contentWords(text) });
     rows = sortRows(pool, how);
-    label += ` · ${{ oldest: 'du plus ancien au plus récent', newest: 'du plus récent au plus ancien', likes: 'les plus likés d’abord' }[how]} parmi les ${pool.length} plus pertinents`;
+    label += ` · ${{ oldest: 'du plus ancien au plus récent', newest: 'du plus récent au plus ancien', likes: 'les plus likés d’abord' }[how]} parmi ${pool.length.toLocaleString('fr-FR')} résultats (${kind})`;
   }
   last = { rows, terms, label: label + tag, meta, why };
   render();

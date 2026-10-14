@@ -90,3 +90,34 @@ test('llm : JSON tolérant, markdown sûr, messages', () => {
   assert.ok(!html.includes('<script>'));
   assert.match(askMessages('q?', [T('1', 'a &amp; b')])[1].content, /\[1\] @h \(\?\) : a & b/);
 });
+
+import { sortRows, selectPool } from '../src/lib/search.js';
+
+test('tri par date : dates manquantes en dernier, quel que soit le sens', () => {
+  const tw = [{ createdAt: '2026-03-01T00:00:00Z' }, { createdAt: null }, { createdAt: '2024-01-01T00:00:00Z' }, { createdAt: '2025-06-01T00:00:00Z' }];
+  const rows = tw.map((_, i) => [i, 0]);
+  assert.deepEqual(sortRows(rows, tw, 'oldest').map(([r]) => r), [2, 3, 0, 1]);
+  assert.deepEqual(sortRows(rows, tw, 'newest').map(([r]) => r), [0, 3, 2, 1]);
+});
+
+test('« le plus ancien » porte sur TOUTES les correspondances, pas les 200 mieux classées', () => {
+  const idx = new Index();
+  const mk = (i, text, year) => T(String(i), text, { createdAt: `${year}-01-01T00:00:00Z`, stats: {} });
+  const tweets = [];
+  // 300 tweets très pertinents (« openai » répété) récents, et 1 vieux tweet qui mentionne openai une seule fois, parmi du texte.
+  for (let i = 0; i < 300; i++) tweets.push(mk(i, 'openai openai openai nouveautés', 2026));
+  tweets.push(mk(999, "un très long message qui parle de plein de choses et mentionne openai une fois au passage", 2023));
+  idx.add(tweets);
+  const kw = idx.bm25('openai', null, 5000);
+  assert.ok(kw.length >= 301);
+  // l'ancien tweet est classé au-delà du rang 200 par pertinence…
+  assert.ok(kw.findIndex(([r]) => idx.tweets[r].id === '999') > 200);
+  // …mais il sort bien en tête d'un tri « plus ancien » sur l'ensemble des correspondances
+  const { pool, kind } = selectPool(kw, kw, { words: 1 });
+  assert.equal(kind, 'contenant les mots de la requête');
+  assert.equal(idx.tweets[sortRows(pool, idx.tweets, 'oldest')[0][0]].id, '999');
+  // et avec seulement 200 candidats, on l'aurait raté
+  assert.notEqual(idx.tweets[sortRows(kw.slice(0, 200), idx.tweets, 'oldest')[0][0]].id, '999');
+  // requête longue : lot = les mieux classés
+  assert.equal(selectPool(kw, kw, { words: 6, size: 50 }).pool.length, 50);
+});
