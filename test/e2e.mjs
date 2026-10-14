@@ -325,6 +325,30 @@ assert.ok((await panel.locator('.th').count()) >= 3, 'thèmes en 768 dimensions'
 await setModel('gemma1');
 await panel.waitForFunction(() => /45 indexés sémantiquement \(EmbeddingGemma\)/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
 
+// ------------------------------------------------------------------ 10. export AVEC vecteurs -> on les efface -> import -> ils reviennent
+await panel.click('#gear');
+await panel.check('#bk-vecs');
+await panel.fill('#bk-pass', '');
+const [dl3] = await Promise.all([panel.waitForEvent('download'), panel.click('#bk-export')]);
+const withVecs = JSON.parse(readFileSync(await dl3.path(), 'utf8'));
+assert.equal(withVecs.vectors.ids.length, 45, 'vecteurs du modèle courant exportés');
+assert.equal(withVecs.vectors.dim, 256);
+assert.ok(Array.isArray(withVecs.saved) && withVecs.saved.includes('tokio'), 'recherches enregistrées exportées');
+await panel.keyboard.press('Escape');
+await panel.evaluate(async () => { // efface tous les vecteurs de Gemma 1
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction('vectors', 'readwrite');
+  tx.objectStore('vectors').clear();
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload();
+await panel.waitForFunction(() => /\b0 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+await panel.click('#gear');
+await panel.setInputFiles('#bk-import', await dl3.path());
+await panel.waitForFunction(() => /45 vecteurs restaurés/.test(document.getElementById('bk-msg').textContent), null, { timeout: 15000 });
+await panel.keyboard.press('Escape');
+await panel.waitForFunction(() => /45 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+
 console.log('E2E OK');
 await ctx.close();
 server.close();

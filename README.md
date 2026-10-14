@@ -17,7 +17,7 @@ Les fonctions d'IA, l'indexation des liens et la recherche d'images sont **facul
 | **Filtres** | Période, liens / médias / vidéos, tri (pertinence, récents, anciens, plus likés). |
 | **Confort** | Navigation clavier (`↓`, `j/k`, `Entrée`, `s`, `/`), historique, ★ recherches enregistrées, 🎲 au hasard, 📅 il y a un an, rendu façon X (médias, vidéos, citations, compteurs). |
 | **Thèmes** | ☰ regroupement automatique (k-means sur les embeddings) avec libellés TF-IDF ; nommage par l'IA en option. |
-| **Sauvegarde** | Export JSON (chiffrable AES-GCM par mot de passe), import, et **dossier de synchro** (iCloud / Dropbox / Drive) pour retrouver ses bookmarks sur un autre appareil. |
+| **Sauvegarde** | Export JSON (chiffrable AES-GCM par mot de passe) avec, en option, les **vecteurs** (quantifiés int8, ~4× plus petits) et les recherches enregistrées ; import, et **dossier de synchro** (iCloud / Dropbox / Drive) pour retrouver ses bookmarks sur un autre appareil. |
 | **Banc d'essai** | Mesure le rappel@10 et le MRR de plusieurs réglages sur tes propres requêtes (Réglages ▸ Banc d'essai). |
 
 ## Modèles

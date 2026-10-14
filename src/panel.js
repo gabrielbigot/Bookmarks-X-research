@@ -1,4 +1,4 @@
-import { getAllTweets, getMeta, setMeta, putTweets, clearVectors, getAllImgVectors } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors } from './lib/db.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
@@ -8,7 +8,7 @@ import { MODELS, modelOf } from './lib/models.js';
 import { jevIntent, jevRerank, decide, PERIOD_DAYS } from './lib/jev.js';
 import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
 import { kmeans, labelClusters } from './lib/cluster.js';
-import { encode, decode } from './lib/backup.js';
+import { encode, decodeFull, packVectors, unpackVectors } from './lib/backup.js';
 import { score as evalScore, summarize } from './lib/evalbench.js';
 
 const $ = (id) => document.getElementById(id);
@@ -797,30 +797,57 @@ const download = (bytes, name) => {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 };
-async function importTweets(tweets) {
+// Construit le fichier de sauvegarde : tweets + recherches enregistrées (+ vecteurs du modèle courant si demandé).
+async function buildBackup(pass) {
+  const tweets = await getAllTweets();
+  const extra = { saved };
+  let nVec = 0;
+  if ($('bk-vecs').checked) {
+    const m = modelOf(settings.embedModel);
+    const vecs = await getAllVectors(m.id);
+    const entries = [...vecs].map(([id, vec]) => ({ id, vec }));
+    extra.vectors = packVectors(m.id, m.dim, entries);
+    nVec = extra.vectors.ids.length;
+  }
+  return { bytes: await encode(tweets, pass || undefined, extra), count: tweets.length, nVec };
+}
+
+// Restaure : tweets, recherches enregistrées, vecteurs (rangés sous leur propre modèle, utilisables si le modèle correspond).
+async function restoreBackup(bytes, pass) {
+  const { tweets, saved: sv, vectors } = await decodeFull(bytes, pass);
   let added = 0;
   for (let i = 0; i < tweets.length; i += 1000) added += await putTweets(tweets.slice(i, i + 1000));
+  let nVec = 0;
+  if (vectors) {
+    const entries = unpackVectors(vectors);
+    for (let i = 0; i < entries.length; i += 2000) await putVectors(entries.slice(i, i + 2000), vectors.model);
+    nVec = entries.length;
+  }
+  const merged = [...new Set([...saved, ...sv])];
+  if (merged.length !== saved.length) { saved = merged; await setMeta('saved', saved); renderSaved(); }
   await load(true);
   run();
   chrome.runtime.sendMessage({ type: 'q:index' });
-  return added;
+  return { count: tweets.length, added, nVec };
 }
 const bkMsg = (t) => { $('bk-msg').textContent = t; };
 
 $('bk-export').onclick = async () => {
   const pass = $('bk-pass').value;
-  const tweets = await getAllTweets();
-  download(await encode(tweets, pass || undefined), `x-bookmarks-${isoDay(Date.now())}.${pass ? 'xbsbak' : 'json'}`);
-  bkMsg(`${tweets.length} bookmarks exportés${pass ? ' (chiffrés)' : ''}.`);
+  bkMsg('Préparation de l’export…');
+  try {
+    const { bytes, count, nVec } = await buildBackup(pass);
+    download(bytes, `x-bookmarks-${isoDay(Date.now())}.${pass ? 'xbsbak' : 'json'}`);
+    bkMsg(`${count} bookmarks${nVec ? ` + ${nVec} vecteurs` : ''} exportés${pass ? ' (chiffrés)' : ''}.`);
+  } catch (err) { bkMsg('⚠ ' + err.message); }
 };
 $('bk-import').onchange = async (e) => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
   try {
-    const tweets = await decode(new Uint8Array(await f.arrayBuffer()), $('bk-pass').value);
-    const added = await importTweets(tweets);
-    bkMsg(`${tweets.length} bookmarks lus, ${added} nouveaux.`);
+    const r = await restoreBackup(new Uint8Array(await f.arrayBuffer()), $('bk-pass').value);
+    bkMsg(`${r.count} bookmarks lus, ${r.added} nouveaux${r.nVec ? `, ${r.nVec} vecteurs restaurés` : ''}.`);
   } catch (err) { bkMsg('⚠ ' + err.message); }
 };
 
@@ -846,11 +873,11 @@ $('bk-dir').onclick = async () => {
 $('bk-save').onclick = async () => {
   try {
     if (!(await dirPermission())) return bkMsg('⚠ Accès au dossier refusé.');
-    const tweets = await getAllTweets();
+    const { bytes, count, nVec } = await buildBackup($('bk-pass').value);
     const w = await (await dirHandle.getFileHandle(dirFile(), { create: true })).createWritable();
-    await w.write(await encode(tweets, $('bk-pass').value || undefined));
+    await w.write(bytes);
     await w.close();
-    bkMsg(`${tweets.length} bookmarks sauvegardés dans ${dirHandle.name}/${dirFile()}`);
+    bkMsg(`${count} bookmarks${nVec ? ` + ${nVec} vecteurs` : ''} sauvegardés dans ${dirHandle.name}/${dirFile()}`);
   } catch (err) { bkMsg('⚠ ' + err.message); }
 };
 $('bk-load').onclick = async () => {
@@ -861,9 +888,8 @@ $('bk-load').onclick = async () => {
       try { file = await (await dirHandle.getFileHandle(`x-bookmarks-backup.${ext}`)).getFile(); break; } catch {}
     }
     if (!file) return bkMsg('⚠ Aucune sauvegarde trouvée dans ce dossier.');
-    const tweets = await decode(new Uint8Array(await file.arrayBuffer()), $('bk-pass').value);
-    const added = await importTweets(tweets);
-    bkMsg(`${tweets.length} bookmarks lus depuis ${file.name}, ${added} nouveaux.`);
+    const r = await restoreBackup(new Uint8Array(await file.arrayBuffer()), $('bk-pass').value);
+    bkMsg(`${r.count} bookmarks lus depuis ${file.name}, ${r.added} nouveaux${r.nVec ? `, ${r.nVec} vecteurs restaurés` : ''}.`);
   } catch (err) { bkMsg('⚠ ' + err.message); }
 };
 

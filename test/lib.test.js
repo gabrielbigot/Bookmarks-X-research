@@ -184,3 +184,32 @@ test('modèles : Gemma 2 en 768 dimensions, Gemma 1 tronqué à 256 ; Index suit
   idx.setDim(256);
   assert.equal(idx.tweets.length, 0); // changement de modèle : index vidé
 });
+
+import { packVectors, unpackVectors, decodeFull } from '../src/lib/backup.js';
+
+test('sauvegarde avec vecteurs : quantification int8 fidèle, recherches enregistrées, chiffrement', async () => {
+  const dim = 256;
+  const mkvec = (seed) => { const v = new Float32Array(dim); let n = 0; for (let d = 0; d < dim; d++) { v[d] = Math.sin(seed * 12.9898 + d * 78.233); n += v[d] ** 2; } return v.map((x) => x / Math.sqrt(n)); };
+  const entries = [{ id: 'a', vec: mkvec(1) }, { id: 'b', vec: mkvec(2) }, { id: 'bad', vec: new Float32Array(3) }];
+  const packed = packVectors('model-x', dim, entries);
+  assert.deepEqual(packed.ids, ['a', 'b']); // mauvaise dimension ignorée
+  assert.ok(packed.data.length < 2 * dim * 4); // ≪ float32 en JSON
+  const back = unpackVectors(packed);
+  for (const [i, e] of back.entries()) {
+    const cos = e.vec.reduce((s, x, d) => s + x * entries[i].vec[d], 0);
+    assert.ok(cos > 0.999, `cosinus ${cos}`);
+    assert.ok(Math.abs(e.vec.reduce((s, x) => s + x * x, 0) - 1) < 1e-4); // renormalisé
+  }
+  const tweets = [T('a', 'un'), T('b', 'deux')];
+  for (const pass of [undefined, 'pw']) {
+    const bytes = await encode(tweets, pass, { saved: ['mémoire des agents'], vectors: packed });
+    const r = await decodeFull(bytes, pass);
+    assert.equal(r.tweets.length, 2);
+    assert.deepEqual(r.saved, ['mémoire des agents']);
+    assert.equal(r.vectors.model, 'model-x');
+    assert.equal(unpackVectors(r.vectors).length, 2);
+  }
+  // sauvegarde ancienne (sans vecteurs ni recherches) toujours lisible
+  const old = await decodeFull(await encode(tweets));
+  assert.deepEqual([old.saved, old.vectors], [[], null]);
+});
