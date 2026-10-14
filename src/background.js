@@ -20,15 +20,19 @@ async function ensureOffscreen() {
 }
 
 // L'offscreen n'a pas accès à chrome.storage / chrome.permissions : on lui transmet la config.
-async function kickIndexing(force = false) {
-  await ensureOffscreen();
+async function getConfig() {
   const s = await getSettings();
   const hasPerm = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
-  chrome.runtime.sendMessage({
-    type: 'off:index',
-    force,
-    config: { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel, compute: s.compute, indexPaused: s.indexPaused },
-  }).catch(() => {});
+  return { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel, compute: s.compute, indexMode: s.indexMode };
+}
+
+// run = demande explicite de l'utilisateur (bouton « Indexer »). En mode manuel, rien ne démarre sans elle :
+// ni au lancement du navigateur, ni sur l'alarme, ni à l'arrivée de nouveaux tweets.
+async function kickIndexing(run = false, force = false) {
+  const s = await getSettings();
+  if (!run && s.indexMode !== 'auto') return;
+  await ensureOffscreen();
+  chrome.runtime.sendMessage({ type: 'off:index', run, force, config: await getConfig() }).catch(() => {});
 }
 
 const broadcast = (msg) => chrome.runtime.sendMessage(msg).catch(() => {});
@@ -49,7 +53,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'autosync') autoSync();
   else kickIndexing();
 });
-chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.settings) kickIndexing(true); });
+chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.settings) kickIndexing(false); });
 
 // ---- onglet X qui a réellement capturé la requête Bookmarks ----
 async function findCaptureTab() {
@@ -135,11 +139,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     case 'q:embed': {
       ensureOffscreen()
-        .then(() => chrome.runtime.sendMessage({ type: 'off:embedQuery', text: msg.text, kind: msg.kind }))
+        .then(async () => chrome.runtime.sendMessage({ type: 'off:embedQuery', text: msg.text, kind: msg.kind, config: await getConfig() }))
         .then(sendResponse, (e) => sendResponse({ error: String(e) }));
       return true;
     }
-    case 'q:index': { kickIndexing(!!msg.force); return false; }
+    case 'q:index': { kickIndexing(!!(msg.run || msg.force), !!msg.force); return false; }
+    case 'q:indexStop': {
+      ensureOffscreen().then(() => chrome.runtime.sendMessage({ type: 'off:stop' })).then(sendResponse, (e) => sendResponse({ error: String(e) }));
+      return true;
+    }
     case 'q:status': {
       ensureOffscreen()
         .then(() => chrome.runtime.sendMessage({ type: 'off:status' }))

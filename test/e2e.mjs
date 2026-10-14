@@ -147,6 +147,11 @@ await panel.goto(panelUrl);
 await panel.waitForSelector('.tw');
 await panel.waitForFunction(() => /11 bookmarks/.test(document.getElementById('stats').textContent));
 
+// Sécurité : après capture de 11 tweets, rien ne s'est indexé tout seul (mode manuel) ; le bouton propose d'indexer
+await panel.waitForTimeout(2500);
+assert.ok(!/indisponible|téléchargement|indexation \d/.test(await panel.locator('#index').innerText()), 'aucune indexation automatique : ' + await panel.locator('#index').innerText());
+assert.match(await panel.locator('#idx-now').innerText(), /Indexer 11 tweets/);
+assert.equal(await panel.locator('#idx-now').isVisible(), true);
 // Les runtimes ONNX (wasm) doivent être chargeables depuis l'extension.
 for (const v of ['', '.jsep', '.jspi', '.asyncify']) {
   const ok = await panel.evaluate((u) => import(u).then(() => true, (e) => String(e)), `chrome-extension://${extId}/ort/ort-wasm-simd-threaded${v}.mjs`);
@@ -407,21 +412,21 @@ await panel.waitForFunction(() => /45 vecteurs restaurés/.test(document.getElem
 await panel.keyboard.press('Escape');
 await panel.waitForFunction(() => /45 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
 
-// ------------------------------------------------------------------ 10b. mémoire : pause de l'indexation, libération, mode CPU
+// ------------------------------------------------------------------ 10b. sécurité mémoire : indexation MANUELLE par défaut, CPU par défaut, arrêt, libération
 await panel.click('#gear');
+assert.equal(await panel.locator('#compute').inputValue(), 'cpu', 'calcul CPU par défaut');
+assert.equal(await panel.locator('#opt-autoindex').isChecked(), false, 'indexation automatique désactivée par défaut');
 await waitFor(async () => /Tas JS : panneau \d+ Mo/.test(await panel.locator('#mem-info').innerText()), 'mesure mémoire', 8000);
 await panel.click('#mem-free');
 await waitFor(async () => /en veille|actif/.test(await panel.locator('#mem-info').innerText()), 'libération mémoire', 8000);
-await panel.click('#idx-pause');
-assert.match(await panel.locator('#idx-pause').innerText(), /Reprendre/);
-await panel.keyboard.press('Escape');
-await waitFor(async () => /Indexation en pause/.test(await panel.locator('#index').innerText()), 'état « en pause » affiché', 10000);
-await panel.click('#gear');
-await panel.click('#idx-pause');
-assert.match(await panel.locator('#idx-pause').innerText(), /Mettre l’indexation en pause/);
-await panel.selectOption('#compute', 'cpu');
-assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.compute, 'cpu');
 await panel.selectOption('#compute', 'auto');
+assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.compute, 'auto');
+await panel.selectOption('#compute', 'cpu');
+await panel.check('#opt-autoindex');
+assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode, 'auto');
+await panel.uncheck('#opt-autoindex');
+assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode, 'manual');
+await panel.click('#idx-pause');
 await panel.keyboard.press('Escape');
 
 // ------------------------------------------------------------------ 11. interface : bandeau repliable, grille, textes longs, défilement infini

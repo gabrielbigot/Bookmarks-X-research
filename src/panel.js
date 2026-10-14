@@ -770,7 +770,7 @@ async function openSettings() {
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
   $('compute').value = settings.compute;
-  updatePauseUi();
+  $('opt-autoindex').checked = settings.indexMode === 'auto';
   pollStatus();
   $('opt-linkimg').checked = settings.linkImages;
   $('embed-model').replaceChildren(...Object.values(MODELS).map((m) => Object.assign(document.createElement('option'), { value: m.key, textContent: m.label, selected: m.key === settings.embedModel })));
@@ -853,12 +853,11 @@ $('opt-links').onchange = async (e) => {
   settings = await setSettings({ enrichLinks: e.target.checked });
 };
 $('opt-images').onchange = async (e) => { settings = await setSettings({ imageSearch: e.target.checked }); applySettingsUi(); };
-function updatePauseUi() { $('idx-pause').textContent = settings.indexPaused ? '▶ Reprendre l’indexation' : '⏸ Mettre l’indexation en pause'; }
-$('idx-pause').onclick = async () => {
-  settings = await setSettings({ indexPaused: !settings.indexPaused }); // le service worker transmet au moteur ; la pause libère le modèle
-  updatePauseUi();
-  setTimeout(pollStatus, 600);
-};
+const runIndex = () => { chrome.runtime.sendMessage({ type: 'q:index', run: true }); setTimeout(pollStatus, 600); };
+const stopIndex = async () => { await chrome.runtime.sendMessage({ type: 'q:indexStop' }); setTimeout(pollStatus, 400); };
+$('idx-run').onclick = runIndex;
+$('idx-pause').onclick = stopIndex;
+$('opt-autoindex').onchange = async (e) => { settings = await setSettings({ indexMode: e.target.checked ? 'auto' : 'manual' }); };
 $('mem-free').onclick = async () => {
   $('mem-info').textContent = 'Libération…';
   await chrome.runtime.sendMessage({ type: 'q:free' });
@@ -1019,8 +1018,7 @@ async function pollStatus() {
     $('retry').hidden = !(st?.error);
     if (!st) return;
     const parts = [];
-    if (st.paused) parts.push('Indexation en pause (modèle libéré)');
-    else if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
+    if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
     else if (st.model === 'loading') parts.push(`Recherche sémantique : téléchargement du modèle ${st.pct ?? 0}% (une seule fois, ~300 Mo)…`);
     else if (st.indexing) parts.push(`Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + ')' : ''}…`);
     else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + ')' : ''));
@@ -1029,8 +1027,13 @@ async function pollStatus() {
     if (st.images?.active) parts.push(`images : ${st.images.done}/${st.images.total}`);
     if (st.images?.error) parts.push('images : ' + st.images.error);
     el.textContent = parts.join(' · ');
+    const pending = index.tweets.length - index.vectorCount();
+    const btn = $('idx-now');
+    btn.hidden = !(st.indexing || pending > 0);
+    btn.textContent = st.indexing ? '■ Arrêter l’indexation' : `▶ Indexer ${pending.toLocaleString('fr-FR')} tweets`;
+    btn.onclick = st.indexing ? stopIndex : runIndex;
     const mine = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
-    $('mem-info').textContent = `Tas JS : panneau ${mine ?? '?'} Mo · moteur de calcul ${st.memMB ?? '?'} Mo · état ${st.paused ? 'en pause' : st.asleep ? 'en veille' : st.indexing ? 'indexation en cours' : 'actif'} · recyclages du modèle : ${st.recycles ?? 0}. (La mémoire GPU n'est pas mesurable ici : vois le Gestionnaire de tâches du navigateur.)`;
+    $('mem-info').textContent = `Tas JS : panneau ${mine ?? '?'} Mo · moteur de calcul ${st.memMB ?? '?'} Mo · état ${st.asleep ? 'en veille' : st.indexing ? 'indexation en cours' : 'actif'} · recyclages du modèle : ${st.recycles ?? 0}. (La mémoire GPU n'est pas mesurable ici : vois le Gestionnaire de tâches du navigateur.)`;
   } catch {}
 }
 $('retry').onclick = () => { chrome.runtime.sendMessage({ type: 'q:index', force: true }); setTimeout(pollStatus, 500); };
@@ -1092,5 +1095,4 @@ chrome.storage.onChanged.addListener(async (ch, area) => {
   run();
   renderBanners();
   pollStatus();
-  chrome.runtime.sendMessage({ type: 'q:index' }).catch(() => {});
 })();

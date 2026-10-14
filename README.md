@@ -54,6 +54,10 @@ npm test                                         # parser, recherche, index, clu
 npm run build && xvfb-run -a node test/e2e.mjs   # Chromium réel, x.com et fournisseur d'IA simulés
 ```
 
+## Sécurité mémoire
+
+Calculer des embeddings pour des dizaines de milliers de tweets est lourd. Par défaut : **indexation manuelle** (bouton « ▶ Indexer », jamais au lancement du navigateur), **calcul CPU** (plus lent, mémoire prévisible), modèle libéré toutes les ~1 000 tweets et après 10 min d'inactivité. Le GPU et l'indexation automatique sont des options (⚙ › Indexation & mémoire). Si le navigateur plante au démarrage : `open -a Comet --args --disable-extensions`.
+
 ## Limites connues
 
 - Le format GraphQL de X est non documenté : si la capture casse, c'est `src/lib/parse.js` à ajuster (un bandeau te prévient).

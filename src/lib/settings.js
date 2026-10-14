@@ -9,14 +9,21 @@ export const DEFAULTS = {
   decision: { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: '' }, // modèle de décision (Jev)
   decisionIntent: false, // tri / période / type compris par le modèle de décision
   decisionRerank: false, // reclassement par le modèle de décision
-  compute: 'auto', // 'auto' = GPU si possible (rapide) | 'cpu' = WASM (plus lent, mémoire prévisible)
-  indexPaused: false, // met l'indexation en pause et libère le modèle
+  compute: 'cpu', // 'cpu' = WASM (plus lent, mémoire prévisible, par défaut) | 'auto' = GPU si possible (rapide, mais gourmand : à activer en connaissance de cause)
+  indexMode: 'manual', // 'manual' : l'indexation ne démarre que sur clic (« Indexer ») | 'auto' : au démarrage et à chaque nouveau tweet
+  settingsVersion: 3,
   linkImages: true, // afficher l'image des cartes de liens (charge l'image depuis le site : désactive pour ne contacter personne)
   autoSync: true, // récupérer les nouveautés tout seul quand un onglet X est ouvert
 };
 
 export async function getSettings() {
-  const { settings } = await chrome.storage.local.get('settings');
+  let { settings } = await chrome.storage.local.get('settings');
+  // Migration de sécurité (une fois) : le calcul GPU automatique et l'indexation au démarrage pouvaient saturer la mémoire.
+  if (settings && (settings.settingsVersion || 0) < 3) {
+    settings = { ...settings, compute: 'cpu', indexMode: 'manual', settingsVersion: 3 };
+    delete settings.indexPaused;
+    await chrome.storage.local.set({ settings });
+  }
   return { ...DEFAULTS, ...settings, llm: { ...DEFAULTS.llm, ...settings?.llm }, decision: { ...DEFAULTS.decision, ...settings?.decision } };
 }
 

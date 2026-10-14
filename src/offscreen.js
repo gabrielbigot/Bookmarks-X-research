@@ -15,13 +15,15 @@ env.useBrowserCache = true;
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('ort/');
 env.backends.onnx.wasm.numThreads = 1; // pas de SharedArrayBuffer dans une page d'extension
 
-let config = { enrichLinks: false, imageSearch: false, embedModel: 'gemma1', compute: 'auto', indexPaused: false };
+let config = { enrichLinks: false, imageSearch: false, embedModel: 'gemma1', compute: 'cpu', indexMode: 'manual' };
+let stopRequested = false; // arrêt demandé par l'utilisateur (non persistant)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const cur = () => modelOf(config.embedModel);
 
 // État interrogeable par le panneau (les messages envoyés avant son ouverture seraient perdus).
 const status = {
   modelKey: 'gemma1',
-  asleep: false, paused: false, recycles: 0,
+  asleep: false, recycles: 0,
   model: 'idle', pct: 0, device: '', indexing: false, done: 0, total: 0, error: '',
   enrich: { active: false, done: 0, total: 0 },
   images: { active: false, done: 0, total: 0, error: '' },
@@ -167,7 +169,7 @@ async function indexLoop(exclude = new Set()) {
     const total = ids.length;
     emit({ type: 'indexProgress', done, total });
     for (let i = 0; i < ids.length; i += BATCH) {
-      if (cur().key !== m.key || config.indexPaused) return; // modèle changé / pause : on s'arrête (la boucle sera relancée)
+      if (cur().key !== m.key || stopRequested) return; // modèle changé / pause : on s'arrête (la boucle sera relancée)
       const tweets = await getTweets(ids.slice(i, i + BATCH));
       const vecs = await embed(tweets.map((t) => docPrompt(tweetText(t))));
       if (cur().key !== m.key) return;
@@ -175,6 +177,7 @@ async function indexLoop(exclude = new Set()) {
       done += tweets.length;
       if ((i / BATCH) % 4 === 0) emit({ type: 'indexProgress', done, total });
       if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
+      await sleep(config.compute === 'cpu' ? 40 : 0); // laisse respirer la machine (et le navigateur)
     }
   }
 }
@@ -261,7 +264,7 @@ async function imageLoop() {
     const ids = (await scanTweets((t) => (t.media || []).length > 0)).filter((id) => !have.has(id));
     status.images = { active: true, done: 0, total: ids.length, error: '' };
     for (let i = 0; i < ids.length; i += 4) {
-      if (cur().key !== m.key || config.indexPaused) break;
+      if (cur().key !== m.key || stopRequested) break;
       const tweets = await getTweets(ids.slice(i, i + 4));
       const items = [];
       for (const t of tweets) {
@@ -285,13 +288,9 @@ async function imageLoop() {
 
 // ---------------- boucle principale ----------------
 let processing = false, rerun = false, lastFailure = 0;
-async function processAll() {
-  if (config.indexPaused) { // pause demandée : on libère la mémoire et on n'indexe plus
-    status.paused = true;
-    if (!processing) await disposeModels();
-    return;
-  }
-  status.paused = false;
+async function processAll(run = false) {
+  if (!(config.indexMode === 'auto' || run)) return; // mode manuel : jamais sans demande explicite
+  if (run) stopRequested = false;
   if (processing) { rerun = true; return; }
   if (Date.now() - lastFailure < 60_000) return; // pas de retry en rafale après une erreur
   processing = true;
@@ -331,9 +330,10 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
       if (switched) Object.assign(status, { model: loaded.has(config.embedModel) ? 'ready' : 'idle', pct: 0, device: '', error: '', indexing: false });
     }
     if (msg.force) lastFailure = 0;
-    processAll();
+    processAll(!!msg.run);
     return false;
   }
+  if (msg?.type === 'off:stop') { stopRequested = true; (processing ? Promise.resolve() : disposeModels()).then(() => sendResponse({ ok: true })); return true; }
   if (msg?.type === 'off:free') { disposeModels().then(() => sendResponse({ ok: true })); return true; }
   if (msg?.type === 'off:status') {
     const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; // Mo de tas JS (la mémoire GPU n'est pas mesurable ici)
@@ -341,6 +341,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     return false;
   }
   if (msg?.type === 'off:embedQuery') {
+    if (msg.config) config = { ...config, ...msg.config };
     const clipText = msg.kind === 'image' && cur().imageModel === 'clip';
     const job = clipText ? embedClipText(msg.text) : embed([queryPrompt(msg.text)]).then(([v]) => v);
     job.then((v) => sendResponse({ vec: Array.from(v), model: cur().key })).catch((e) => sendResponse({ error: String(e?.message || e) }));

@@ -51,7 +51,7 @@
         <button id="stop" class="ghost" hidden>■ Stop</button>
       </div>
       <div class="bar sub"><span id="progress"></span></div>
-      <div class="bar sub"><span id="index"></span><button id="retry" class="ghost" hidden>Réessayer</button></div>
+      <div class="bar sub"><span id="index"></span><button id="idx-now" class="ghost" hidden></button><button id="retry" class="ghost" hidden>Réessayer</button></div>
       <div id="banners"></div>
       </div>
       <div id="mode" class="mode"></div>
@@ -124,11 +124,13 @@
       </section>
 
       <section>
-        <h3>Performances & mémoire</h3>
-        <p class="hint">Le calcul des embeddings sur le GPU est rapide mais peut consommer beaucoup de mémoire sur de longs traitements. Le modèle est libéré automatiquement toutes les ~1 000 tweets et après 10 min d'inactivité.</p>
-        <div class="grid"><label>Calcul des embeddings<select id="compute"><option value="auto">Automatique (GPU si possible, rapide)</option><option value="cpu">CPU uniquement (plus lent, mémoire prévisible)</option></select></label></div>
+        <h3>Indexation & mémoire</h3>
+        <p class="hint">Par défaut l'indexation ne démarre que lorsque tu cliques sur « ▶ Indexer » : jamais toute seule au lancement du navigateur. Le calcul se fait sur le CPU (plus lent mais sans risque pour la mémoire). Le modèle est libéré toutes les ~1 000 tweets et après 10 min d'inactivité.</p>
+        <label class="chk"><input type="checkbox" id="opt-autoindex"> Indexer automatiquement (au démarrage et à chaque nouveau tweet) <span class="hint">: déconseillé si ton Mac peine</span></label>
+        <div class="grid"><label>Calcul des embeddings<select id="compute"><option value="cpu">CPU (recommandé : mémoire prévisible)</option><option value="auto">GPU si possible (rapide, mais peut saturer la mémoire)</option></select></label></div>
         <div class="btns">
-          <button type="button" id="idx-pause">⏸ Mettre l'indexation en pause</button>
+          <button type="button" id="idx-run">▶ Indexer maintenant</button>
+          <button type="button" id="idx-pause">■ Arrêter l'indexation</button>
           <button type="button" id="mem-free">Libérer la mémoire maintenant</button>
         </div>
         <p class="hint" id="mem-info"></p>
