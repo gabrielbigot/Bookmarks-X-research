@@ -6,7 +6,7 @@ import { AutoModel, AutoTokenizer, AutoProcessor, CLIPVisionModelWithProjection,
 import { pendingIds, getTweets, putVectors, setMeta, scanTweets, updateTweet, putImgVectors, getAllImgKeys } from './lib/db.js';
 import { tweetText } from './lib/search.js';
 import { modelOf } from './lib/models.js';
-import { fetchMeta, isPublicUrl, linkTextOf } from './lib/links.js';
+import { fetchMeta, isPublicUrl, linkTextOf, cardFromMeta } from './lib/links.js';
 
 const BATCH = 8;
 
@@ -147,7 +147,9 @@ async function indexLoop(exclude = new Set()) {
 }
 
 // ---------------- enrichissement des liens ----------------
-const needsLinks = (t) => !t.linksTriedAt && [...(t.links || []), ...(t.quoted?.links || [])].some(isPublicUrl);
+// cardsV : version du format des cartes (2 = avec image/site) — les tweets enrichis avant sont relus une fois.
+const CARDS_V = 2;
+const needsLinks = (t) => (!t.linksTriedAt || (t.cardsV || 0) < CARDS_V) && [...(t.links || []), ...(t.quoted?.links || [])].some(isPublicUrl);
 
 async function enrichIds(ids) {
   status.enrich = { active: true, done: 0, total: ids.length };
@@ -160,7 +162,8 @@ async function enrichIds(ids) {
       const urls = [...new Set([...(t.links || []), ...(t.quoted?.links || [])].filter(isPublicUrl))].slice(0, 3);
       const metas = [];
       for (const u of urls) metas.push(await fetchMeta(u));
-      await updateTweet(id, { linkText: linkTextOf(metas), linksTriedAt: Date.now() });
+      const cards = urls.map((u, k) => cardFromMeta(u, metas[k])).filter(Boolean); // url = lien d'origine (celui du tweet)
+      await updateTweet(id, { linkText: linkTextOf(metas), cards, cardsV: CARDS_V, linksTriedAt: Date.now() });
       status.enrich.done++;
       if (status.enrich.done % 10 === 0) emit({ type: 'enrichProgress', ...status.enrich });
       await new Promise((r) => setTimeout(r, 120)); // politesse envers les sites

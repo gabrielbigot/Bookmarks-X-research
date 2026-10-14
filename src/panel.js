@@ -360,6 +360,22 @@ function mediaHtml(media) {
   return `<div class="md n${items.length}">${cells.join('')}</div>`;
 }
 
+// Carte de lien façon X : celle fournie par X avec le tweet, sinon celle lue sur la page liée.
+function cardOfTweet(t) {
+  if ((t.media || []).length) return null; // comme sur X : médias OU carte
+  const c = t.xcard || (t.cards || []).find((x) => x.title || x.image);
+  return c && c.url && (c.title || c.image) ? c : null;
+}
+function linkCardHtml(c) {
+  let host = '';
+  try { host = new URL(c.url).hostname.replace(/^www\./, ''); } catch {}
+  const img = c.image && settings.linkImages ? `<img class="lc-img" loading="lazy" referrerpolicy="no-referrer" src="${esc(c.image)}" alt="">` : '';
+  return `<a class="lc" href="${esc(c.url)}" target="_blank" rel="noopener">${img}<div class="lc-b">
+    <div class="lc-site">${esc(host || c.site || '')}</div>
+    ${c.title ? `<div class="lc-t">${esc(c.title)}</div>` : ''}
+    ${c.description ? `<div class="lc-d">${esc(c.description)}</div>` : ''}</div></a>`;
+}
+
 const avatarUrl = (u) => (u ? u.replace('_normal.', '_bigger.') : '');
 
 function card([row], terms, pos) {
@@ -370,6 +386,9 @@ function card([row], terms, pos) {
   el.dataset.row = row;
   if (pos < 12) el.id = 't-' + (pos + 1);
   const st = t.stats || {};
+  const lc = cardOfTweet(t);
+  // Comme sur X : le lien de la carte n'est pas répété à la fin du texte.
+  const body = lc ? decodeEntities(t.text).replace(new RegExp(lc.url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$'), '').trimEnd() : t.text;
   el.innerHTML = `
     <img class="av" loading="lazy" src="${esc(avatarUrl(t.avatar))}" alt="">
     <div class="bd">
@@ -378,8 +397,9 @@ function card([row], terms, pos) {
         <span class="hn">@${esc(t.handle)}</span><span>·</span>
         <a href="${esc(t.url)}" target="_blank" rel="noopener">${fmtDate(t.createdAt)}</a>
       </div>
-      <div class="tx">${richText(t.text, terms)}</div>
+      <div class="tx">${richText(body, terms)}</div>
       ${mediaHtml(t.media || [])}
+      ${lc ? linkCardHtml(lc) : ''}
       ${t.quoted ? `<div class="qt" data-url="${esc(t.quoted.url || '')}">
         <div class="hd"><span class="nm">${esc(t.quoted.name || t.quoted.handle)}</span><span class="hn">@${esc(t.quoted.handle)}</span></div>
         <div class="tx">${richText(t.quoted.text, terms)}</div></div>` : ''}
@@ -390,6 +410,7 @@ function card([row], terms, pos) {
       </div>
     </div>`;
   // Comme sur X : un clic sur la carte ouvre le tweet (sauf liens, vidéos, boutons).
+  el.querySelectorAll('.lc-img').forEach((img) => img.addEventListener('error', () => img.remove(), { once: true })); // image injoignable : la carte reste, sans image
   if (decodeEntities(t.text).length > 380) { // texte long : replié par défaut, comme sur X (« Afficher plus »)
     const more = Object.assign(document.createElement('button'), { className: 'more-t', textContent: 'Afficher plus' });
     more.onclick = () => { const open = el.classList.toggle('open'); more.textContent = open ? 'Afficher moins' : 'Afficher plus'; };
@@ -748,6 +769,7 @@ async function openSettings() {
   $('opt-links').checked = settings.enrichLinks;
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
+  $('opt-linkimg').checked = settings.linkImages;
   $('embed-model').replaceChildren(...Object.values(MODELS).map((m) => Object.assign(document.createElement('option'), { value: m.key, textContent: m.label, selected: m.key === settings.embedModel })));
   $('dec-url').value = settings.decision.url;
   $('dec-model').value = settings.decision.model;
@@ -828,6 +850,7 @@ $('opt-links').onchange = async (e) => {
   settings = await setSettings({ enrichLinks: e.target.checked });
 };
 $('opt-images').onchange = async (e) => { settings = await setSettings({ imageSearch: e.target.checked }); applySettingsUi(); };
+$('opt-linkimg').onchange = async (e) => { settings = await setSettings({ linkImages: e.target.checked }); render(); };
 $('opt-auto').onchange = async (e) => { settings = await setSettings({ autoSync: e.target.checked }); };
 $('reindex').onclick = async () => {
   if (!confirm('Recalculer tous les vecteurs ? (quelques minutes, en arrière-plan)')) return;
@@ -1030,8 +1053,10 @@ chrome.runtime.onMessage.addListener((m) => {
 });
 chrome.storage.onChanged.addListener(async (ch, area) => {
   if (area === 'local' && ch.settings) {
+    const prevImg = settings.linkImages;
     settings = await getSettings();
     applySettingsUi();
+    if (prevImg !== settings.linkImages) render();
     if (applyModel()) { await load(true); run(); pollStatus(); }
   }
 });

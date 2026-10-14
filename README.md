@@ -15,6 +15,7 @@ Les fonctions d'IA, l'indexation des liens et la recherche d'images sont **facul
 | **Recherche** | BM25 (mots-clés, sans accents, préfixes) + embeddings [EmbeddingGemma 300M](https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX) (WebGPU/WASM), fusionnés par RRF. Badges « sens #3 · mots #12 » pour comprendre un classement. |
 | **Langage naturel** | « le tweet le plus vieux d'OpenAI » → tri par date + filtre auteur (puce « ✕ retirer »). Opérateurs : `from:@x has:link has:media since:… until:… lang:fr`. |
 | **Filtres** | Période, liens / médias / vidéos, tri (pertinence, récents, anciens, plus likés). |
+| **Cartes de liens** | Comme sur X : image, domaine, titre, description. Source 1 : la carte fournie par X avec le tweet (aucun accès supplémentaire). Source 2 : lecture de la page liée si « Indexer les liens » est activé. Réglage « Afficher l'image des cartes » (l'image est chargée depuis le site du lien). |
 | **Confort** | Navigation clavier (`↓`, `j/k`, `Entrée`, `s`, `/`), historique, ★ recherches enregistrées, 🎲 au hasard, 📅 il y a un an, rendu façon X (médias, vidéos, citations, compteurs). |
 | **Thèmes** | ☰ regroupement automatique (k-means sur les embeddings) avec libellés TF-IDF ; nommage par l'IA en option. |
 | **Sauvegarde** | Export JSON (chiffrable AES-GCM par mot de passe) avec, en option, les **vecteurs** (quantifiés int8, ~4× plus petits) et les recherches enregistrées ; import, et **dossier de synchro** (iCloud / Dropbox / Drive) pour retrouver ses bookmarks sur un autre appareil. |

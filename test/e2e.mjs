@@ -15,15 +15,22 @@ const dist = path.resolve('dist');
 const tmp = mkdtempSync(path.join(tmpdir(), 'xbs-'));
 execSync(`openssl req -x509 -newkey rsa:2048 -nodes -keyout ${tmp}/k.pem -out ${tmp}/c.pem -days 1 -subj /CN=x.com 2>/dev/null`);
 
-const mk = (id, handle, name, text, si) => ({
+const mk = (id, handle, name, text, si, extra = {}) => ({
   entryId: 'tweet-' + id, sortIndex: String(si),
-  content: { itemContent: { tweet_results: { result: { rest_id: id, core: { user_results: { result: { core: { screen_name: handle, name } } } },
-    legacy: { full_text: text, created_at: 'Wed Sep 17 10:00:00 +0000 2026', lang: 'en', entities: { urls: [] } } } } } },
+  content: { itemContent: { tweet_results: { result: { rest_id: id, core: { user_results: { result: { core: { screen_name: handle, name } } } }, ...(extra.card ? { card: extra.card } : {}),
+    legacy: { full_text: text, created_at: 'Wed Sep 17 10:00:00 +0000 2026', lang: 'en', entities: { urls: extra.urls || [] } } } } } },
 });
+const CARD = { legacy: { binding_values: [
+  { key: 'title', value: { string_value: 'Intro to vector databases' } },
+  { key: 'description', value: { string_value: 'A practical guide for engineers' } },
+  { key: 'vanity_url', value: { string_value: 'blog.example.com' } },
+  { key: 'thumbnail_image_original', value: { image_value: { url: 'https://llm.test/card.png', width: 800, height: 418 } } },
+  { key: 'card_url', value: { string_value: 'https://t.co/zzz' } },
+] } };
 const CHAIN = {
   CUR_NEXT: () => ['P3', [mk('2001', 'devops', 'DevOps', 'Kubernetes autoscaling with KEDA, event driven scaling tutorial', 1000), mk('2002', 'devops', 'DevOps', 'Postgres vacuum tuning for very large tables', 999)]],
   P3: () => ['P4', [mk('3001', 'misc', 'Misc', 'Rust async runtime benchmarks compared', 900), mk('3002', 'misc', 'Misc', 'Sourdough starter hydration tips', 899)]],
-  P4: () => [null, [mk('4001', 'misc', 'Misc', 'Final tweet about vector databases', 800)]],
+  P4: () => [null, [mk('4001', 'misc', 'Misc', 'Final tweet about vector databases https://t.co/zzz', 800, { card: CARD, urls: [{ url: 'https://t.co/zzz', expanded_url: 'https://blog.example.com/vector-db' }] })]],
 };
 const hits = [];
 let drop = null; // id retiré côté « X » (bookmark supprimé)
@@ -51,6 +58,10 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       res.end(JSON.stringify({ choices: [{ message: { content: out } }] }));
     });
     return;
+  }
+  if (url.pathname === '/card.png') { // image de carte (SVG servi comme image)
+    res.writeHead(200, { 'content-type': 'image/svg+xml', 'access-control-allow-origin': '*' });
+    return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="418"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1d9bf0"/><stop offset="1" stop-color="#7856ff"/></linearGradient></defs><rect width="800" height="418" fill="url(#g)"/><text x="400" y="225" font-size="54" fill="#fff" text-anchor="middle" font-family="sans-serif">card image</text></svg>');
   }
   // --- faux Jev (OpenRouter Decisions API) ---
   if (url.pathname === '/api/alpha/decisions') {
@@ -148,6 +159,21 @@ await panel.screenshot({ path: 'test/feed.png' });
 await panel.fill('#q', 'tokio');
 await panel.waitForTimeout(500);
 assert.match(await panel.locator('.tw').first().innerText(), /tokio/i);
+// carte de lien fournie par X : image, domaine, titre, description ; le lien n'est pas répété dans le texte
+await panel.fill('#q', 'vector databases');
+await panel.waitForSelector('.tw .lc');
+assert.match(await panel.locator('.tw .lc .lc-t').first().innerText(), /Intro to vector databases/);
+assert.match(await panel.locator('.tw .lc .lc-site').first().innerText(), /blog\.example\.com/);
+assert.match(await panel.locator('.tw .lc .lc-d').first().innerText(), /practical guide/);
+assert.equal(await panel.locator('.tw .lc').first().getAttribute('href'), 'https://blog.example.com/vector-db');
+assert.ok(!(await panel.locator('.tw .tx').first().innerText()).includes('blog.example.com'), 'lien de la carte retiré du texte');
+await waitFor(() => panel.locator('.tw .lc .lc-img').evaluate((i) => i.complete && i.naturalWidth > 0), 'image de carte chargée', 8000);
+await panel.locator('.tw', { has: panel.locator('.lc') }).first().screenshot({ path: 'test/card.png' });
+// réglage « Afficher l'image des cartes » : désactivé -> la carte reste, sans image
+await panel.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, linkImages: false } }); });
+await waitFor(async () => (await panel.locator('.tw .lc .lc-img').count()) === 0, 'image de carte masquée', 5000);
+assert.equal(await panel.locator('.tw .lc .lc-t').count() > 0, true);
+await panel.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, linkImages: true } }); });
 await panel.fill('#q', 'from:@devops postgres');
 await panel.waitForTimeout(500);
 assert.equal(await panel.locator('.tw').count(), 1);
@@ -164,7 +190,7 @@ assert.match(await panel.locator('#results').innerText(), /Aucun résultat/);
 await panel.fill('#q', '');
 await panel.click('.chip[data-type="link"]');
 await panel.waitForTimeout(300);
-assert.equal(await panel.locator('.tw').count(), 1, 'filtre « Liens » : un seul tweet avec lien');
+assert.equal(await panel.locator('.tw').count(), 2, 'filtre « Liens » : deux tweets avec lien (tokio + carte)');
 await panel.click('.chip[data-type="link"]');
 await panel.selectOption('#sort', 'likes');
 await panel.waitForTimeout(300);

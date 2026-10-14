@@ -9,6 +9,23 @@ function unwrap(result) {
   return result;
 }
 
+// Carte de lien fournie par X (card.legacy.binding_values : tableau [{key, value}] ou objet {clé: valeur}).
+const CARD_IMAGES = ['thumbnail_image_original', 'thumbnail_image_large', 'summary_photo_image_original', 'summary_photo_image_large', 'photo_image_full_size_original', 'photo_image_full_size_large', 'thumbnail_image', 'summary_photo_image'];
+function cardOf(r, links) {
+  const raw = r.card?.legacy?.binding_values ?? r.card?.binding_values;
+  if (!raw) return null;
+  const vals = {};
+  if (Array.isArray(raw)) for (const b of raw) vals[b.key] = b.value;
+  else Object.assign(vals, raw);
+  const str = (k) => vals[k]?.string_value ?? '';
+  const title = str('title'), description = str('description');
+  let image = '';
+  for (const k of CARD_IMAGES) if (vals[k]?.image_value?.url) { image = vals[k].image_value.url; break; }
+  if (!title && !image) return null; // sondage, appli… : pas une carte de lien
+  const url = links.find((l) => !/^https?:\/\/(www\.)?(x|twitter)\.com\//i.test(l)) || str('card_url');
+  return { url, title: title.slice(0, 200), description: description.slice(0, 320), image, site: str('vanity_url') || str('domain') };
+}
+
 function userInfo(r) {
   const u = r?.core?.user_results?.result;
   const handle = u?.core?.screen_name ?? u?.legacy?.screen_name ?? '';
@@ -72,6 +89,8 @@ export function normalizeTweet(raw, depth = 0) {
       bookmarks: legacy.bookmark_count ?? 0,
     },
   };
+  const xcard = depth === 0 ? cardOf(r, links) : null;
+  if (xcard) tweet.xcard = xcard; // la clé n'est écrite que si X fournit une carte (ne pas écraser l'existant)
   if (depth === 0 && r.quoted_status_result?.result) {
     const q = normalizeTweet(r.quoted_status_result.result, 1);
     if (q) tweet.quoted = { id: q.id, text: q.text, handle: q.handle, name: q.name, url: q.url, links: q.links };

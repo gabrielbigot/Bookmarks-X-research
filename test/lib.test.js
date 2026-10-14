@@ -62,7 +62,7 @@ test('links : extractMeta et isPublicUrl', () => {
     <meta property="og:title" content="Super article">
     <meta name="description" content="Desc simple">
     <meta property="og:description" content='Une &quot;belle&quot; description'></head></html>`;
-  assert.deepEqual(extractMeta(html), { title: 'Super article', description: 'Une "belle" description' });
+  assert.deepEqual(extractMeta(html), { title: 'Super article', description: 'Une "belle" description', image: '', site: '' });
   assert.equal(extractMeta('<title>Seul titre</title>').title, 'Seul titre');
   assert.equal(isPublicUrl('https://github.com/a/b'), true);
   for (const u of ['http://localhost:3000', 'http://192.168.1.2/x', 'https://x.com/a', 'https://t.co/abc', 'ftp://a.com', 'http://[::1]/', 'https://intranet/x'])

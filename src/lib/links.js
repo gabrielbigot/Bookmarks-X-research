@@ -20,7 +20,15 @@ const attr = (tag, name) => {
   return m ? (m[2] ?? m[3] ?? m[4] ?? '') : '';
 };
 
-export function extractMeta(html) {
+const absUrl = (u, base) => {
+  if (!u) return '';
+  try {
+    const x = new URL(u, base);
+    return /^https?:$/.test(x.protocol) ? x.href : '';
+  } catch { return ''; }
+};
+
+export function extractMeta(html, base) {
   const head = html.slice(0, 200_000);
   const metas = {};
   for (const m of head.matchAll(/<meta\b[^>]*>/gi)) {
@@ -31,7 +39,9 @@ export function extractMeta(html) {
   const t = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(head);
   const title = decodeEntities((metas['og:title'] || metas['twitter:title'] || (t ? t[1] : '')).replace(/\s+/g, ' ').trim());
   const desc = decodeEntities((metas['og:description'] || metas['twitter:description'] || metas['description'] || '').replace(/\s+/g, ' ').trim());
-  return { title: title.slice(0, 200), description: desc.slice(0, 320) };
+  const image = absUrl(metas['og:image'] || metas['og:image:url'] || metas['twitter:image'] || metas['twitter:image:src'] || '', base);
+  const site = decodeEntities((metas['og:site_name'] || '').trim()).slice(0, 60);
+  return { title: title.slice(0, 200), description: desc.slice(0, 320), image, site };
 }
 
 // fetchFn(url, { signal, credentials }) -> Response. Lit au plus ~300 Ko, 8 s max.
@@ -53,8 +63,8 @@ export async function fetchMeta(url, fetchFn = fetch) {
     }
     reader.cancel().catch(() => {});
     const html = new TextDecoder().decode(await new Blob(chunks).arrayBuffer());
-    const meta = extractMeta(html);
-    return meta.title || meta.description ? meta : null;
+    const meta = extractMeta(html, res.url || url);
+    return meta.title || meta.description ? { ...meta, url: res.url || url } : null;
   } catch {
     return null;
   } finally {
@@ -63,3 +73,6 @@ export async function fetchMeta(url, fetchFn = fetch) {
 }
 
 export const linkTextOf = (metas) => metas.filter(Boolean).map((m) => [m.title, m.description].filter(Boolean).join(' — ')).join(' | ');
+
+// Carte de lien à afficher (même forme que la carte fournie par X) : { url, title, description, image, site }.
+export const cardFromMeta = (url, m) => (m ? { url, title: m.title || '', description: m.description || '', image: m.image || '', site: m.site || '' } : null);
