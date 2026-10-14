@@ -407,6 +407,23 @@ await panel.waitForFunction(() => /45 vecteurs restaurés/.test(document.getElem
 await panel.keyboard.press('Escape');
 await panel.waitForFunction(() => /45 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
 
+// ------------------------------------------------------------------ 10b. mémoire : pause de l'indexation, libération, mode CPU
+await panel.click('#gear');
+await waitFor(async () => /Tas JS : panneau \d+ Mo/.test(await panel.locator('#mem-info').innerText()), 'mesure mémoire', 8000);
+await panel.click('#mem-free');
+await waitFor(async () => /en veille|actif/.test(await panel.locator('#mem-info').innerText()), 'libération mémoire', 8000);
+await panel.click('#idx-pause');
+assert.match(await panel.locator('#idx-pause').innerText(), /Reprendre/);
+await panel.keyboard.press('Escape');
+await waitFor(async () => /Indexation en pause/.test(await panel.locator('#index').innerText()), 'état « en pause » affiché', 10000);
+await panel.click('#gear');
+await panel.click('#idx-pause');
+assert.match(await panel.locator('#idx-pause').innerText(), /Mettre l’indexation en pause/);
+await panel.selectOption('#compute', 'cpu');
+assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.compute, 'cpu');
+await panel.selectOption('#compute', 'auto');
+await panel.keyboard.press('Escape');
+
 // ------------------------------------------------------------------ 11. interface : bandeau repliable, grille, textes longs, défilement infini
 await panel.setViewportSize({ width: 1400, height: 900 });
 await panel.evaluate(async () => {

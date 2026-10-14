@@ -9,6 +9,8 @@ export const DEFAULTS = {
   decision: { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: '' }, // modèle de décision (Jev)
   decisionIntent: false, // tri / période / type compris par le modèle de décision
   decisionRerank: false, // reclassement par le modèle de décision
+  compute: 'auto', // 'auto' = GPU si possible (rapide) | 'cpu' = WASM (plus lent, mémoire prévisible)
+  indexPaused: false, // met l'indexation en pause et libère le modèle
   linkImages: true, // afficher l'image des cartes de liens (charge l'image depuis le site : désactive pour ne contacter personne)
   autoSync: true, // récupérer les nouveautés tout seul quand un onglet X est ouvert
 };

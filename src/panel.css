@@ -154,3 +154,6 @@ body.grid #answer .ans{margin:12px 0 0}
 .lc-t{font-weight:500}
 .lc-d{color:var(--mut);font-size:13.5px}
 body.grid .lc-img{aspect-ratio:2/1}
+
+/* les cartes hors écran ne sont pas rendues (liste longue = moins de mémoire et de calcul) */
+.tw{content-visibility:auto;contain-intrinsic-size:auto 260px}

@@ -15,12 +15,13 @@ env.useBrowserCache = true;
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('ort/');
 env.backends.onnx.wasm.numThreads = 1; // pas de SharedArrayBuffer dans une page d'extension
 
-let config = { enrichLinks: false, imageSearch: false, embedModel: 'gemma1' };
+let config = { enrichLinks: false, imageSearch: false, embedModel: 'gemma1', compute: 'auto', indexPaused: false };
 const cur = () => modelOf(config.embedModel);
 
 // État interrogeable par le panneau (les messages envoyés avant son ouverture seraient perdus).
 const status = {
   modelKey: 'gemma1',
+  asleep: false, paused: false, recycles: 0,
   model: 'idle', pct: 0, device: '', indexing: false, done: 0, total: 0, error: '',
   enrich: { active: false, done: 0, total: 0 },
   images: { active: false, done: 0, total: 0, error: '' },
@@ -40,7 +41,7 @@ const progressCb = (p) => {
   if (p.status === 'progress') emit({ type: 'modelProgress', file: p.file, pct: Math.round(p.progress) });
   if (p.status === 'ready') emit({ type: 'modelProgress', pct: 100, ready: true });
 };
-const devices = () => (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']);
+const devices = () => (config.compute !== 'cpu' && navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']);
 
 // Essaie WebGPU puis WASM.
 async function withDevice(load) {
@@ -69,7 +70,33 @@ async function loadGemma2(m) {
   return { kind: 'gemma2', extractor };
 }
 
+// ---- hygiène mémoire : les moteurs ONNX gardent des tampons (surtout en WebGPU) qui ne redescendent pas tout seuls ----
+const RECYCLE_EVERY = 120; // lots de 8 tweets (~1000 tweets) : on libère puis recharge le modèle (depuis le cache, quelques secondes)
+const IDLE_MS = 10 * 60_000; // modèle libéré après 10 min sans usage ; rechargé à la demande
+let batchesSinceLoad = 0, idleTimer;
+
+async function disposeModels() {
+  const pending = [...loaded.values(), g2Multi, clipPromise].filter(Boolean);
+  loaded.clear(); g2Multi = undefined; clipPromise = undefined;
+  for (const p of pending) {
+    try {
+      const m = await p;
+      for (const part of [m.model, m.extractor, m.vision, m.text]) await part?.dispose?.();
+    } catch { /* déjà libéré ou jamais chargé */ }
+  }
+  batchesSinceLoad = 0;
+  status.model = 'idle';
+  status.asleep = true;
+  status.pct = 0;
+}
+const touch = () => {
+  status.asleep = false;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { if (!processing) disposeModels(); }, IDLE_MS);
+};
+
 function loadModel() {
+  touch();
   const m = cur();
   if (!loaded.has(m.key)) {
     loaded.set(m.key, (m.key === 'gemma2' ? loadGemma2(m) : loadGemma1(m))
@@ -93,10 +120,13 @@ async function embed(texts) {
   if (loadedModel.kind === 'gemma2') {
     const out = await loadedModel.extractor(texts, { pooling: 'mean', normalize: true });
     const dim = out.dims.at(-1);
-    return texts.map((_, i) => l2(Float32Array.from(out.data.subarray(i * dim, (i + 1) * dim))));
+    const res = texts.map((_, i) => l2(Float32Array.from(out.data.subarray(i * dim, (i + 1) * dim))));
+    out.dispose?.();
+    return res;
   }
   const { tokenizer, model } = loadedModel;
-  const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: 256 });
+  // Forme d'entrée FIXE (8 × 128) : le moteur ne recompile / ne met pas en cache une forme par longueur de lot.
+  const inputs = tokenizer(texts, { padding: 'max_length', truncation: true, max_length: 128 });
   const out = await model(inputs);
   let t = out.sentence_embedding;
   let dim, data;
@@ -119,7 +149,9 @@ async function embed(texts) {
     dim = d;
   }
   // Matryoshka : on tronque à m.dim dimensions puis on renormalise.
-  return texts.map((_, i) => l2(Float32Array.from(data.subarray(i * dim, i * dim + m.dim))));
+  const res = texts.map((_, i) => l2(Float32Array.from(data.subarray(i * dim, i * dim + m.dim)))); // copie : indépendante des tampons du moteur
+  for (const tensor of Object.values(out)) tensor?.dispose?.(); // libère les sorties (tampons GPU)
+  return res;
 }
 
 const docPrompt = (t) => `title: none | text: ${t}`;
@@ -135,13 +167,14 @@ async function indexLoop(exclude = new Set()) {
     const total = ids.length;
     emit({ type: 'indexProgress', done, total });
     for (let i = 0; i < ids.length; i += BATCH) {
-      if (cur().key !== m.key) return; // modèle changé en cours de route : on s'arrête (la boucle sera relancée)
+      if (cur().key !== m.key || config.indexPaused) return; // modèle changé / pause : on s'arrête (la boucle sera relancée)
       const tweets = await getTweets(ids.slice(i, i + BATCH));
       const vecs = await embed(tweets.map((t) => docPrompt(tweetText(t))));
       if (cur().key !== m.key) return;
       await putVectors(tweets.map((t, k) => ({ id: t.id, vec: vecs[k] })), m.id);
       done += tweets.length;
       if ((i / BATCH) % 4 === 0) emit({ type: 'indexProgress', done, total });
+      if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
     }
   }
 }
@@ -228,7 +261,7 @@ async function imageLoop() {
     const ids = (await scanTweets((t) => (t.media || []).length > 0)).filter((id) => !have.has(id));
     status.images = { active: true, done: 0, total: ids.length, error: '' };
     for (let i = 0; i < ids.length; i += 4) {
-      if (cur().key !== m.key) break;
+      if (cur().key !== m.key || config.indexPaused) break;
       const tweets = await getTweets(ids.slice(i, i + 4));
       const items = [];
       for (const t of tweets) {
@@ -253,6 +286,12 @@ async function imageLoop() {
 // ---------------- boucle principale ----------------
 let processing = false, rerun = false, lastFailure = 0;
 async function processAll() {
+  if (config.indexPaused) { // pause demandée : on libère la mémoire et on n'indexe plus
+    status.paused = true;
+    if (!processing) await disposeModels();
+    return;
+  }
+  status.paused = false;
   if (processing) { rerun = true; return; }
   if (Date.now() - lastFailure < 60_000) return; // pas de retry en rafale après une erreur
   processing = true;
@@ -285,7 +324,9 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.type === 'off:index') {
     if (msg.config) {
       const switched = msg.config.embedModel && msg.config.embedModel !== config.embedModel;
+      const computeChanged = msg.config.compute && msg.config.compute !== config.compute;
       config = { ...config, ...msg.config };
+      if (computeChanged && !processing) disposeModels(); // le prochain chargement utilisera le nouveau mode de calcul
       status.modelKey = config.embedModel;
       if (switched) Object.assign(status, { model: loaded.has(config.embedModel) ? 'ready' : 'idle', pct: 0, device: '', error: '', indexing: false });
     }
@@ -293,7 +334,12 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     processAll();
     return false;
   }
-  if (msg?.type === 'off:status') { sendResponse(status); return false; }
+  if (msg?.type === 'off:free') { disposeModels().then(() => sendResponse({ ok: true })); return true; }
+  if (msg?.type === 'off:status') {
+    const mem = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null; // Mo de tas JS (la mémoire GPU n'est pas mesurable ici)
+    sendResponse({ ...status, memMB: mem });
+    return false;
+  }
   if (msg?.type === 'off:embedQuery') {
     const clipText = msg.kind === 'image' && cur().imageModel === 'clip';
     const job = clipText ? embedClipText(msg.text) : embed([queryPrompt(msg.text)]).then(([v]) => v);

@@ -769,6 +769,9 @@ async function openSettings() {
   $('opt-links').checked = settings.enrichLinks;
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
+  $('compute').value = settings.compute;
+  updatePauseUi();
+  pollStatus();
   $('opt-linkimg').checked = settings.linkImages;
   $('embed-model').replaceChildren(...Object.values(MODELS).map((m) => Object.assign(document.createElement('option'), { value: m.key, textContent: m.label, selected: m.key === settings.embedModel })));
   $('dec-url').value = settings.decision.url;
@@ -850,6 +853,18 @@ $('opt-links').onchange = async (e) => {
   settings = await setSettings({ enrichLinks: e.target.checked });
 };
 $('opt-images').onchange = async (e) => { settings = await setSettings({ imageSearch: e.target.checked }); applySettingsUi(); };
+function updatePauseUi() { $('idx-pause').textContent = settings.indexPaused ? '▶ Reprendre l’indexation' : '⏸ Mettre l’indexation en pause'; }
+$('idx-pause').onclick = async () => {
+  settings = await setSettings({ indexPaused: !settings.indexPaused }); // le service worker transmet au moteur ; la pause libère le modèle
+  updatePauseUi();
+  setTimeout(pollStatus, 600);
+};
+$('mem-free').onclick = async () => {
+  $('mem-info').textContent = 'Libération…';
+  await chrome.runtime.sendMessage({ type: 'q:free' });
+  setTimeout(pollStatus, 400);
+};
+$('compute').onchange = async (e) => { settings = await setSettings({ compute: e.target.value }); };
 $('opt-linkimg').onchange = async (e) => { settings = await setSettings({ linkImages: e.target.checked }); render(); };
 $('opt-auto').onchange = async (e) => { settings = await setSettings({ autoSync: e.target.checked }); };
 $('reindex').onclick = async () => {
@@ -1004,14 +1019,18 @@ async function pollStatus() {
     $('retry').hidden = !(st?.error);
     if (!st) return;
     const parts = [];
-    if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
+    if (st.paused) parts.push('Indexation en pause (modèle libéré)');
+    else if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
     else if (st.model === 'loading') parts.push(`Recherche sémantique : téléchargement du modèle ${st.pct ?? 0}% (une seule fois, ~300 Mo)…`);
     else if (st.indexing) parts.push(`Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + ')' : ''}…`);
     else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + ')' : ''));
+    else if (st.asleep && !st.paused) parts.push('Recherche sémantique prête (modèle en veille : rechargé à la prochaine recherche)');
     if (st.enrich?.active) parts.push(`liens : ${st.enrich.done}/${st.enrich.total}`);
     if (st.images?.active) parts.push(`images : ${st.images.done}/${st.images.total}`);
     if (st.images?.error) parts.push('images : ' + st.images.error);
     el.textContent = parts.join(' · ');
+    const mine = performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : null;
+    $('mem-info').textContent = `Tas JS : panneau ${mine ?? '?'} Mo · moteur de calcul ${st.memMB ?? '?'} Mo · état ${st.paused ? 'en pause' : st.asleep ? 'en veille' : st.indexing ? 'indexation en cours' : 'actif'} · recyclages du modèle : ${st.recycles ?? 0}. (La mémoire GPU n'est pas mesurable ici : vois le Gestionnaire de tâches du navigateur.)`;
   } catch {}
 }
 $('retry').onclick = () => { chrome.runtime.sendMessage({ type: 'q:index', force: true }); setTimeout(pollStatus, 500); };

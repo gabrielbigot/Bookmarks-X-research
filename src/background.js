@@ -27,7 +27,7 @@ async function kickIndexing(force = false) {
   chrome.runtime.sendMessage({
     type: 'off:index',
     force,
-    config: { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel },
+    config: { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel, compute: s.compute, indexPaused: s.indexPaused },
   }).catch(() => {});
 }
 
@@ -144,6 +144,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       ensureOffscreen()
         .then(() => chrome.runtime.sendMessage({ type: 'off:status' }))
         .then(sendResponse, (e) => sendResponse({ model: 'error', error: String(e) }));
+      return true;
+    }
+    case 'q:free': {
+      ensureOffscreen()
+        .then(() => chrome.runtime.sendMessage({ type: 'off:free' }))
+        .then(sendResponse, (e) => sendResponse({ error: String(e) }));
       return true;
     }
     case 'q:counts': { counts().then(sendResponse); return true; }

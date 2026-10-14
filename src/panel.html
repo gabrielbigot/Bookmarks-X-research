@@ -124,6 +124,17 @@
       </section>
 
       <section>
+        <h3>Performances & mémoire</h3>
+        <p class="hint">Le calcul des embeddings sur le GPU est rapide mais peut consommer beaucoup de mémoire sur de longs traitements. Le modèle est libéré automatiquement toutes les ~1 000 tweets et après 10 min d'inactivité.</p>
+        <div class="grid"><label>Calcul des embeddings<select id="compute"><option value="auto">Automatique (GPU si possible, rapide)</option><option value="cpu">CPU uniquement (plus lent, mémoire prévisible)</option></select></label></div>
+        <div class="btns">
+          <button type="button" id="idx-pause">⏸ Mettre l'indexation en pause</button>
+          <button type="button" id="mem-free">Libérer la mémoire maintenant</button>
+        </div>
+        <p class="hint" id="mem-info"></p>
+      </section>
+
+      <section>
         <h3>Enrichissement</h3>
         <label class="chk"><input type="checkbox" id="opt-links"> Indexer le titre et la description des pages liées <span class="hint">(demande l'accès aux sites ; lecture sans cookies)</span></label>
         <label class="chk"><input type="checkbox" id="opt-linkimg"> Afficher l'image des cartes de liens <span class="hint">(l'image est chargée depuis le site du lien ; décoche pour ne contacter personne)</span></label>

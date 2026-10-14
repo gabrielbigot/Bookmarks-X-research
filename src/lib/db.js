@@ -70,14 +70,15 @@ export async function putVectors(items, model) {
   await done(tx);
 }
 
-// Tweets sans vecteur valide pour `model` (un vecteur d'un autre modèle compte comme absent).
+// Tweets sans vecteur pour `model`. Chaque modèle a son propre magasin : on ne lit que les clés (pas les vecteurs,
+// qui pèsent des dizaines de Mo à copier à chaque passage).
 export async function pendingIds(model) {
   const db = await openDb();
   const [t, v] = await Promise.all([
     wrap(db.transaction('tweets').objectStore('tweets').getAllKeys()),
-    wrap(db.transaction(vstore(model)).objectStore(vstore(model)).getAll()),
+    wrap(db.transaction(vstore(model)).objectStore(vstore(model)).getAllKeys()),
   ]);
-  const have = new Set(v.filter((r) => !model || r.model === model).map((r) => r.id));
+  const have = new Set(v);
   return t.filter((id) => !have.has(id));
 }
 
