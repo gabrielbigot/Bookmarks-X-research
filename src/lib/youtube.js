@@ -80,6 +80,29 @@ function fromPlaylistVideoRenderer(r) {
   };
 }
 
+// -------- historique : videoRenderer (+ progression, extrait de description) --------
+function fromVideoRenderer(r) {
+  if (!r.videoId) return null;
+  const by = r.ownerText || r.longBylineText || r.shortBylineText;
+  const ep = by?.runs?.[0]?.navigationEndpoint?.browseEndpoint;
+  const title = txt(r.title);
+  const durationText = txt(r.lengthText) || (r.thumbnailOverlays || []).map((o) => txt(o.thumbnailOverlayTimeStatusRenderer?.text)).find(Boolean) || '';
+  const progress = (r.thumbnailOverlays || []).map((o) => o.thumbnailOverlayResumePlaybackRenderer?.percentDurationWatched).find((x) => typeof x === 'number') ?? 0;
+  const desc = txt(r.descriptionSnippet) || (r.detailedMetadataSnippets || []).map((x) => txt(x.snippetText)).find(Boolean) || '';
+  return {
+    videoId: r.videoId, title, channel: txt(by), handle: handleOf(ep?.canonicalBaseUrl), channelId: ep?.browseId || '',
+    durationText, durationSec: parseDuration(durationText), thumb: r.thumbnail?.thumbnails?.at(-1)?.url || '',
+    views: txt(r.viewCountText) || txt(r.shortViewCountText), published: txt(r.publishedTimeText), pos: 0, progress, desc: desc.slice(0, 300),
+    unavailable: UNAVAILABLE_RE.test(title),
+  };
+}
+function fromShortsLockup(l) {
+  const videoId = l.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId || l.entityId?.replace(/^shorts-shelf-item-/, '') || '';
+  if (!videoId) return null;
+  const title = txt(l.overlayMetadata?.primaryText);
+  return { videoId, title, channel: '', handle: '', channelId: '', durationText: '', durationSec: 0, thumb: l.thumbnail?.sources?.at(-1)?.url || '', views: txt(l.overlayMetadata?.secondaryText), published: '', pos: 0, progress: 0, desc: '', short: true, unavailable: false };
+}
+
 // -------- nouveau format : lockupViewModel --------
 function lockupParts(l) {
   const rows = l.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows || [];
@@ -104,10 +127,27 @@ function fromLockupVideo(l) {
 }
 const countOf = (s) => { const m = /(\d[\d\s.,  ]*)/.exec(s || ''); return m ? parseInt(m[1].replace(/\D/g, ''), 10) || 0 : 0; };
 
-export function parseYoutube(json) {
+// opts.history : lit aussi les videoRenderer / shorts, en retenant l'en-tête de jour de chaque section (`label`).
+export function parseYoutube(json, opts = {}) {
   const videos = [], playlists = [], seenV = new Set(), seenP = new Set();
   let continuation = null, contViaRenderer = null, header = null, unparsed = 0;
-  walk(json, (n) => {
+  const visitor = (label) => (n) => {
+    if (opts.history && n.itemSectionRenderer) { // une section = un jour ; on lit ses vidéos avec l'étiquette du jour
+      const h = n.itemSectionRenderer.header;
+      const lab = txt(h?.itemSectionHeaderRenderer?.title) || txt(h?.richListHeaderRenderer?.title) || deepStrings(h || {}, 4)[0] || label;
+      walk(n.itemSectionRenderer.contents, visitor(lab));
+      return true;
+    }
+    if (opts.history && n.videoRenderer) {
+      const v = fromVideoRenderer(n.videoRenderer);
+      if (v) { const k = v.videoId + '|' + (label || ''); if (!seenV.has(k)) { seenV.add(k); videos.push({ ...v, label: label || '' }); } } else unparsed++;
+      return true;
+    }
+    if (opts.history && n.shortsLockupViewModel) {
+      const v = fromShortsLockup(n.shortsLockupViewModel);
+      if (v) { const k = v.videoId + '|' + (label || ''); if (!seenV.has(k)) { seenV.add(k); videos.push({ ...v, label: label || '' }); } } else unparsed++;
+      return true;
+    }
     if (n.playlistVideoRenderer) {
       const v = fromPlaylistVideoRenderer(n.playlistVideoRenderer);
       if (v) { if (!seenV.has(v.videoId)) { seenV.add(v.videoId); videos.push(v); } } else unparsed++;
@@ -117,7 +157,7 @@ export function parseYoutube(json) {
       const l = n.lockupViewModel, type = l.contentType || '';
       if (/VIDEO/.test(type)) {
         const v = fromLockupVideo(l);
-        if (v) { if (!seenV.has(v.videoId)) { seenV.add(v.videoId); videos.push(v); } } else unparsed++;
+        if (v) { const k = opts.history ? v.videoId + '|' + (label || '') : v.videoId; if (!seenV.has(k)) { seenV.add(k); videos.push(opts.history ? { ...v, label: label || '' } : v); } } else unparsed++;
       } else if (/PLAYLIST/.test(type) && l.contentId) {
         if (!seenP.has(l.contentId)) {
           seenP.add(l.contentId);
@@ -150,9 +190,36 @@ export function parseYoutube(json) {
       return true;
     }
     return false;
-  });
+  };
+  walk(json, visitor(null));
   continuation = contViaRenderer;
   return { videos, playlists, continuation, header, unparsed };
+}
+
+// -------- historique : les vidéos sont groupées par jour (« Aujourd'hui », « Hier », « lundi », « 12 octobre ») --------
+const MONTHS = { janvier: 1, janv: 1, fevrier: 2, fevr: 2, mars: 3, avril: 4, avr: 4, mai: 5, juin: 6, juillet: 7, juil: 7, aout: 8, septembre: 9, sept: 9, octobre: 10, oct: 10, novembre: 11, nov: 11, decembre: 12, dec: 12,
+  january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4, may: 5, june: 6, jun: 6, july: 7, jul: 7, august: 8, aug: 8, september: 9, october: 10, november: 11, december: 12 };
+const WEEKDAYS = { dimanche: 0, lundi: 1, mardi: 2, mercredi: 3, jeudi: 4, vendredi: 5, samedi: 6, sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+const noAccent = (x) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const pad = (n) => String(n).padStart(2, '0');
+const dayStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+// -> 'AAAA-MM-JJ' ou null (langue non reconnue). `now` injectable pour les tests.
+export function parseHistoryHeader(title, now = new Date()) {
+  const t = noAccent((title || '').replace(/\u202f|\u00a0/g, ' ').trim()).replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+  const shift = (n) => dayStr(new Date(base.getFullYear(), base.getMonth(), base.getDate() - n, 12));
+  if (/^(aujourd['’ ]?hui|today)$/.test(t)) return shift(0);
+  if (/^(hier|yesterday)$/.test(t)) return shift(1);
+  if (t in WEEKDAYS) { const back = (base.getDay() - WEEKDAYS[t] + 7) % 7; return shift(back === 0 ? 7 : back); } // le jour même s'affiche « Aujourd'hui » : un nom de jour = la semaine passée
+  // « 12 octobre », « 12 oct 2025 », « oct 12 », « october 12 2025 »
+  let m = /^(\d{1,2}) ([a-z]+)(?: (\d{4}))?$/.exec(t) || (() => { const x = /^([a-z]+) (\d{1,2})(?: (\d{4}))?$/.exec(t); return x ? [x[0], x[2], x[1], x[3]] : null; })();
+  if (!m || !(m[2] in MONTHS)) return null;
+  const day = +m[1], month = MONTHS[m[2]];
+  let year = m[3] ? +m[3] : base.getFullYear();
+  if (!m[3] && new Date(year, month - 1, day, 12) > base) year--; // sans année : la plus récente date passée
+  return `${year}-${pad(month)}-${pad(day)}`;
 }
 
 // -------- éléments stockés --------
@@ -171,6 +238,13 @@ export function toItem(v, playlist, now = Date.now()) {
   };
 }
 
+// Vidéo vue (historique). `day` = 'AAAA-MM-JJ' ou null si l'en-tête de jour n'a pas été reconnu.
+export function toHistoryItem(v, day, now = Date.now()) {
+  const it = toItem(v, null, now);
+  const ms = day ? Date.parse(day + 'T12:00:00Z') : 0;
+  return { ...it, watched: day ? [day] : [], lastWatched: day || '', progress: v.progress || 0, desc: v.desc || '', sortIndex: ms ? String(Math.floor(ms / 1000)) : it.sortIndex };
+}
+
 // Fusionne une vidéo déjà connue avec une nouvelle capture : appartenance aux playlists = union ; champs vides non écrasés.
 export function mergeVideo(old, neu) {
   if (!old) return neu;
@@ -179,6 +253,11 @@ export function mergeVideo(old, neu) {
   const out = { ...old };
   for (const [k, v] of Object.entries(neu)) if (v !== '' && v != null && !(Array.isArray(v) && !v.length)) out[k] = v;
   out.playlists = [...pl.values()];
+  const w = [...new Set([...(old.watched || []), ...(neu.watched || [])])].sort();
+  if (w.length) { out.watched = w; out.lastWatched = w[w.length - 1]; }
+  out.progress = Math.max(old.progress || 0, neu.progress || 0);
+  if (!neu.desc && old.desc) out.desc = old.desc;
+  if (BigInt(old.sortIndex || 0) > BigInt(neu.sortIndex || 0)) out.sortIndex = old.sortIndex;
   out.addedAt = old.addedAt ?? neu.addedAt;
   return out;
 }
@@ -186,5 +265,5 @@ export function mergeVideo(old, neu) {
 // Texte indexé (BM25 + embedding) d'une vidéo.
 export function videoText(t) {
   const pls = (t.playlists || []).map((p) => p.title).filter(Boolean);
-  return `${t.text}\nChaîne : ${t.name}${pls.length ? `\nPlaylists : ${pls.join(', ')}` : ''}`;
+  return `${t.text}\nChaîne : ${t.name}${pls.length ? `\nPlaylists : ${pls.join(', ')}` : ''}${t.desc ? `\n${t.desc}` : ''}`;
 }

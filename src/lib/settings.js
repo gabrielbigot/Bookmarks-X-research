@@ -13,6 +13,8 @@ export const DEFAULTS = {
   indexMode: 'manual', // 'manual' : l'indexation ne démarre que sur clic (« Indexer ») | 'auto' : au démarrage et à chaque nouveau tweet
   settingsVersion: 3,
   linkImages: true, // afficher l'image des cartes de liens (charge l'image depuis le site : désactive pour ne contacter personne)
+  ytHistoryDays: 90, // profondeur de la synchro de l'historique YouTube (0 = tout)
+  aiHistory: false, // autoriser l'envoi de l'historique de visionnage à une IA externe
   autoSync: true, // récupérer les nouveautés tout seul quand un onglet X est ouvert
 };
 

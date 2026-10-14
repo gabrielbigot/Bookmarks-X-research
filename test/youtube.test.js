@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseYoutube, parseDuration, parseViews, toItem, mergeVideo, txt, videoText, isVideoItem, fmtDuration } from '../src/lib/youtube.js';
+import { parseYoutube, parseDuration, parseViews, toItem, toHistoryItem, mergeVideo, txt, videoText, isVideoItem, fmtDuration, parseHistoryHeader } from '../src/lib/youtube.js';
 
 const run = (text) => ({ runs: [{ text }] });
 // --- ancien format ---
@@ -125,4 +125,62 @@ test('recherche : opérateurs source: et playlist: (guillemets compris), texte d
   assert.deepEqual(ids('cerveau'), ['yt:a']);
   assert.deepEqual(ids('neuro'), ['yt:a']);
   assert.deepEqual(ids('programmation'), ['yt:b']);
+});
+
+// --- historique ---
+const NOW = new Date(2026, 9, 14, 15); // mercredi 14 octobre 2026
+test('en-têtes de jour (fr/en)', () => {
+  const h = (x) => parseHistoryHeader(x, NOW);
+  assert.equal(h("Aujourd'hui"), '2026-10-14');
+  assert.equal(h('Today'), '2026-10-14');
+  assert.equal(h('Hier'), '2026-10-13');
+  assert.equal(h('Yesterday'), '2026-10-13');
+  assert.equal(h('lundi'), '2026-10-12');
+  assert.equal(h('Mercredi'), '2026-10-07');
+  assert.equal(h('dimanche'), '2026-10-11');
+  assert.equal(h('12 octobre'), '2026-10-12');
+  assert.equal(h('3 déc.'), '2025-12-03');
+  assert.equal(h('Oct 5'), '2026-10-05');
+  assert.equal(h('12 octobre 2024'), '2024-10-12');
+  assert.equal(h('bla bla'), null);
+  assert.equal(h(''), null);
+});
+
+const vr = (id, title, extra = {}) => ({ videoRenderer: { videoId: id, title: run(title), ownerText: { runs: [{ text: 'Chaîne H', navigationEndpoint: { browseEndpoint: { browseId: 'UChh', canonicalBaseUrl: '/@chaine-h' } } }] },
+  lengthText: { simpleText: '5:00' }, viewCountText: { simpleText: '1 000 vues' }, descriptionSnippet: run(extra.desc ?? ''),
+  thumbnailOverlays: extra.pct ? [{ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: extra.pct } }] : [], thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/h.jpg' }] } } });
+const sec = (label, ...items) => ({ itemSectionRenderer: { header: { itemSectionHeaderRenderer: { title: { simpleText: label } } }, contents: items } });
+
+test('historique : sections par jour, progression, dédoublonnage par jour, pagination', () => {
+  const json = { contents: [sec("Aujourd'hui", vr('h1', 'Un', { pct: 40, desc: 'desc un' }), vr('h2', 'Deux')), sec('Hier', vr('h1', 'Un'), vr('h3', 'Trois')), contItem('HT')] };
+  const r = parseYoutube(json, { history: true });
+  assert.deepEqual(r.videos.map((v) => v.videoId + '@' + v.label), ['h1@Aujourd\'hui', 'h2@Aujourd\'hui', 'h1@Hier', 'h3@Hier']);
+  assert.equal(r.videos[0].progress, 40);
+  assert.equal(r.videos[0].desc, 'desc un');
+  assert.equal(r.continuation, 'HT');
+  // sans l'option, une page d'historique ne produit pas de vidéos (jamais les recommandations)
+  assert.equal(parseYoutube(json).videos.length, 0);
+});
+
+test('historique : fusion avec une playlist, jours cumulés, requêtes viewed:/watched:', () => {
+  const pl = toItem({ videoId: 'h1', title: 'Un', pos: 3 }, { id: 'WL', title: 'À regarder plus tard' });
+  const a = toHistoryItem({ videoId: 'h1', title: 'Un', progress: 40, desc: 'd' }, '2026-10-13');
+  const b = toHistoryItem({ videoId: 'h1', title: 'Un', progress: 10 }, '2026-10-14');
+  let m = mergeVideo(mergeVideo(pl, a), b);
+  assert.deepEqual(m.watched, ['2026-10-13', '2026-10-14']);
+  assert.equal(m.lastWatched, '2026-10-14');
+  assert.equal(m.progress, 40);
+  assert.equal(m.desc, 'd');
+  assert.equal(m.playlists.length, 1);
+  assert.equal(BigInt(m.sortIndex), BigInt(Math.floor(Date.parse('2026-10-14T12:00:00Z') / 1000)));
+  assert.match(videoText(m), /\nd$/);
+  const unseen = toItem({ videoId: 'u', title: 'U' }, { id: 'WL', title: 'x' });
+  const f = (q) => parseQuery(q).filters;
+  assert.equal(passesFilters(m, f('viewed:yes')), true);
+  assert.equal(passesFilters(unseen, f('viewed:yes')), false);
+  assert.equal(passesFilters(unseen, f('vu:non')), true);
+  assert.equal(passesFilters(m, f('viewed:no')), false);
+  assert.equal(passesFilters(m, f('watched:2026-10-14')), true);
+  assert.equal(passesFilters(m, f('watched:2026-10-01..2026-10-12')), false);
+  assert.equal(passesFilters({ id: '1', handle: 'a', text: '' }, f('viewed:yes')), false);
 });

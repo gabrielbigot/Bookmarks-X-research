@@ -1,5 +1,5 @@
-import { putTweets, putVideos, reconcilePlaylist, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
-import { toItem } from './lib/youtube.js';
+import { putTweets, putVideos, putHistory, reconcilePlaylist, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
+import { toItem, toHistoryItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
 
 const PANEL_URL = chrome.runtime.getURL('panel.html');
@@ -138,7 +138,7 @@ async function ytStart(mode) {
     if (!tab) return { ok: false, reason: 'no-playlist-tab' };
   } else {
     // « toutes les playlists » : un onglet DÉDIÉ en arrière-plan (on ne détourne jamais l'onglet où tu regardes une vidéo)
-    tab = await chrome.tabs.create({ url: 'https://www.youtube.com/feed/playlists', active: false });
+    tab = await chrome.tabs.create({ url: mode === 'history' ? 'https://www.youtube.com/feed/history' : 'https://www.youtube.com/feed/playlists', active: false });
     ytAutoTab = tab.id;
     for (let i = 0; i < 40; i++) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -147,7 +147,7 @@ async function ytStart(mode) {
     }
   }
   for (let i = 0; i < 10; i++) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode }); return { ok: true }; }
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
     catch { await new Promise((r) => setTimeout(r, 1000)); }
   }
   return { ok: false, reason: 'no-content-script' };
@@ -182,8 +182,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (!m.has(msg.playlist.id)) m.set(msg.playlist.id, new Set());
         for (const it of items) m.get(msg.playlist.id).add(it.id);
       }
-      putVideos(items).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } });
+      putVideos(items).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } broadcast({ type: 'tweetsUpdated' }); });
       return false;
+    }
+    case 'ytHistory': {
+      const items = msg.videos.map((v) => toHistoryItem(v, v.day || null));
+      putHistory(items).then((fresh) => {
+        if (fresh) { broadcast({ type: 'tweetsAdded', added: fresh }); kickIndexing(); }
+        broadcast({ type: 'tweetsUpdated' }); // des vidéos déjà connues ont pu recevoir un « vu le … »
+        sendResponse({ fresh });
+      }, () => sendResponse({ fresh: null }));
+      return true;
     }
     case 'ytPlaylists': {
       getMeta('ytPlaylists').then(async (cur) => {

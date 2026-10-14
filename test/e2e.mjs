@@ -45,7 +45,25 @@ const PLAYLISTS = { WL: ['w1', 'w2', 'w3'], LL: ['l1'], PL1: ['w1', 'p2'], PL2: 
 let ytDrop = null; // vidéo retirée de TOUTES les playlists (simule « retirée côté YouTube »)
 const ytLog = [];
 const ytItems = (pid) => PLAYLISTS[pid].filter((v) => v !== ytDrop).map((v, i) => pvr(v, V[v][0], V[v][1], i + 1));
+// historique : 4 pages (HP1 -> HC1 -> HC2 -> HC3), groupées par jour avec les libellés français de YouTube
+const DAYS_FR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+const dayLabel = (n) => n === 0 ? "Aujourd'hui" : n === 1 ? 'Hier' : DAYS_FR[new Date(Date.now() - n * 864e5).getDay()];
+const dayIso = (n) => { const d = new Date(Date.now() - n * 864e5); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+Object.assign(V, { h2: ['Histoire de Rome en 10 minutes', 'Hist Chan'], h4: ['Conférence sur la mémoire', 'Hist Chan'], h5: ['Tutoriel pâtes fraîches', 'Cuisine Fun'], h6: ['Nouveauté du jour : zorglub', 'Hist Chan'], h7: ['Vieux sujet oublié', 'Hist Chan'] });
+let histNew = false;
+const vrd = (id, pct) => ({ videoRenderer: { videoId: id, title: run(V[id][0]), ownerText: { runs: [{ text: V[id][1], navigationEndpoint: { browseEndpoint: { browseId: 'UCh', canonicalBaseUrl: '/@' + V[id][1].toLowerCase().replace(/\s+/g, '-') } } }] },
+  lengthText: { simpleText: '8:00' }, viewCountText: { simpleText: '5 000 vues' }, thumbnail: { thumbnails: [{ url: 'https://llm.test/card.png' }] },
+  thumbnailOverlays: pct ? [{ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: pct } }] : [] } });
+const hsec = (n, ...ids) => ({ itemSectionRenderer: { header: { itemSectionHeaderRenderer: { title: { simpleText: dayLabel(n) } } }, contents: ids.map((i) => (Array.isArray(i) ? vrd(...i) : vrd(i))) } });
+const histPage = (b) => {
+  if (b.browseId === 'FEhistory') return { contents: [hsec(0, ...(histNew ? ['h6'] : []), ['w1', 60], 'h2'), hsec(1, 'l1'), cont('HC1')] };
+  if (b.continuation === 'HC1') return { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: [hsec(2, 'h4'), cont('HC2')] } }] };
+  if (b.continuation === 'HC2') return { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: [hsec(3, 'h5'), cont('HC3')] } }] };
+  if (b.continuation === 'HC3') return { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: [hsec(4, 'h7')] } }] };
+  return null;
+};
 const ytBrowse = (b) => {
+  const hp = histPage(b); if (hp) return hp;
   if (b.continuation === 'LISTCONT') return { contents: [grid('PL3', 'Musique', 1)] };
   if (b.continuation === 'WLC') return { contents: ytItems('WL').slice(2) };
   const pid = (b.browseId || '').slice(2);
@@ -586,7 +604,42 @@ await panel.waitForTimeout(500);
 assert.equal(await panel.locator('.tw.yt').count(), 0, 'vidéo retirée : plus dans la recherche');
 await panel.fill('#q', 'pain au levain');
 await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'une vidéo encore dans une autre playlist reste', 6000);
+await waitFor(async () => (await panel.locator('.tw.yt .chip-pl').allInnerTexts()).join() === 'Cuisine', 'chip Cuisine', 6000);
 assert.deepEqual(await panel.locator('.tw.yt .chip-pl').allInnerTexts(), ['Cuisine'], 'seule l’appartenance retirée disparaît');
+await panel.fill('#q', '');
+
+// ------------------------------------------------------------------ 11c. YouTube : historique de visionnage (4 pages), badges, filtres, synchro incrémentale
+ytLog.length = 0;
+await panel.click('#yt-hist');
+await panel.waitForFunction(() => /historique terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
+assert.match(await panel.locator('#progress').innerText(), /9 visionnages lus, 4 nouveaux|\d+ visionnages lus, \d+ nouveaux/);
+await panel.waitForFunction(() => /10 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+const hlog = () => ytLog.map((l) => l.body.browseId === 'FEhistory' ? 'FEhistory' : l.body.continuation).filter((x) => x === 'FEhistory' || /^HC/.test(x));
+assert.deepEqual(hlog(), ['FEhistory', 'HC1', 'HC2', 'HC3'], 'toutes les pages de l’historique sont lues');
+await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé (historique)', 15000);
+// badge « Vu » et barre de progression sur une vidéo déjà dans une playlist
+await panel.fill('#q', 'cerveau');
+await waitFor(async () => /Le cerveau expliqué/.test(await panel.locator('.tw.yt').first().innerText().catch(() => '')), 'cerveau (historique)', 8000);
+const wv = panel.locator('.tw.yt').first();
+await waitFor(async () => (await wv.locator('.yt-w').count()) > 0, 'badge « Vu » (rechargement de l’index)', 10000);
+assert.match(await wv.locator('.yt-w').innerText(), new RegExp('Vu le ' + dayIso(0) + ' · 60 %'));
+assert.equal(await wv.locator('.prog i').evaluate((e) => e.style.width), '60%');
+assert.deepEqual((await wv.locator('.chip-pl').allInnerTexts()).sort(), ['Neurosciences', 'À regarder plus tard'], 'l’historique n’efface pas les playlists');
+// filtres
+const count = async (q, n, msg) => { await panel.fill('#q', q); await waitFor(async () => (await panel.locator('.tw').count()) === n, msg + ' : ' + n, 8000); };
+await count('viewed:yes', 6, 'viewed:yes');
+await count('viewed:no playlist:"à regarder plus tard"', 1, 'à regarder et pas encore vu');
+assert.match(await panel.locator('.tw').first().innerText(), /Rust async/);
+await count('watched:today', 2, 'watched:today');
+await count('watched:' + dayIso(2), 1, 'watched:<jour>');
+await count('mémoire viewed:yes', 1, 'recherche dans l’historique');
+// synchro incrémentale : une nouveauté en tête ; on s’arrête dès qu’on retombe sur du connu (la dernière page n’est pas demandée)
+histNew = true; ytLog.length = 0;
+await panel.fill('#q', '');
+await panel.click('#yt-hist');
+await panel.waitForFunction(() => /historique terminé/.test(document.getElementById('progress').textContent) && /11 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 90000 });
+assert.deepEqual(hlog(), ['FEhistory', 'HC1', 'HC2'], 'synchro incrémentale : arrêt avant la dernière page : ' + hlog());
+await count('zorglub', 1, 'nouvelle vidéo de l’historique');
 await panel.fill('#q', '');
 
 // ------------------------------------------------------------------ 12. mode sombre + page de statistiques (jeu de données synthétique : 300 tweets sur 100 jours)

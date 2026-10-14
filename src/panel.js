@@ -223,7 +223,9 @@ async function run(opts = {}) {
   }
 
   // Reclassement des 20 meilleurs : Jev (modèle de décision) en priorité, sinon un LLM (facultatif).
-  if (settings.decisionRerank && decisionReady(settings) && rows.length > 1) {
+  const histInTop = !settings.aiHistory && rows.slice(0, 20).some(([r]) => !sendable(index.tweets[r])); // pas d'envoi de l'historique à une IA externe
+  if (histInTop) label += ' · reclassement IA ignoré (historique protégé)';
+  else if (settings.decisionRerank && decisionReady(settings) && rows.length > 1) {
     try {
       const top = rows.slice(0, 20);
       const sc = await jevRerank(settings.decision, text, top.map(([r]) => decodeEntities(index.tweets[r].text)));
@@ -397,11 +399,14 @@ function videoCard([row], terms, pos) {
   if (pos < 12) el.id = 't-' + (pos + 1);
   const meta = [t.viewsText, t.publishedText].filter(Boolean).join(' · ');
   const pls = (t.playlists || []).filter((p) => p.title).slice(0, 4);
+  const wd = t.watched || [];
+  const seen = wd.length ? `<div class="yt-w" title="${esc(wd.join(', '))}">Vu le ${esc(wd[wd.length - 1])}${wd.length > 1 ? ` · ×${wd.length}` : ''}${t.progress ? ` · ${t.progress} %` : ''}</div>` : '';
   el.innerHTML = `
-    <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}</div>
+    <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}${t.progress ? `<span class="prog"><i style="width:${Math.min(100, t.progress)}%"></i></span>` : ''}</div>
     <div class="yt-b">
       <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}</div>
       <div class="yt-m"><a href="#" data-q="${esc('from:@' + t.handle)}" title="Voir les vidéos de cette chaîne">${esc(t.name || t.handle)}</a>${meta ? ' · ' + esc(meta) : ''}</div>
+      ${seen}
       ${pls.length ? `<div class="yt-pl">${pls.map((p) => `<button class="chip-pl" type="button" data-q="${esc(`playlist:"${p.title}"`)}" title="Voir cette playlist">${esc(p.title)}</button>`).join('')}</div>` : ''}
       <div class="ac"><a href="${esc(t.url)}" target="_blank" rel="noopener" style="color:var(--acc);text-decoration:none">Ouvrir sur YouTube ↗</a>
         ${index.hasVec[row] ? '<button class="ghost sim">≈ Similaires</button>' : ''}${last.why?.get(row) ? `<span class="why">${esc(last.why.get(row))}</span>` : ''}</div>
@@ -718,7 +723,7 @@ async function nameThemesWithAI() {
   $('mode').textContent = 'Nommage des thèmes par l’IA…';
   const groups = Array.from({ length: themes.k }, () => []);
   themes.rows.forEach((row, i) => groups[themes.assign[i]].push(row));
-  const payload = groups.map((rows, c) => ({ terms: themes.labels[c], samples: rows.slice(0, 5).map((r) => decodeEntities(index.tweets[r].text).replace(/\s+/g, ' ').slice(0, 140)) }));
+  const payload = groups.map((rows, c) => ({ terms: themes.labels[c], samples: rows.filter((r) => sendable(index.tweets[r])).slice(0, 5).map((r) => decodeEntities(index.tweets[r].text).replace(/\s+/g, ' ').slice(0, 140)) }));
   try {
     const out = parseJsonLoose(await chat(settings.llm, themeNamesMessages(payload), { json: true }));
     if (Array.isArray(out.names)) themes.names = out.names;
@@ -738,13 +743,15 @@ function showAnswer(html, sourcesNote) {
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
   }));
 }
+// Vie privée : l'historique de visionnage ne part vers une IA externe que si tu l'as autorisé.
+const sendable = (t) => settings.aiHistory || !isVideoItem(t) || !(t.watched || []).length || (t.playlists || []).length > 0;
 async function ask() {
   if (!llmReady(settings)) return openSettings();
   const question = $('q').value.trim();
   if (!question) return;
   showAnswer('<p>Réflexion…</p>');
   await run();
-  const src = last.rows.slice(0, 12).map(([r]) => index.tweets[r]);
+  const src = last.rows.slice(0, 12).map(([r]) => index.tweets[r]).filter(sendable);
   if (!src.length) return showAnswer('<p>Aucun tweet trouvé pour répondre.</p>');
   try {
     const out = await chat(settings.llm, askMessages(question, src));
@@ -757,8 +764,8 @@ $('digest').onclick = async () => {
   const week = Date.now() - 7 * 86_400_000;
   let rows = index.tweets.map((t, i) => [t, i]).filter(([t]) => t.createdAt && Date.parse(t.createdAt) >= week).map(([, i]) => i);
   let label = 'les 7 derniers jours';
-  if (rows.length < 5) { rows = index.recentRows().slice(0, 30); label = 'tes 30 derniers bookmarks'; }
-  rows = rows.sort((a, b) => (index.tweets[b].stats?.likes || 0) - (index.tweets[a].stats?.likes || 0)).slice(0, 40);
+  if (rows.length < 5) { rows = index.recentRows().filter((r) => sendable(index.tweets[r])).slice(0, 30); label = 'tes 30 derniers bookmarks'; }
+  rows = rows.filter((r) => sendable(index.tweets[r])).sort((a, b) => (index.tweets[b].stats?.likes || 0) - (index.tweets[a].stats?.likes || 0)).slice(0, 40);
   showRows(rows, `📰 Résumé : ${label}`);
   showAnswer('<p>Rédaction du résumé…</p>');
   try {
@@ -795,6 +802,12 @@ $('yt-sync').onclick = async () => {
   if (!res?.ok) $('progress').textContent = 'YouTube : impossible de démarrer (' + (res?.reason || 'erreur') + '). Vérifie que tu es connecté à YouTube.';
 };
 
+$('yt-hist').onclick = async () => {
+  $('progress').textContent = 'YouTube : ouverture de l’historique en arrière-plan…';
+  const res = await chrome.runtime.sendMessage({ type: 'q:ytSync', mode: 'history' });
+  if (!res?.ok) $('progress').textContent = 'YouTube : impossible de démarrer (' + (res?.reason || 'erreur') + '). Vérifie que tu es connecté à YouTube.';
+};
+
 if (embed) {
   document.body.classList.add('embed');
   $('close').hidden = false;
@@ -815,6 +828,8 @@ async function openSettings() {
   $('opt-links').checked = settings.enrichLinks;
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
+  $('yt-days').value = String(settings.ytHistoryDays);
+  $('ai-history').checked = settings.aiHistory;
   $('compute').value = settings.compute;
   $('opt-autoindex').checked = settings.indexMode === 'auto';
   pollStatus();
@@ -911,6 +926,8 @@ $('mem-free').onclick = async () => {
 };
 $('compute').onchange = async (e) => { settings = await setSettings({ compute: e.target.value }); };
 $('opt-linkimg').onchange = async (e) => { settings = await setSettings({ linkImages: e.target.checked }); render(); };
+$('yt-days').onchange = async (e) => { settings = await setSettings({ ytHistoryDays: +e.target.value }); };
+$('ai-history').onchange = async (e) => { settings = await setSettings({ aiHistory: e.target.checked }); };
 $('opt-auto').onchange = async (e) => { settings = await setSettings({ autoSync: e.target.checked }); };
 $('reindex').onclick = async () => {
   if (!confirm('Recalculer tous les vecteurs ? (quelques minutes, en arrière-plan)')) return;
@@ -1101,6 +1118,7 @@ function scheduleReload(delay = 3000, full = false) {
 chrome.runtime.onMessage.addListener((m) => {
   switch (m.type) {
     case 'tweetsAdded': scheduleReload(); break;
+    case 'tweetsUpdated': scheduleReload(1500, true); break;
     case 'tweetsEnriched': scheduleReload(500, true); pollStatus(); break;
     case 'tweetsRemoved': scheduleReload(200, true); renderBanners(); break;
     case 'orphans': case 'parseWarning': renderBanners(); break;
@@ -1114,9 +1132,9 @@ chrome.runtime.onMessage.addListener((m) => {
       if (m.state === 'playlist-done') break;
       const running = m.state === 'running';
       $('stop').hidden = !running;
-      $('yt-sync').hidden = running;
-      $('progress').textContent = { running: `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
-        done: `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
+      $('yt-sync').hidden = $('yt-hist').hidden = running;
+      $('progress').textContent = { running: m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
+        done: m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
       break;
     }
     case 'backfillProgress': {

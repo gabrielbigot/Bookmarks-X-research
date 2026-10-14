@@ -203,6 +203,22 @@ export async function putVideos(items) {
   return added;
 }
 
+// Historique : retourne le nombre de NOUVEAUX couples (vidéo, jour) — sert à arrêter une synchro incrémentale.
+export async function putHistory(items) {
+  if (!items.length) return 0;
+  const db = await openDb();
+  const tx = db.transaction('tweets', 'readwrite');
+  const store = tx.objectStore('tweets');
+  let fresh = 0;
+  await Promise.all(items.map(async (it) => {
+    const old = await wrap(store.get(it.id));
+    if (it.watched?.length ? !(old?.watched || []).includes(it.watched[0]) : !old) fresh++;
+    store.put({ ...mergeVideo(old, it), capturedAt: old?.capturedAt ?? Date.now() });
+  }));
+  await done(tx);
+  return fresh;
+}
+
 // Après une synchro COMPLÈTE d'une playlist : retire l'appartenance des vidéos qui n'y sont plus.
 // Retourne les ids des vidéos qui ne sont plus dans AUCUNE playlist (à proposer à la suppression).
 export async function reconcilePlaylist(playlistId, seenIds) {
@@ -216,7 +232,7 @@ export async function reconcilePlaylist(playlistId, seenIds) {
     if (t) {
       t.playlists = (t.playlists || []).filter((p) => p.id !== playlistId);
       store.put(t);
-      if (!t.playlists.length) orphans.push(id);
+      if (!t.playlists.length && !(t.watched || []).length) orphans.push(id);
     }
     await done(tx);
   }

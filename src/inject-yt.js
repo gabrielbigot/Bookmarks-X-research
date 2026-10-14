@@ -1,6 +1,6 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
-import { parseYoutube } from './lib/youtube.js';
+import { parseYoutube, parseHistoryHeader } from './lib/youtube.js';
 
 const TAG = 'xbs-yt';
 const BROWSE_RE = /\/youtubei\/v1\/browse(\?|$)/;
@@ -11,6 +11,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const contMap = new Map(); // jeton de pagination -> id de playlist (les suites n'indiquent pas la playlist)
 const titles = new Map(); // id de playlist -> titre
 let currentRun = null, busy = false, stopFlag = false;
+const histConts = new Set(); // jetons de pagination de l'historique
+const waiters = new Map(); // nonce -> résolution de l'accusé de réception (nombre de nouveaux visionnages)
+let nonceN = 0;
 let listCont = null; // pagination de la liste des playlists (/feed/playlists)
 const known = new Map(); // playlists découvertes (id -> {id,title,count})
 const safeJson = (s) => { try { return JSON.parse(s); } catch { return null; } };
@@ -19,6 +22,8 @@ const listParam = () => new URLSearchParams(location.search).get('list');
 // Interprète une réponse. `body` = corps de la requête (browseId / continuation) ou null.
 function handle(json, body) {
   let r;
+  const hist = body?.browseId === 'FEhistory' || (body?.continuation && histConts.has(body.continuation)) || (!body && location.pathname === '/feed/history');
+  if (hist) return handleHistory(json);
   try { r = parseYoutube(json); } catch (e) { post('error', { message: 'lecture : ' + e.message }); return null; }
   let pid = null;
   const bid = body?.browseId;
@@ -37,6 +42,21 @@ function handle(json, body) {
   if (r.unparsed && !r.videos.length) post('warn', { unparsed: r.unparsed });
   return { ...r, pid };
 }
+
+// Historique : vidéos groupées par jour. Chaque capture reçoit un accusé du service worker (nombre de nouveaux couples vidéo/jour).
+function handleHistory(json) {
+  let r;
+  try { r = parseYoutube(json, { history: true }); } catch (e) { post('error', { message: 'lecture historique : ' + e.message }); return null; }
+  if (r.continuation) histConts.add(r.continuation);
+  const days = new Map();
+  const videos = r.videos.map((v) => { if (!days.has(v.label)) days.set(v.label, parseHistoryHeader(v.label)); return { ...v, day: days.get(v.label) }; });
+  const nonce = ++nonceN;
+  if (videos.length) post('history', { videos, runId: currentRun, nonce });
+  if (r.unparsed && !videos.length) post('warn', { unparsed: r.unparsed });
+  const known = videos.map((v) => v.day).filter(Boolean).sort();
+  return { ...r, videos, hist: true, nonce, oldestDay: known[0] || null, unknownDays: videos.some((v) => !v.day) };
+}
+const ackP = (nonce) => new Promise((res) => { waiters.set(nonce, res); setTimeout(() => { if (waiters.delete(nonce)) res(null); }, 20000); });
 
 // ---- interception passive ----
 window.fetch = function (input, init) {
@@ -112,6 +132,42 @@ async function syncPlaylist(pid, title, label) {
   return { count, complete: !stopFlag && gotAny && !body };
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+// Remonte l'historique jusqu'à `days` jours (0 = tout) ; s'arrête si 2 pages de suite n'apportent rien de nouveau.
+async function runHistory(days) {
+  if (busy) return;
+  busy = true; stopFlag = false; currentRun = String(Date.now());
+  const cutoff = days > 0 ? ymd(new Date(Date.now() - days * 864e5)) : null;
+  let body = { browseId: 'FEhistory' }, pages = 0, count = 0, fresh = 0, idle = 0, day = null, gotAny = false;
+  progress('running', { history: true, pages: 0, count: 0 });
+  try {
+    while (body && !stopFlag && pages < 600) {
+      const { json } = await browse(body);
+      const r = handle(json, body);
+      pages++;
+      if (!r) break;
+      count += r.videos.length; if (r.videos.length) gotAny = true;
+      if (r.oldestDay) day = r.oldestDay;
+      const n = r.videos.length ? await ackP(r.nonce) : 0;
+      if (n === null) idle = 0; else { fresh += n; idle = n === 0 ? idle + 1 : 0; }
+      progress('running', { history: true, pages, count, day });
+      if (idle >= 2) break; // on a rejoint ce qu'on connaissait déjà
+      if (cutoff && r.oldestDay && r.oldestDay < cutoff) break;
+      body = r.continuation ? { continuation: r.continuation } : null;
+      if (body) await sleep(1000 + Math.random() * 1500);
+    }
+    if (!gotAny && !stopFlag) progress('error', { message: 'Historique vide ou illisible (historique de visionnage désactivé sur ton compte YouTube ?).' });
+    else progress(stopFlag ? 'stopped' : 'done', { history: true, total: count, fresh });
+  } catch (e) {
+    const forbidden = e instanceof HttpError && (e.status === 401 || e.status === 403);
+    progress('error', { message: forbidden ? `YouTube a refusé la requête (${e.message}) : ouvre youtube.com/feed/history et défile, les vidéos seront capturées au passage.` : e.message });
+  } finally {
+    busy = false; currentRun = null;
+  }
+}
+
 async function listUserPlaylists() {
   // Les playlists de l'utilisateur sont lues sur /feed/playlists (données initiales + pagination).
   readInitial();
@@ -174,7 +230,9 @@ window.addEventListener('load', () => {
 window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG + '-ctl') return;
   const d = ev.data;
-  if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll());
+  if (d.type === 'histAck') { const w = waiters.get(d.nonce); if (w) { waiters.delete(d.nonce); w(d.fresh ?? null); } }
+  if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
+  else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll());
   if (d.type === 'stop') stopFlag = true;
   if (d.type === 'ping') post('pong', { path: location.pathname, ready: !!cfg('INNERTUBE_CONTEXT'), busy });
 });

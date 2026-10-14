@@ -4,7 +4,7 @@ Extension Chrome / Comet (Chromium, Manifest V3) qui ajoute une **recherche sém
 Par défaut tout est **local** : pas de serveur, pas de base de données externe, pas de clé API, coût = 0 €.
 Les fonctions d'IA, l'indexation des liens et la recherche d'images sont **facultatives** et désactivées tant que tu ne les actives pas.
 
-## YouTube : playlists (v0.3)
+## YouTube : playlists et historique (v0.4)
 
 Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**) sont une deuxième source, cherchée **avec** tes bookmarks X (« cerveau » trouve tweets et vidéos).
 
@@ -12,7 +12,14 @@ Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**)
 - **Chercher** : cartes vidéo (miniature, durée, chaîne, vues, playlists). Filtre « Source » (Tout / X / YouTube), opérateurs `source:youtube`, `playlist:"à regarder plus tard"`, `from:@chaine`.
 - **Retraits** : après une synchro complète d'une playlist, une vidéo qui n'y est plus perd cette appartenance ; si elle n'est plus dans aucune playlist, elle t'est proposée à la suppression (jamais sans confirmation).
 - **Indexation** : manuelle comme pour X (« ▶ Indexer »). Titre + chaîne + playlists sont indexés.
-- **Limites** : tout est testé contre un faux YouTube (format `playlistVideoRenderer` **et** `lockupViewModel`) ; le format réel change souvent, un bandeau t'avertit si des vidéos deviennent illisibles. La synchro rejoue l'API interne avec ta session (`youtubei/v1/browse`, en-tête signé `SAPISIDHASH`) ; en cas de refus (HTTP 401/403), ouvre la playlist et défile : la capture passive prend le relais. Pas encore : historique des vidéos, import Google Takeout, transcriptions, statistiques YouTube.
+- **Limites** : tout est testé contre un faux YouTube (format `playlistVideoRenderer` **et** `lockupViewModel`) ; le format réel change souvent, un bandeau t'avertit si des vidéos deviennent illisibles. La synchro rejoue l'API interne avec ta session (`youtubei/v1/browse`, en-tête signé `SAPISIDHASH`) ; en cas de refus (HTTP 401/403), ouvre la playlist et défile : la capture passive prend le relais. Pas encore : import Google Takeout, transcriptions, statistiques YouTube.
+
+**Historique de visionnage** (`youtube.com/feed/history`)
+
+- **Synchroniser** : panneau › « ▶ Historique YouTube » (onglet en arrière-plan, refermé ensuite) ou pastille « Historique » sur YouTube. Profondeur réglable dans ⚙ (30 j / 90 j / 1 an / tout, 90 j par défaut). Les synchros suivantes sont **incrémentales** : on s'arrête dès que deux pages de suite ne contiennent plus rien de nouveau.
+- **Chercher** : l'historique est indexé comme les playlists (titre, chaîne, début de la description). Cartes : « Vu le … · ×N · 60 % » et barre de progression sur la miniature. Opérateurs : `viewed:yes` / `viewed:no` (ou `vu:oui|non`), `watched:aujourd'hui`, `watched:2026-10-12`, `watched:2026-10-01..2026-10-31`. Exemple utile : `viewed:no playlist:"à regarder plus tard"` = ce que tu n'as pas encore regardé.
+- **Vie privée** : tout reste local. L'historique n'est **jamais envoyé** à une IA externe (Demander, Résumé, reclassement, nommage des thèmes) tant que tu ne coches pas « Autoriser l'envoi de mon historique… » dans ⚙. L'export de sauvegarde le contient : chiffre-le.
+- **Limites** : les jours sont lus dans les en-têtes de YouTube (« Aujourd'hui », « Hier », « lundi », « 12 octobre » — français et anglais) ; une langue non reconnue donne des visionnages sans date. Une vidéo vue plusieurs jours garde la liste de ses jours ; un visionnage supprimé côté YouTube n'est pas retiré ici. Testé contre un faux YouTube seulement.
 
 ## Ce que ça fait
 
