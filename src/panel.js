@@ -88,6 +88,11 @@ function maskFor(filters) {
   return m;
 }
 
+// Équilibre mots exacts ↔ sens. En « sens d'abord », l'ordre sémantique domine et les mots exacts ne font que
+// remonter légèrement un résultat : c'est ce qui permet de retrouver « brain » en cherchant « cerveau ».
+const BLEND = { semantic: [10, 0.1], keywords: [0.6, 1.5] };
+const weightsFor = (long) => BLEND[view.blend] || (long ? [1.5, 0.7] : [1, 1]);
+
 // Recherche hybride sans rendu (utilisée par l'interface et par le banc d'essai).
 async function coreSearch(text, allowed, { mode = 'hybrid', weights, limit = 200 } = {}) {
   const kw = index.bm25(text, allowed, limit);
@@ -96,7 +101,7 @@ async function coreSearch(text, allowed, { mode = 'hybrid', weights, limit = 200
   const sem = index.vector(qv, allowed, limit);
   if (mode === 'sem') return { rows: sem, kw, sem };
   const long = contentWords(text) >= 3; // phrase libre : on se fie davantage au sens qu'aux mots exacts
-  return { rows: rrf([sem, kw], weights || (long ? [1.5, 0.7] : [1, 1])), kw, sem };
+  return { rows: rrf([sem, kw], weights || weightsFor(long)), kw, sem };
 }
 
 const sortRows = (rows, how) => sortRowsBy(rows, index.tweets, how);
@@ -484,7 +489,7 @@ function render() {
 // ---------- affichage : liste / grille, bandeau replié ----------
 bindThemeButton($('theme'));
 const VKEY = 'xbs.view';
-const view = (() => { try { return { mode: 'list', cols: 3, folded: false, ...JSON.parse(localStorage.getItem(VKEY) || '{}') }; } catch { return { mode: 'list', cols: 3, folded: false }; } })();
+const view = (() => { try { return { mode: 'list', cols: 3, folded: false, blend: 'balanced', ...JSON.parse(localStorage.getItem(VKEY) || '{}') }; } catch { return { mode: 'list', cols: 3, folded: false, blend: 'balanced' }; } })();
 if (embed) view.mode = 'list';
 const saveView = () => { try { localStorage.setItem(VKEY, JSON.stringify(view)); } catch {} };
 function applyView() {
@@ -492,6 +497,7 @@ function applyView() {
   document.body.classList.toggle('compact', view.folded);
   $('fold').title = view.folded ? 'Déplier les filtres (Alt+F)' : 'Replier les filtres (Alt+F)';
   $('view').value = view.mode === 'grid' ? String(view.cols) : 'list';
+  $('blend').value = view.blend;
   // colonnes réellement affichées : pas plus que ce que la largeur permet (~320 px minimum par carte)
   const eff = view.mode === 'grid' ? Math.max(1, Math.min(view.cols, Math.floor(document.body.clientWidth / 320))) : 1;
   document.documentElement.style.setProperty('--cols', eff);
@@ -501,6 +507,7 @@ $('view').onchange = (e) => {
   else { view.mode = 'grid'; view.cols = Number(e.target.value); }
   saveView(); applyView();
 };
+$('blend').onchange = (e) => { view.blend = e.target.value; saveView(); run(); };
 $('fold').onclick = () => { view.folded = !view.folded; saveView(); applyView(); };
 window.addEventListener('resize', applyView);
 document.addEventListener('keydown', (e) => { if (e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); $('fold').click(); } });
@@ -992,6 +999,7 @@ $('bench-run').onclick = async () => {
       { name: 'Hybride 1 : 1', mode: 'hybrid', weights: [1, 1] },
       { name: 'Hybride 1,5 : 0,7 (défaut phrases)', mode: 'hybrid', weights: [1.5, 0.7] },
       { name: 'Hybride 0,7 : 1,5', mode: 'hybrid', weights: [0.7, 1.5] },
+      { name: 'Sens d’abord (10 : 0,1) — réglage « 🌐 Sens d’abord »', mode: 'hybrid', weights: BLEND.semantic },
     ] : []),
   ];
   out.textContent = 'Calcul…';

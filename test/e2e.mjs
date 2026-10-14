@@ -229,6 +229,11 @@ assert.match(await panel.locator('#mode').innerText(), /Pas assez de bookmarks i
 await panel.evaluate(async () => {
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const tx = db.transaction(['tweets', 'vectors'], 'readwrite');
+  { // un tweet qui contient le MOT « alpha » mais dont le vecteur est celui du thème « gamma » (axe 2)
+    const v = new Float32Array(256); v[2] = 1;
+    tx.objectStore('tweets').put({ id: 'kw0', text: 'zorglub terme littéral hors sujet', name: 'Kw', handle: 'kw', links: [], media: [], stats: {}, createdAt: '2026-08-02T10:00:00.000Z', sortIndex: '299', url: 'https://x.com/kw/status/kw0', capturedAt: Date.now() });
+    tx.objectStore('vectors').put({ id: 'kw0', vec: v, model: 'onnx-community/embeddinggemma-300m-ONNX' });
+  }
   for (let i = 0; i < 6; i++) { // 2 tweets par thème (axes 0, 1, 2), vecteurs du modèle par défaut
     const g = i % 3, id = 'sem' + i, v = new Float32Array(256); v[g] = 1;
     tx.objectStore('tweets').put({ id, text: `sujet ${['alpha', 'beta', 'gamma'][g]} numéro ${i}`, name: 'Sem', handle: 'sem', links: [], media: [], stats: {}, createdAt: '2026-08-02T10:00:00.000Z', sortIndex: String(300 - i), url: 'https://x.com/sem/status/' + id, capturedAt: Date.now() });
@@ -237,7 +242,7 @@ await panel.evaluate(async () => {
   await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 });
 await panel.reload();
-await panel.waitForFunction(() => /6 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+await panel.waitForFunction(() => /7 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
 await panel.evaluate(() => { // le « modèle » répond comme si la requête était proche de l'axe 1 (« beta »)
   const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
   chrome.runtime.sendMessage = (m, ...r) => (m?.type === 'q:embed' ? Promise.resolve({ vec: Array.from({ length: 256 }, (_, i) => (i === 1 ? 1 : 0)), model: 'gemma1' }) : orig(m, ...r));
@@ -246,11 +251,21 @@ await panel.fill('#q', 'zzqqxx idée sans mot commun');
 await waitFor(async () => /Hybride/.test(await panel.locator('#mode').innerText()), 'recherche hybride (voie sémantique)', 10000);
 assert.match(await panel.locator('.tw').first().innerText(), /beta/, 'le résultat le plus proche en vecteur arrive en premier');
 assert.ok(!/modèle indisponible/.test(await panel.locator('#mode').innerText()), 'pas d’erreur « modèle indisponible »');
+// Équilibre : requête « zorglub » dont le sens (axe 1 simulé) pointe vers « beta », mais dont le MOT n'est que dans « kw0 »
+await panel.fill('#q', 'zorglub');
+await waitFor(async () => /zorglub terme littéral/.test((await panel.locator('.tw').first().innerText().catch(() => '')) || ''), 'équilibré : le mot exact + un peu de sens passe en premier', 10000);
+await panel.selectOption('#blend', 'semantic');
+await waitFor(async () => /beta/.test(await panel.locator('.tw').first().innerText()), 'sens d’abord : le résultat le plus proche en vecteur passe devant', 8000);
+await panel.selectOption('#blend', 'keywords');
+await waitFor(async () => /zorglub terme littéral/.test(await panel.locator('.tw').first().innerText()), 'mots exacts d’abord', 8000);
+assert.equal((await panel.evaluate(() => JSON.parse(localStorage.getItem('xbs.view')))).blend, 'keywords', 'réglage mémorisé');
+await panel.selectOption('#blend', 'balanced');
 await panel.fill('#q', '');
 await panel.evaluate(async () => { // nettoyage : ces tweets de test ne doivent pas fausser la suite
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const tx = db.transaction(['tweets', 'vectors'], 'readwrite');
   for (let i = 0; i < 6; i++) { tx.objectStore('tweets').delete('sem' + i); tx.objectStore('vectors').delete('sem' + i); }
+  tx.objectStore('tweets').delete('kw0'); tx.objectStore('vectors').delete('kw0');
   await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 });
 await panel.reload();

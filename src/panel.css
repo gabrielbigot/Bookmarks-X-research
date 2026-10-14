@@ -111,7 +111,9 @@ dialog::backdrop{background:#0008}
 .dlg button,.filebtn{font-size:13px;padding:5px 12px}
 .filebtn{display:inline-block;cursor:pointer;border-radius:999px;background:var(--fg);color:var(--bg);font-weight:700}
 .dlg button:disabled{opacity:.4;cursor:default}
-.chk{display:block;margin:6px 0;font-size:13.5px}
+.chk{display:flex;align-items:flex-start;gap:8px;margin:6px 0;font-size:13.5px;text-align:left}
+.chk input{flex:none;margin:3px 0 0}
+.chk>span{min-width:0}
 #bench-out table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
 #bench-out td,#bench-out th{border-bottom:1px solid var(--line);padding:4px 6px;text-align:right}
 #bench-out td:first-child,#bench-out th:first-child{text-align:left}

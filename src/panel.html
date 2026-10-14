@@ -36,6 +36,9 @@
         <select id="view" title="Affichage">
           <option value="list">▤ Liste</option><option value="2">▦ Grille ×2</option><option value="3">▦ Grille ×3</option><option value="4">▦ Grille ×4</option>
         </select>
+        <select id="blend" title="Équilibre entre mots exacts et sens (la recherche par le sens retrouve aussi les autres langues : « cerveau » ↔ « brain »)">
+          <option value="balanced">⚖ Sens + mots</option><option value="semantic">🌐 Sens d’abord (multilingue)</option><option value="keywords">🔤 Mots exacts d’abord</option>
+        </select>
         <select id="sort" title="Tri">
           <option value="relevance">Pertinence</option><option value="newest">Plus récents</option><option value="oldest">Plus anciens</option><option value="likes">Plus likés</option>
         </select>
@@ -75,7 +78,7 @@
         <div class="grid">
           <label>Mot de passe (optionnel, chiffre le fichier)<input id="bk-pass" type="password" autocomplete="new-password"></label>
         </div>
-        <label class="chk"><input type="checkbox" id="bk-vecs"> Inclure les vecteurs de la recherche sémantique (modèle actuel) <span class="hint">: évite de tout ré-indexer ailleurs ; fichier plus gros</span></label>
+        <label class="chk"><input type="checkbox" id="bk-vecs"><span>Inclure les vecteurs de la recherche sémantique (modèle actuel) <span class="hint">: évite de tout ré-indexer ailleurs ; fichier plus gros</span></span></label>
         <div class="btns">
           <button type="button" id="bk-export">Exporter</button>
           <label class="filebtn">Importer<input id="bk-import" type="file" accept=".json,.xbsbak" hidden></label>
@@ -101,8 +104,8 @@
           <label>Modèle<input id="dec-model" placeholder="typesafe/jev-1.13"></label>
           <label>Clé d'API OpenRouter<input id="dec-key" type="password" autocomplete="off"></label>
         </div>
-        <label class="chk"><input type="checkbox" id="dec-intent"> Comprendre mes requêtes avec Jev (tri, période, type)</label>
-        <label class="chk"><input type="checkbox" id="dec-rerank"> Reclasser les 20 meilleurs résultats avec Jev</label>
+        <label class="chk"><input type="checkbox" id="dec-intent"><span>Comprendre mes requêtes avec Jev (tri, période, type)</span></label>
+        <label class="chk"><input type="checkbox" id="dec-rerank"><span>Reclasser les 20 meilleurs résultats avec Jev</span></label>
         <div class="btns"><button type="button" id="dec-test">Enregistrer & tester</button></div>
         <p class="hint" id="dec-msg"></p>
       </section>
@@ -120,8 +123,8 @@
           <label>Modèle<input id="llm-model" placeholder="ex. anthropic/claude-haiku-4.5"></label>
           <label>Clé d'API<input id="llm-key" type="password" autocomplete="off"></label>
         </div>
-        <label class="chk"><input type="checkbox" id="ai-intent"> Comprendre mes requêtes avec l'IA (tri, auteur, dates)</label>
-        <label class="chk"><input type="checkbox" id="ai-rerank"> Reclasser les 20 meilleurs résultats avec l'IA</label>
+        <label class="chk"><input type="checkbox" id="ai-intent"><span>Comprendre mes requêtes avec l'IA (tri, auteur, dates)</span></label>
+        <label class="chk"><input type="checkbox" id="ai-rerank"><span>Reclasser les 20 meilleurs résultats avec l'IA</span></label>
         <div class="btns"><button type="button" id="llm-test">Enregistrer & tester</button></div>
         <p class="hint" id="llm-msg"></p>
       </section>
@@ -129,7 +132,7 @@
       <section>
         <h3>Indexation & mémoire</h3>
         <p class="hint">Par défaut l'indexation ne démarre que lorsque tu cliques sur « ▶ Indexer » : jamais toute seule au lancement du navigateur. Le calcul se fait sur le CPU (plus lent mais sans risque pour la mémoire). Le modèle est libéré toutes les ~1 000 tweets et après 10 min d'inactivité.</p>
-        <label class="chk"><input type="checkbox" id="opt-autoindex"> Indexer automatiquement (au démarrage et à chaque nouveau tweet) <span class="hint">: déconseillé si ton Mac peine</span></label>
+        <label class="chk"><input type="checkbox" id="opt-autoindex"><span>Indexer automatiquement (au démarrage et à chaque nouveau tweet) <span class="hint">: déconseillé si ton Mac peine</span></span></label>
         <div class="grid"><label>Calcul des embeddings<select id="compute"><option value="cpu">CPU (recommandé : mémoire prévisible)</option><option value="auto">GPU si possible (rapide, mais peut saturer la mémoire)</option></select></label></div>
         <div class="btns">
           <button type="button" id="idx-run">▶ Indexer maintenant</button>
@@ -141,10 +144,10 @@
 
       <section>
         <h3>Enrichissement</h3>
-        <label class="chk"><input type="checkbox" id="opt-links"> Indexer le titre et la description des pages liées <span class="hint">(demande l'accès aux sites ; lecture sans cookies)</span></label>
-        <label class="chk"><input type="checkbox" id="opt-linkimg"> Afficher l'image des cartes de liens <span class="hint">(l'image est chargée depuis le site du lien ; décoche pour ne contacter personne)</span></label>
-        <label class="chk"><input type="checkbox" id="opt-images"> Recherche dans les images <span class="hint">(expérimental, CLIP ~150 Mo, requêtes en anglais)</span></label>
-        <label class="chk"><input type="checkbox" id="opt-auto"> Récupérer les nouveautés automatiquement quand un onglet X est ouvert</label>
+        <label class="chk"><input type="checkbox" id="opt-links"><span>Indexer le titre et la description des pages liées <span class="hint">(demande l'accès aux sites ; lecture sans cookies)</span></span></label>
+        <label class="chk"><input type="checkbox" id="opt-linkimg"><span>Afficher l'image des cartes de liens <span class="hint">(l'image est chargée depuis le site du lien ; décoche pour ne contacter personne)</span></span></label>
+        <label class="chk"><input type="checkbox" id="opt-images"><span>Recherche dans les images <span class="hint">(expérimental, CLIP ~150 Mo, requêtes en anglais)</span></span></label>
+        <label class="chk"><input type="checkbox" id="opt-auto"><span>Récupérer les nouveautés automatiquement quand un onglet X est ouvert</span></label>
         <div class="btns"><button type="button" id="reindex">Tout réindexer</button></div>
       </section>
 
