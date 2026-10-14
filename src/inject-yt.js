@@ -97,7 +97,21 @@ async function sapisidHash() {
   return `SAPISIDHASH ${ts}_${[...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
-class HttpError extends Error { constructor(status) { super(`HTTP ${status}`); this.status = status; } }
+class HttpError extends Error { constructor(status, detail = '') { super(`HTTP ${status}${detail ? ' ' + detail : ''}`); this.status = status; } }
+
+const errDetail = async (res) => { try { const j = safeJson(await res.text()); return String(j?.error?.status || j?.error?.message || '').slice(0, 60); } catch { return ''; } };
+
+// Appel « client Android » : contexte minimal, sans cookies ni signature (ce client n'exige pas de jeton PO pour les sous-titres).
+async function androidPlayer(videoId) {
+  const web = cfg('INNERTUBE_CONTEXT')?.client || {};
+  const res = await origFetch('/youtubei/v1/player?prettyPrint=false&key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w', {
+    method: 'POST', credentials: 'omit',
+    headers: { 'content-type': 'application/json', 'x-youtube-client-name': '3', 'x-youtube-client-version': ANDROID.clientVersion },
+    body: JSON.stringify({ context: { client: { clientName: 'ANDROID', clientVersion: ANDROID.clientVersion, androidSdkVersion: 30, osName: 'Android', osVersion: '11', hl: web.hl || 'fr', gl: web.gl || 'FR' } }, videoId, contentCheckOk: true, racyCheckOk: true }),
+  });
+  if (!res.ok) throw new HttpError(res.status, await errDetail(res));
+  return res.json();
+}
 
 async function innertube(endpoint, body, { client } = {}) {
   let context = cfg('INNERTUBE_CONTEXT');
@@ -111,7 +125,7 @@ async function innertube(endpoint, body, { client } = {}) {
   const visitor = cfg('VISITOR_DATA'); if (visitor) headers['x-goog-visitor-id'] = visitor;
   const auth = await sapisidHash(); if (auth) headers.authorization = auth;
   const res = await origFetch(`/youtubei/v1/${endpoint}?prettyPrint=false${key ? '&key=' + encodeURIComponent(key) : ''}`, { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ context, ...body }) });
-  if (!res.ok) throw new HttpError(res.status);
+  if (!res.ok) throw new HttpError(res.status, await errDetail(res));
   return { json: await res.json(), body };
 }
 
@@ -183,7 +197,7 @@ async function trackSegments(track, why, tag) {
   for (const fmt of ['json3', '']) {
     try {
       const u = track.url + (fmt && !/[?&]fmt=/.test(track.url) ? '&fmt=' + fmt : '');
-      const res = await origFetch(u, { credentials: 'include' });
+      const res = await origFetch(u, { credentials: tag === 'android' ? 'omit' : 'include' });
       if (!res.ok) { why.push(`${tag}:timedtext-http-${res.status}`); continue; }
       const body = await res.text();
       if (!body) { why.push(`${tag}:timedtext-vide`); continue; }
@@ -202,13 +216,20 @@ async function fetchTranscript(videoId) {
     const next = await innertube('next', { videoId });
     const params = findTranscriptParams(next.json);
     if (!params) { noPanel = true; why.push('next:pas-de-panneau'); }
-    else { segs = parseTranscript((await innertube('get_transcript', { params })).json); if (!segs.length) why.push('get_transcript:vide'); }
+    else {
+      const variants = [...new Set([params, /%[0-9A-Fa-f]{2}/.test(params) ? decodeURIComponent(params) : null].filter(Boolean))];
+      for (const v of variants) {
+        try { segs = parseTranscript((await innertube('get_transcript', { params: v })).json); } catch (e) { if (rate(e)) throw e; why.push('get_transcript:' + e.message); }
+        if (segs.length) break;
+      }
+      if (!segs.length && !why.some((w) => w.startsWith('get_transcript'))) why.push('get_transcript:vide');
+    }
   } catch (e) { if (rate(e)) throw e; why.push('next/get_transcript:' + e.message); }
   if (!segs.length) {
     for (const [tag, client] of [['web', undefined], ['android', ANDROID]]) {
       tried++;
       try {
-        const pl = (await innertube('player', { videoId, contentCheckOk: true, racyCheckOk: true }, { client })).json;
+        const pl = client ? await androidPlayer(videoId) : (await innertube('player', { videoId, contentCheckOk: true, racyCheckOk: true })).json;
         const tracks = captionTracks(pl);
         const st = pl?.playabilityStatus?.status;
         if (!tracks.length) { noTracks++; why.push(`${tag}:aucune-piste${st && st !== 'OK' ? '(' + st + ')' : ''}`); continue; }

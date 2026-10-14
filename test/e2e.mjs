@@ -520,12 +520,12 @@ await waitFor(async () => /Tas JS : panneau \d+ Mo/.test(await panel.locator('#m
 await panel.click('#mem-free');
 await waitFor(async () => /en veille|actif/.test(await panel.locator('#mem-info').innerText()), 'libération mémoire', 8000);
 await panel.selectOption('#compute', 'auto');
-assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.compute, 'auto');
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.compute === 'auto', 'compute enregistré', 5000);
 await panel.selectOption('#compute', 'cpu');
 await panel.check('#opt-autoindex');
-assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode, 'auto');
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'auto', 'réglage indexMode', 5000);
 await panel.uncheck('#opt-autoindex');
-assert.equal((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode, 'manual');
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'manual', 'réglage indexMode', 5000);
 await panel.click('#idx-pause');
 await panel.keyboard.press('Escape');
 
@@ -672,7 +672,7 @@ await panel.click('#yt-tr');
 await panel.waitForFunction(() => /transcriptions terminées/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
 assert.match(await panel.locator('#progress').innerText(), /3 récupérées, 3 sans transcription/);
 assert.deepEqual(ytLog.filter((l) => l.body.ep === 'next').map((l) => l.body.videoId).sort(), ['c1', 'l1', 'm1', 'p2', 'w1', 'w3'], 'une requête « next » par vidéo de playlist (pas l’historique seul)');
-assert.ok(ytLog.every((l) => /^SAPISIDHASH/.test(l.auth)));
+assert.ok(ytLog.filter((l) => l.client !== '20.10.38').every((l) => /^SAPISIDHASH/.test(l.auth)), 'requêtes web signées ; le client Android n’envoie ni cookies ni signature');
 await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé (transcriptions)', 15000);
 // recherche par un mot qui n'est QUE dans la transcription : extrait daté + lien à la seconde près
 await panel.fill('#q', 'zorglubtranscript');
