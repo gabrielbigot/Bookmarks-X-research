@@ -116,3 +116,30 @@ dialog::backdrop{background:#0008}
 #bench-out td:first-child,#bench-out th:first-child{text-align:left}
 button.ghost{white-space:nowrap}
 .bar{flex-wrap:wrap}
+
+/* --- bandeau repliable, grille, textes longs --- */
+body.compact #extras{display:none}
+body.compact header{padding-bottom:6px}
+body.compact .mode{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fold{transition:transform .15s}
+body.compact #fold{transform:rotate(180deg)}
+.tx{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:14;overflow:hidden}
+.tw.open .tx{display:block}
+.more-t{display:block;margin:2px 0 0;padding:0;font-size:13px;color:var(--acc);background:none;font-weight:500}
+.more-t:hover{text-decoration:underline}
+.sentinel{height:1px;grid-column:1/-1}
+
+body.grid .col{max-width:none}
+body.grid header .row,body.grid #extras,body.grid .mode{max-width:1500px;margin-left:auto;margin-right:auto}
+body.grid header .search{max-width:760px}
+body.grid main{padding:14px 20px 60px}
+body.grid #results{display:grid;grid-template-columns:repeat(var(--cols,3),minmax(0,1fr));gap:14px;align-items:start}
+body.grid .tw{border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+body.grid .tw:hover{border-color:color-mix(in srgb,var(--acc) 40%,var(--line))}
+body.grid .tx{-webkit-line-clamp:10}
+body.grid .md.n2,body.grid .md.n3,body.grid .md.n4{height:190px}
+body.grid .md.n1 .m,body.grid .md.n1 img,body.grid .md.n1 video{max-height:300px}
+body.grid .ac{max-width:none;flex-wrap:wrap;gap:6px 14px;justify-content:flex-start}
+body.grid .why{margin-left:0}
+body.grid #results>.empty,body.grid #results>.themes{grid-column:1/-1}
+body.grid #answer .ans{margin:12px 0 0}

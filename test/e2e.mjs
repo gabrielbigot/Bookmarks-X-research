@@ -193,6 +193,38 @@ await panel.click('#themes');
 await panel.waitForTimeout(400);
 assert.match(await panel.locator('#mode').innerText(), /Pas assez de bookmarks indexés/);
 
+// ------------------------------------------------------------------ 3b. la voie SÉMANTIQUE s'exécute de bout en bout (embedding de requête simulé)
+// (régression : « expectDim is not defined » cassait toute recherche sémantique sans que rien ne le signale)
+await panel.evaluate(async () => {
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['tweets', 'vectors'], 'readwrite');
+  for (let i = 0; i < 6; i++) { // 2 tweets par thème (axes 0, 1, 2), vecteurs du modèle par défaut
+    const g = i % 3, id = 'sem' + i, v = new Float32Array(256); v[g] = 1;
+    tx.objectStore('tweets').put({ id, text: `sujet ${['alpha', 'beta', 'gamma'][g]} numéro ${i}`, name: 'Sem', handle: 'sem', links: [], media: [], stats: {}, createdAt: '2026-08-02T10:00:00.000Z', sortIndex: String(300 - i), url: 'https://x.com/sem/status/' + id, capturedAt: Date.now() });
+    tx.objectStore('vectors').put({ id, vec: v, model: 'onnx-community/embeddinggemma-300m-ONNX' });
+  }
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload();
+await panel.waitForFunction(() => /6 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+await panel.evaluate(() => { // le « modèle » répond comme si la requête était proche de l'axe 1 (« beta »)
+  const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+  chrome.runtime.sendMessage = (m, ...r) => (m?.type === 'q:embed' ? Promise.resolve({ vec: Array.from({ length: 256 }, (_, i) => (i === 1 ? 1 : 0)), model: 'gemma1' }) : orig(m, ...r));
+});
+await panel.fill('#q', 'zzqqxx idée sans mot commun');
+await waitFor(async () => /Hybride/.test(await panel.locator('#mode').innerText()), 'recherche hybride (voie sémantique)', 10000);
+assert.match(await panel.locator('.tw').first().innerText(), /beta/, 'le résultat le plus proche en vecteur arrive en premier');
+assert.ok(!/modèle indisponible/.test(await panel.locator('#mode').innerText()), 'pas d’erreur « modèle indisponible »');
+await panel.fill('#q', '');
+await panel.evaluate(async () => { // nettoyage : ces tweets de test ne doivent pas fausser la suite
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['tweets', 'vectors'], 'readwrite');
+  for (let i = 0; i < 6; i++) { tx.objectStore('tweets').delete('sem' + i); tx.objectStore('vectors').delete('sem' + i); }
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload();
+await panel.waitForSelector('.tw');
+
 // ------------------------------------------------------------------ 4. export / import (clair et chiffré)
 await panel.fill('#q', '');
 await panel.click('#gear');
@@ -348,6 +380,52 @@ await panel.setInputFiles('#bk-import', await dl3.path());
 await panel.waitForFunction(() => /45 vecteurs restaurés/.test(document.getElementById('bk-msg').textContent), null, { timeout: 15000 });
 await panel.keyboard.press('Escape');
 await panel.waitForFunction(() => /45 indexés sémantiquement/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+
+// ------------------------------------------------------------------ 11. interface : bandeau repliable, grille, textes longs, défilement infini
+await panel.setViewportSize({ width: 1400, height: 900 });
+await panel.evaluate(async () => {
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction('tweets', 'readwrite');
+  tx.objectStore('tweets').put({ id: 'long1', text: 'Un très long tweet. ' + 'Beaucoup de texte pour dépasser la limite. '.repeat(40), name: 'Long', handle: 'long', links: [], media: [], stats: {},
+    createdAt: '2026-09-30T10:00:00.000Z', sortIndex: '9999', url: 'https://x.com/long/status/long1', capturedAt: Date.now() });
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload();
+await panel.waitForSelector('.tw');
+// texte long replié, « Afficher plus » le déplie
+const card = panel.locator('.tw', { hasText: 'Un très long tweet' });
+await card.locator('.more-t').click();
+assert.equal(await card.evaluate((e) => e.classList.contains('open')), true);
+assert.match(await card.locator('.more-t').innerText(), /moins/);
+// bandeau repliable, état conservé après rechargement
+assert.equal(await panel.locator('#extras').isVisible(), true);
+await panel.click('#fold');
+assert.equal(await panel.locator('#extras').isVisible(), false, 'filtres repliés');
+assert.equal(await panel.locator('#q').isVisible(), true, 'la recherche reste visible');
+await panel.reload();
+await panel.waitForSelector('.tw');
+assert.equal(await panel.locator('#extras').isVisible(), false, 'repli mémorisé');
+await panel.keyboard.press('Alt+f');
+assert.equal(await panel.locator('#extras').isVisible(), true, 'Alt+F déplie');
+// grille × 3 sur toute la largeur
+await panel.selectOption('#view', '3');
+const cols = await panel.locator('#results').evaluate((e) => getComputedStyle(e).gridTemplateColumns.split(' ').length);
+assert.equal(cols, 3, '3 colonnes');
+const xs = await panel.locator('.tw').evaluateAll((els) => els.slice(0, 3).map((e) => Math.round(e.getBoundingClientRect().left)));
+assert.equal(new Set(xs).size, 3, 'les 3 premières cartes côte à côte : ' + xs);
+const w = await panel.locator('#results').evaluate((e) => e.getBoundingClientRect().width);
+assert.ok(w > 1200, 'la grille prend toute la largeur : ' + w);
+// défilement infini : 40 cartes d'abord, la suite au scroll
+assert.equal(await panel.locator('.tw').count(), 40);
+await panel.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+await waitFor(async () => (await panel.locator('.tw').count()) > 40, 'défilement infini', 10000);
+// retour en liste
+await panel.selectOption('#view', 'list');
+assert.equal(await panel.evaluate(() => document.body.classList.contains('grid')), false);
+await panel.screenshot({ path: 'test/list.png' });
+await panel.selectOption('#view', '3');
+await panel.evaluate(() => window.scrollTo(0, 0));
+await panel.screenshot({ path: 'test/grid.png' });
 
 console.log('E2E OK');
 await ctx.close();

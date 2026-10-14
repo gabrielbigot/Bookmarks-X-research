@@ -49,8 +49,8 @@ function updateStats() {
 }
 
 // ---------- recherche ----------
-async function embedQuery(text, kind) {
-  const key = (kind || 't') + '|' + text;
+async function embedQuery(text, kind, expectDim) {
+  const key = `${activeModel}|${kind || 't'}|${text}`;
   if (qCache.has(key)) return qCache.get(key);
   const res = await chrome.runtime.sendMessage({ type: 'q:embed', text, kind });
   if (!res || res.error) throw new Error(res?.error || 'pas de réponse');
@@ -390,6 +390,11 @@ function card([row], terms, pos) {
       </div>
     </div>`;
   // Comme sur X : un clic sur la carte ouvre le tweet (sauf liens, vidéos, boutons).
+  if (decodeEntities(t.text).length > 380) { // texte long : replié par défaut, comme sur X (« Afficher plus »)
+    const more = Object.assign(document.createElement('button'), { className: 'more-t', textContent: 'Afficher plus' });
+    more.onclick = () => { const open = el.classList.toggle('open'); more.textContent = open ? 'Afficher moins' : 'Afficher plus'; };
+    el.querySelector('.tx').after(more);
+  }
   el.addEventListener('click', (e) => {
     if (e.target.closest('a,button,video')) return;
     const q = e.target.closest('.qt');
@@ -400,8 +405,33 @@ function card([row], terms, pos) {
 }
 
 
+let io = null;
+function renderCards(from, to) {
+  const frag = document.createDocumentFragment();
+  last.rows.slice(from, to).forEach((r, i) => frag.appendChild(card(r, last.terms, from + i)));
+  $('results').appendChild(frag);
+}
+// Défilement infini : une sentinelle en bas de liste charge la suite avant d'être visible.
+function mountSentinel() {
+  io?.disconnect();
+  $('results').querySelector('.sentinel')?.remove();
+  if (last.rows.length <= shown) return;
+  const sentinel = Object.assign(document.createElement('div'), { className: 'sentinel' });
+  $('results').appendChild(sentinel);
+  io = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting)) return;
+    const from = shown;
+    shown += PAGE;
+    sentinel.remove();
+    renderCards(from, shown);
+    mountSentinel();
+  }, { rootMargin: '800px' });
+  io.observe(sentinel);
+}
+
 function render() {
   const box = $('results');
+  io?.disconnect();
   box.replaceChildren();
   const modeEl = $('mode');
   modeEl.textContent = last.label + (last.rows.length ? ` — ${last.rows.length >= 200 ? '200+' : last.rows.length} résultats` : '');
@@ -425,17 +455,33 @@ function render() {
     box.innerHTML = `<div class="empty">${index.tweets.length ? 'Aucun résultat.' : 'Aucun bookmark capturé pour l’instant.<br>Ouvre x.com/i/bookmarks, puis clique « ⟳ Tout synchroniser ».'}</div>`;
     return;
   }
-  const frag = document.createDocumentFragment();
-  last.rows.slice(0, shown).forEach((r, i) => frag.appendChild(card(r, last.terms, i)));
-  box.appendChild(frag);
-  if (last.rows.length > shown) {
-    const b = document.createElement('button');
-    b.className = 'ghost moreb';
-    b.textContent = 'Voir plus';
-    b.onclick = () => { shown += PAGE; render(); };
-    box.appendChild(b);
-  }
+  renderCards(0, shown);
+  mountSentinel();
 }
+
+// ---------- affichage : liste / grille, bandeau replié ----------
+const VKEY = 'xbs.view';
+const view = (() => { try { return { mode: 'list', cols: 3, folded: false, ...JSON.parse(localStorage.getItem(VKEY) || '{}') }; } catch { return { mode: 'list', cols: 3, folded: false }; } })();
+if (embed) view.mode = 'list';
+const saveView = () => { try { localStorage.setItem(VKEY, JSON.stringify(view)); } catch {} };
+function applyView() {
+  document.body.classList.toggle('grid', view.mode === 'grid');
+  document.body.classList.toggle('compact', view.folded);
+  $('fold').title = view.folded ? 'Déplier les filtres (Alt+F)' : 'Replier les filtres (Alt+F)';
+  $('view').value = view.mode === 'grid' ? String(view.cols) : 'list';
+  // colonnes réellement affichées : pas plus que ce que la largeur permet (~320 px minimum par carte)
+  const eff = view.mode === 'grid' ? Math.max(1, Math.min(view.cols, Math.floor(document.body.clientWidth / 320))) : 1;
+  document.documentElement.style.setProperty('--cols', eff);
+}
+$('view').onchange = (e) => {
+  if (e.target.value === 'list') view.mode = 'list';
+  else { view.mode = 'grid'; view.cols = Number(e.target.value); }
+  saveView(); applyView();
+};
+$('fold').onclick = () => { view.folded = !view.folded; saveView(); applyView(); };
+window.addEventListener('resize', applyView);
+document.addEventListener('keydown', (e) => { if (e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); $('fold').click(); } });
+applyView();
 
 // ---------- barre d'outils ----------
 let timer;

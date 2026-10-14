@@ -8,18 +8,20 @@
 </head>
 <body>
   <header>
-    <div class="col">
+    <div class="col hcol">
       <div class="row">
         <div class="search">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.25 3.75a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zm-8.5 6.5a8.5 8.5 0 1 1 15.18 5.27l4.78 4.78-1.42 1.42-4.78-4.78A8.5 8.5 0 0 1 1.75 10.25z"/></svg>
           <input id="q" type="search" list="hist" placeholder="Décris ce que tu cherches… (from:@user  has:link  since:2026-01-01)" autocomplete="off" autofocus>
           <datalist id="hist"></datalist>
         </div>
+        <button id="fold" class="ghost icon" title="Replier / déplier les filtres (Alt+F)">▴</button>
         <button id="save" class="ghost icon" title="Enregistrer cette recherche" hidden>★</button>
         <button id="ask" class="primary" title="Poser la question à l'IA (Ctrl+Entrée)" hidden>Demander</button>
         <button id="gear" class="ghost icon" title="Réglages, sauvegarde, IA…">⚙</button>
         <button id="close" class="icon" title="Fermer (Échap)" hidden>✕</button>
       </div>
+      <div id="extras">
       <div class="tools">
         <select id="range" title="Période de publication">
           <option value="all">Toute période</option><option value="7">7 jours</option><option value="30">30 jours</option><option value="365">1 an</option>
@@ -28,6 +30,9 @@
         <button class="chip" data-type="media">Médias</button>
         <button class="chip" data-type="video">Vidéos</button>
         <button class="chip" id="imgmode" hidden title="Recherche dans le contenu des images (CLIP, requêtes en anglais)">🖼 Images</button>
+        <select id="view" title="Affichage">
+          <option value="list">▤ Liste</option><option value="2">▦ Grille ×2</option><option value="3">▦ Grille ×3</option><option value="4">▦ Grille ×4</option>
+        </select>
         <select id="sort" title="Tri">
           <option value="relevance">Pertinence</option><option value="newest">Plus récents</option><option value="oldest">Plus anciens</option><option value="likes">Plus likés</option>
         </select>
@@ -48,6 +53,7 @@
       <div class="bar sub"><span id="progress"></span></div>
       <div class="bar sub"><span id="index"></span><button id="retry" class="ghost" hidden>Réessayer</button></div>
       <div id="banners"></div>
+      </div>
       <div id="mode" class="mode"></div>
     </div>
   </header>

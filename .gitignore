@@ -3,3 +3,5 @@ dist/
 *.log
 test/panel.png
 test/feed.png
+test/list.png
+test/grid.png
