@@ -1,8 +1,18 @@
-# X Bookmarks – Recherche intelligente
+# Bookmarks & Playlists – Recherche intelligente
 
 Extension Chrome / Comet (Chromium, Manifest V3) qui ajoute une **recherche sémantique** à tes bookmarks X.
 Par défaut tout est **local** : pas de serveur, pas de base de données externe, pas de clé API, coût = 0 €.
 Les fonctions d'IA, l'indexation des liens et la recherche d'images sont **facultatives** et désactivées tant que tu ne les actives pas.
+
+## YouTube : playlists (v0.3)
+
+Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**) sont une deuxième source, cherchée **avec** tes bookmarks X (« cerveau » trouve tweets et vidéos).
+
+- **Synchroniser** : panneau › « ▶ Playlists YouTube » (ouvre un onglet YouTube en arrière-plan, le referme à la fin ; il faut être connecté à YouTube). Ou, sur YouTube, la pastille « ▶ Mes playlists » / « Cette playlist ». Une playlist ouverte à la main est aussi capturée au passage.
+- **Chercher** : cartes vidéo (miniature, durée, chaîne, vues, playlists). Filtre « Source » (Tout / X / YouTube), opérateurs `source:youtube`, `playlist:"à regarder plus tard"`, `from:@chaine`.
+- **Retraits** : après une synchro complète d'une playlist, une vidéo qui n'y est plus perd cette appartenance ; si elle n'est plus dans aucune playlist, elle t'est proposée à la suppression (jamais sans confirmation).
+- **Indexation** : manuelle comme pour X (« ▶ Indexer »). Titre + chaîne + playlists sont indexés.
+- **Limites** : tout est testé contre un faux YouTube (format `playlistVideoRenderer` **et** `lockupViewModel`) ; le format réel change souvent, un bandeau t'avertit si des vidéos deviennent illisibles. La synchro rejoue l'API interne avec ta session (`youtubei/v1/browse`, en-tête signé `SAPISIDHASH`) ; en cas de refus (HTTP 401/403), ouvre la playlist et défile : la capture passive prend le relais. Pas encore : historique des vidéos, import Google Takeout, transcriptions, statistiques YouTube.
 
 ## Ce que ça fait
 

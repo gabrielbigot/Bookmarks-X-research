@@ -1,6 +1,7 @@
 // Recherche hybride : BM25 (mots-clés) + similarité cosinus (embeddings), fusionnées par RRF.
 import { decodeEntities, isStopword } from './text.js';
 import { savedAtOf, dayKey } from './time.js';
+import { videoText, isVideoItem } from './youtube.js';
 export const DIM = 256;
 
 export function normalizeText(s) {
@@ -16,6 +17,7 @@ export function tokenize(s) {
 
 // Texte indexé pour un tweet (BM25 et embedding).
 export function tweetText(t) {
+  if (isVideoItem(t)) return videoText(t); // vidéo YouTube : titre + chaîne + playlists
   let s = `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}`;
   if (t.quoted) s += `\nCite @${t.quoted.handle} : ${decodeEntities(t.quoted.text)}`;
   const alts = (t.media || []).map((m) => m.alt).filter(Boolean);
@@ -28,9 +30,11 @@ export function tweetText(t) {
 export function parseQuery(q) {
   const filters = {};
   const rest = [];
-  for (const part of q.split(/\s+/).filter(Boolean)) {
-    const m = part.match(/^(from|has|since|until|lang|saved):(.+)$/i);
-    if (!m) { rest.push(part); continue; }
+  // valeurs entre guillemets : playlist:"à regarder plus tard" -> un seul mot pour le découpage
+  const protectedQ = q.replace(/(\w+):"([^"]*)"/g, (_, k, v) => `${k}:${v.replace(/\s+/g, '\u2423')}`);
+  for (const part of protectedQ.split(/\s+/).filter(Boolean)) {
+    const m = part.replace(/\u2423/g, ' ').match(/^(from|has|since|until|lang|saved|source|playlist):(.+)$/i);
+    if (!m) { rest.push(part.replace(/\u2423/g, ' ')); continue; }
     const k = m[1].toLowerCase();
     const v = m[2].replace(/^@/, '');
     if (k === 'from') filters.from = v.toLowerCase();
@@ -38,6 +42,8 @@ export function parseQuery(q) {
     else if (k === 'since') filters.since = v;
     else if (k === 'until') filters.until = v;
     else if (k === 'lang') filters.lang = v.toLowerCase();
+    else if (k === 'source') filters.source = /^(yt|youtube|video|videos|vidéo|vidéos)$/i.test(v) ? 'youtube' : /^(x|twitter|tweet|tweets)$/i.test(v) ? 'x' : undefined;
+    else if (k === 'playlist') filters.playlist = v.toLowerCase();
     else if (k === 'saved') { // saved:2026-10-12  ou  saved:2026-10-01..2026-10-31 (date de mise en bookmark)
       const [a, b] = v.split('..');
       if (/^\d{4}-\d{2}-\d{2}$/.test(a)) filters.saved = { from: a, to: /^\d{4}-\d{2}-\d{2}$/.test(b || '') ? b : a };
@@ -47,6 +53,9 @@ export function parseQuery(q) {
 }
 
 export function passesFilters(t, f) {
+  const isVideo = isVideoItem(t);
+  if (f.source && (f.source === 'youtube') !== isVideo) return false;
+  if (f.playlist) { const w = normalizeText(f.playlist); if (!(t.playlists || []).some((p) => normalizeText(p.title || '').includes(w) || p.id.toLowerCase() === f.playlist)) return false; }
   if (f.from && t.handle.toLowerCase() !== f.from) return false;
   if (f.fromAny && !f.fromAny.includes(t.handle.toLowerCase())) return false;
   if (f.lang && t.lang !== f.lang) return false;

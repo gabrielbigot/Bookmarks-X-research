@@ -1,6 +1,7 @@
 import { getAllTweets } from './lib/db.js';
 import { computeStats, TYPE_LABELS } from './lib/stats.js';
 import { bindThemeButton } from './lib/theme.js';
+import { isVideoItem } from './lib/youtube.js';
 import { timeSeries, cumulative, columns, hbars, stacked, calendar, sparkline, esc, fmtInt, fmtCompact, fmtDay, WEEKDAYS } from './lib/charts.js';
 
 const $ = (id) => document.getElementById(id);
@@ -128,4 +129,4 @@ function render() {
 }
 
 drawRanges();
-getAllTweets().then((t) => { all = t; render(); });
+getAllTweets().then((t) => { all = t.filter((x) => !isVideoItem(x)); render(); }); // ces statistiques portent sur les bookmarks X

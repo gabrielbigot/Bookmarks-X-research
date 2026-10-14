@@ -32,6 +32,35 @@ const CHAIN = {
   P3: () => ['P4', [mk('3001', 'misc', 'Misc', 'Rust async runtime benchmarks compared', 900), mk('3002', 'misc', 'Misc', 'Sourdough starter hydration tips', 899)]],
   P4: () => [null, [mk('4001', 'misc', 'Misc', 'Final tweet about vector databases https://t.co/zzz', 800, { card: CARD, urls: [{ url: 'https://t.co/zzz', expanded_url: 'https://blog.example.com/vector-db' }] })]],
 };
+// ---------------- faux YouTube ----------------
+const run = (t) => ({ runs: [{ text: t }] });
+const pvr = (id, title, channel, pos) => ({ playlistVideoRenderer: { videoId: id, title: run(title), index: { simpleText: String(pos) }, lengthText: { simpleText: '12:34' }, lengthSeconds: '754',
+  shortBylineText: { runs: [{ text: channel, navigationEndpoint: { browseEndpoint: { browseId: 'UC' + channel.length, canonicalBaseUrl: '/@' + channel.toLowerCase().replace(/\s+/g, '-') } } }] },
+  thumbnail: { thumbnails: [{ url: 'https://llm.test/card.png' }] }, videoInfo: { runs: [{ text: '1,2 M de vues' }, { text: ' • ' }, { text: 'il y a 2 ans' }] }, isPlayable: true } });
+const cont = (t) => ({ continuationItemRenderer: { continuationEndpoint: { continuationCommand: { token: t } } } });
+const grid = (id, title, n) => ({ gridPlaylistRenderer: { playlistId: id, title: run(title), videoCountText: run(n + ' vidéos') } });
+const V = { w1: ['Le cerveau expliqué', 'Chaîne Neuro'], w2: ['Recette de ramen maison', 'Cuisine Fun'], w3: ['Rust async en 20 minutes', 'Dev Chan'], l1: ['Documentaire sur la mer', 'Océan TV'],
+  p2: ['How memory works in the brain', 'Brain Lab'], c1: ['Pain au levain facile', 'Cuisine Fun'], m1: ['Lo-fi beats pour coder', 'Chill Lab'] };
+const PLAYLISTS = { WL: ['w1', 'w2', 'w3'], LL: ['l1'], PL1: ['w1', 'p2'], PL2: ['w2', 'c1'], PL3: ['m1'] };
+let ytDrop = null; // vidéo retirée de TOUTES les playlists (simule « retirée côté YouTube »)
+const ytLog = [];
+const ytItems = (pid) => PLAYLISTS[pid].filter((v) => v !== ytDrop).map((v, i) => pvr(v, V[v][0], V[v][1], i + 1));
+const ytBrowse = (b) => {
+  if (b.continuation === 'LISTCONT') return { contents: [grid('PL3', 'Musique', 1)] };
+  if (b.continuation === 'WLC') return { contents: ytItems('WL').slice(2) };
+  const pid = (b.browseId || '').slice(2);
+  if (!PLAYLISTS[pid]) return {};
+  const header = { playlistHeaderRenderer: { playlistId: pid, title: run({ WL: 'À regarder plus tard', LL: 'Vidéos que j’aime', PL1: 'Neurosciences', PL2: 'Cuisine', PL3: 'Musique' }[pid]) } };
+  if (pid === 'WL') return { header, contents: [...ytItems('WL').slice(0, 2), cont('WLC')] };
+  return { header, contents: ytItems(pid) };
+};
+const ytPage = () => `<!doctype html><title>Playlists - YouTube</title><body><script>
+  document.cookie = 'SAPISID=abc123; path=/';
+  const cfg = { INNERTUBE_CONTEXT: { client: { clientName: 'WEB', clientVersion: '2.20261014' } }, INNERTUBE_API_KEY: 'KEY123', SESSION_INDEX: 0, VISITOR_DATA: 'vd', INNERTUBE_CLIENT_VERSION: '2.20261014', INNERTUBE_CONTEXT_CLIENT_NAME: 1 };
+  window.ytcfg = { get: (k) => cfg[k], data_: cfg };
+  window.ytInitialData = ${JSON.stringify({ contents: [grid('PL1', 'Neurosciences', 2), grid('PL2', 'Cuisine', 2), cont('LISTCONT')] })};
+</script>Playlists mock</body>`;
+
 const hits = [];
 let drop = null; // id retiré côté « X » (bookmark supprimé)
 const llmLog = [];
@@ -62,6 +91,21 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
   if (url.pathname === '/card.png') { // image de carte (SVG servi comme image)
     res.writeHead(200, { 'content-type': 'image/svg+xml', 'access-control-allow-origin': '*' });
     return res.end('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="418"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1d9bf0"/><stop offset="1" stop-color="#7856ff"/></linearGradient></defs><rect width="800" height="418" fill="url(#g)"/><text x="400" y="225" font-size="54" fill="#fff" text-anchor="middle" font-family="sans-serif">card image</text></svg>');
+  }
+  if ((req.headers.host || '').includes('youtube.com')) {
+    if (url.pathname === '/youtubei/v1/browse') {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const body = JSON.parse(raw);
+        ytLog.push({ auth: req.headers.authorization || '', key: url.searchParams.get('key'), ctx: !!body.context, client: req.headers['x-youtube-client-version'], body: { browseId: body.browseId, continuation: body.continuation } });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(ytBrowse(body)));
+      });
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    return res.end(ytPage());
   }
   // --- faux Jev (OpenRouter Decisions API) ---
   if (url.pathname === '/api/alpha/decisions') {
@@ -114,7 +158,7 @@ const ctx = await chromium.launchPersistentContext(tmp + '/profile', {
   headless: false,
   acceptDownloads: true,
   args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox',
-    '--host-resolver-rules=MAP x.com 127.0.0.1, MAP llm.test 127.0.0.1, MAP huggingface.co 127.0.0.1:1', '--ignore-certificate-errors', '--no-proxy-server'],
+    '--host-resolver-rules=MAP x.com 127.0.0.1, MAP www.youtube.com 127.0.0.1, MAP llm.test 127.0.0.1, MAP huggingface.co 127.0.0.1:1', '--ignore-certificate-errors', '--no-proxy-server'],
 });
 
 const waitFor = async (fn, what, ms = 45000) => {
@@ -489,6 +533,61 @@ await panel.screenshot({ path: 'test/list.png' });
 await panel.selectOption('#view', '3');
 await panel.evaluate(() => window.scrollTo(0, 0));
 await panel.screenshot({ path: 'test/grid.png' });
+
+// ------------------------------------------------------------------ 11b. YouTube : playlists (WL, J'aime, perso), fusion, recherche, retrait
+await panel.setViewportSize({ width: 1100, height: 900 });
+await panel.reload(); await panel.waitForSelector('.tw');
+const before = Number((await panel.locator('#stats').innerText()).match(/^([\d\s\u202f\u00a0]+) bookmarks/)[1].replace(/\D/g, ''));
+await panel.click('#yt-sync');
+await panel.waitForFunction(() => /YouTube : terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
+assert.match(await panel.locator('#progress').innerText(), /7 vidéos dans 5 playlists|\d+ vidéos dans 5 playlists/);
+await panel.waitForFunction(() => /7 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+assert.ok(ytLog.length >= 6, 'requêtes browse : ' + ytLog.length);
+assert.ok(ytLog.every((l) => /^SAPISIDHASH \d+_[0-9a-f]{40}$/.test(l.auth)), 'en-tête Authorization signé (SAPISIDHASH) : ' + ytLog[0].auth);
+assert.ok(ytLog.every((l) => l.key === 'KEY123' && l.ctx && l.client === '2.20261014'), 'clé, contexte et version client transmis');
+assert.deepEqual(ytLog.map((l) => l.body.browseId || 'cont:' + l.body.continuation).filter((x) => x.startsWith('VL')).sort(), ['VLLL', 'VLPL1', 'VLPL2', 'VLPL3', 'VLWL']);
+assert.equal(await panel.locator('#stats').innerText().then((t) => Number(t.match(/^([\d\s\u202f\u00a0]+) bookmarks/)[1].replace(/\D/g, ''))), before, 'les vidéos ne comptent pas comme des bookmarks X');
+// l'onglet YouTube ouvert en arrière-plan est refermé tout seul
+await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé', 15000);
+// recherche : carte vidéo (miniature, durée, chaîne, playlists)
+await panel.fill('#q', 'cerveau');
+await waitFor(async () => /Le cerveau expliqué/.test(await panel.locator('.tw.yt').first().innerText().catch(() => '')), 'recherche « cerveau » : la vidéo arrive', 8000);
+const vc = panel.locator('.tw.yt').first();
+assert.match(await vc.locator('.yt-t').innerText(), /Le cerveau expliqué/);
+assert.equal(await vc.locator('.dur').innerText(), '12:34');
+assert.match(await vc.locator('.yt-m').innerText(), /Chaîne Neuro · 1,2 M de vues · il y a 2 ans/);
+assert.deepEqual((await vc.locator('.chip-pl').allInnerTexts()).sort(), ['Neurosciences', 'À regarder plus tard'], 'une vidéo dans 2 playlists : appartenances fusionnées');
+assert.equal(await vc.locator('a:has-text("Ouvrir sur YouTube")').getAttribute('href'), 'https://www.youtube.com/watch?v=w1');
+await vc.screenshot({ path: 'test/yt-card.png' });
+// filtres : source, playlist (chip et opérateur entre guillemets)
+await panel.selectOption('#source', 'youtube');
+await panel.fill('#q', '');
+await waitFor(async () => (await panel.locator('.tw.yt').count()) === 7 && (await panel.locator('.tw:not(.yt)').count()) === 0, '7 vidéos, aucun tweet', 8000);
+await panel.fill('#q', 'playlist:"à regarder plus tard"');
+await waitFor(async () => (await panel.locator('.tw').count()) === 3, 'playlist WL : 3 vidéos', 8000);
+await panel.fill('#q', 'source:youtube rust');
+await waitFor(async () => /Rust async/.test(await panel.locator('.tw').first().innerText().catch(() => '')), 'opérateur source:youtube', 8000);
+await panel.locator('.tw.yt').first().locator('.chip-pl').first().click(); // le chip lance la recherche de la playlist
+assert.match(await panel.locator('#q').inputValue(), /^playlist:"/);
+await panel.selectOption('#source', 'x');
+await waitFor(async () => (await panel.locator('.tw.yt').count()) === 0, 'source X : aucune vidéo', 8000);
+await panel.selectOption('#source', 'all');
+await panel.fill('#q', '');
+// 2e synchro : « Recette de ramen » a été retirée de TOUTES les playlists côté YouTube -> proposée à la suppression
+ytDrop = 'w2';
+ytLog.length = 0;
+await panel.click('#yt-sync');
+await panel.waitForFunction(() => /YouTube : terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
+await panel.waitForSelector('#banners .bn:has-text("n’existent plus")', { timeout: 15000 });
+await panel.click('#banners .bn button:has-text("Les retirer")');
+await panel.waitForFunction(() => /6 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+await panel.fill('#q', 'ramen');
+await panel.waitForTimeout(500);
+assert.equal(await panel.locator('.tw.yt').count(), 0, 'vidéo retirée : plus dans la recherche');
+await panel.fill('#q', 'pain au levain');
+await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'une vidéo encore dans une autre playlist reste', 6000);
+assert.deepEqual(await panel.locator('.tw.yt .chip-pl').allInnerTexts(), ['Cuisine'], 'seule l’appartenance retirée disparaît');
+await panel.fill('#q', '');
 
 // ------------------------------------------------------------------ 12. mode sombre + page de statistiques (jeu de données synthétique : 300 tweets sur 100 jours)
 await panel.evaluate(async () => {

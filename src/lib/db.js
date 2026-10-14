@@ -3,6 +3,7 @@ const DB_NAME = 'xbs';
 const VERSION = 3;
 
 import { MODELS } from './models.js';
+import { mergeVideo, isVideoItem } from './youtube.js';
 
 // Chaque modèle a son propre magasin de vecteurs : changer de modèle n'écrase jamais les vecteurs de l'autre.
 const VSTORES = ['vectors', 'vectors_gemma2'];
@@ -184,4 +185,40 @@ export async function scanTweets(predicate) {
     };
     req.onerror = () => reject(req.error);
   });
+}
+
+// Vidéos YouTube : fusion avec l'existant (appartenance aux playlists = union). Retourne le nombre de nouvelles vidéos.
+export async function putVideos(items) {
+  if (!items.length) return 0;
+  const db = await openDb();
+  const tx = db.transaction('tweets', 'readwrite');
+  const store = tx.objectStore('tweets');
+  let added = 0;
+  await Promise.all(items.map(async (it) => {
+    const old = await wrap(store.get(it.id));
+    if (!old) added++;
+    store.put({ ...mergeVideo(old, it), capturedAt: old?.capturedAt ?? Date.now() });
+  }));
+  await done(tx);
+  return added;
+}
+
+// Après une synchro COMPLÈTE d'une playlist : retire l'appartenance des vidéos qui n'y sont plus.
+// Retourne les ids des vidéos qui ne sont plus dans AUCUNE playlist (à proposer à la suppression).
+export async function reconcilePlaylist(playlistId, seenIds) {
+  const stale = await scanTweets((t) => isVideoItem(t) && (t.playlists || []).some((p) => p.id === playlistId) && !seenIds.has(t.id));
+  const orphans = [];
+  for (const id of stale) {
+    const db = await openDb();
+    const tx = db.transaction('tweets', 'readwrite');
+    const store = tx.objectStore('tweets');
+    const t = await wrap(store.get(id));
+    if (t) {
+      t.playlists = (t.playlists || []).filter((p) => p.id !== playlistId);
+      store.put(t);
+      if (!t.playlists.length) orphans.push(id);
+    }
+    await done(tx);
+  }
+  return orphans;
 }

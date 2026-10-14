@@ -1,9 +1,12 @@
-import { putTweets, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
+import { putTweets, putVideos, reconcilePlaylist, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
+import { toItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
 
 const PANEL_URL = chrome.runtime.getURL('panel.html');
 const X_TABS = ['https://x.com/*', 'https://twitter.com/*'];
 const runs = new Map(); // runId -> Set(ids vus pendant une synchro complète)
+const ytRuns = new Map(); // runId -> Map(playlistId -> Set(ids de vidéos vues))
+let ytAutoTab = null; // onglet YouTube ouvert par nous (fermé à la fin)
 const SYNC_EVERY_MIN = 30;
 
 async function ensureOffscreen() {
@@ -37,13 +40,14 @@ async function kickIndexing(run = false, force = false) {
 
 const broadcast = (msg) => chrome.runtime.sendMessage(msg).catch(() => {});
 
-chrome.action.onClicked.addListener(async () => {
+async function openPanelTab() {
   const [existing] = await chrome.tabs.query({ url: PANEL_URL + '*' });
   if (existing) {
     await chrome.tabs.update(existing.id, { active: true });
     await chrome.windows.update(existing.windowId, { focused: true });
   } else chrome.tabs.create({ url: PANEL_URL });
-});
+}
+chrome.action.onClicked.addListener(openPanelTab);
 
 chrome.runtime.onInstalled.addListener(() => kickIndexing());
 chrome.runtime.onStartup.addListener(() => kickIndexing());
@@ -103,12 +107,50 @@ async function detectOrphans(runId) {
   const seen = runs.get(runId);
   runs.delete(runId);
   if (!seen || !seen.size) return;
-  const keys = await getAllTweetKeys();
+  const keys = (await getAllTweetKeys()).filter((id) => !id.startsWith('yt:')); // les vidéos YouTube ne relèvent pas de la synchro X
+  const ytOrphans = ((await getMeta('orphans')) || []).filter((id) => id.startsWith('yt:'));
   const orphans = keys.filter((id) => !seen.has(id));
-  if (orphans.length && orphans.length <= Math.max(5, keys.length * 0.3)) {
-    await setMeta('orphans', orphans);
+  const keep = orphans.length && orphans.length <= Math.max(5, keys.length * 0.3) ? orphans : [];
+  await setMeta('orphans', [...keep, ...ytOrphans]);
+  if (keep.length) broadcast({ type: 'orphans', count: keep.length + ytOrphans.length });
+}
+
+// ---------------- YouTube ----------------
+async function ytReconcile(msg) {
+  const seen = ytRuns.get(msg.runId)?.get(msg.playlistId);
+  // Garde-fou : si l'état en mémoire a été perdu (redémarrage du service worker), on n'efface RIEN.
+  if (!seen || !seen.size || seen.size < (msg.count || 0) * 0.9) return;
+  const orphans = await reconcilePlaylist(msg.playlistId, seen);
+  if (orphans.length) {
+    const cur = (await getMeta('orphans')) || [];
+    await setMeta('orphans', [...new Set([...cur, ...orphans])]);
     broadcast({ type: 'orphans', count: orphans.length });
-  } else await setMeta('orphans', []);
+  }
+}
+
+async function ytStart(mode) {
+  const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
+  const ping = (t) => chrome.tabs.sendMessage(t.id, { type: 'ytPing' }).then((r) => ({ t, r }), () => null);
+  let tab = null;
+  if (mode === 'current') { // la playlist affichée dans un onglet existant
+    const rs = (await Promise.all(tabs.map(ping))).filter(Boolean);
+    tab = rs.find((x) => x.r?.alive && x.r.path === '/playlist')?.t || null;
+    if (!tab) return { ok: false, reason: 'no-playlist-tab' };
+  } else {
+    // « toutes les playlists » : un onglet DÉDIÉ en arrière-plan (on ne détourne jamais l'onglet où tu regardes une vidéo)
+    tab = await chrome.tabs.create({ url: 'https://www.youtube.com/feed/playlists', active: false });
+    ytAutoTab = tab.id;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const got = await ping(tab);
+      if (got?.r?.alive && got.r.ready) break;
+    }
+  }
+  for (let i = 0; i < 10; i++) {
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode }); return { ok: true }; }
+    catch { await new Promise((r) => setTimeout(r, 1000)); }
+  }
+  return { ok: false, reason: 'no-content-script' };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -132,8 +174,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (msg.state === 'done' && msg.complete && msg.mode === 'full' && msg.runId) detectOrphans(msg.runId);
       return false;
     }
+    case 'ytCaptured': {
+      const items = msg.videos.map((v) => toItem(v, msg.playlist));
+      if (msg.runId && msg.playlist?.id) {
+        if (!ytRuns.has(msg.runId)) ytRuns.set(msg.runId, new Map());
+        const m = ytRuns.get(msg.runId);
+        if (!m.has(msg.playlist.id)) m.set(msg.playlist.id, new Set());
+        for (const it of items) m.get(msg.playlist.id).add(it.id);
+      }
+      putVideos(items).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } });
+      return false;
+    }
+    case 'ytPlaylists': {
+      getMeta('ytPlaylists').then(async (cur) => {
+        const map = new Map(((cur || [])).map((p) => [p.id, p]));
+        for (const p of msg.playlists) map.set(p.id, { ...map.get(p.id), ...p });
+        await setMeta('ytPlaylists', [...map.values()]);
+      });
+      return false;
+    }
+    case 'ytProgress': {
+      if (msg.state === 'playlist-done' && msg.complete && msg.runId) ytReconcile(msg);
+      if (['done', 'error', 'stopped'].includes(msg.state)) {
+        if (msg.runId) setTimeout(() => ytRuns.delete(msg.runId), 60_000);
+        if (ytAutoTab !== null) { const id = ytAutoTab; ytAutoTab = null; setTimeout(() => chrome.tabs.remove(id).catch(() => {}), 2500); }
+      }
+      return false;
+    }
+    case 'q:ytSync': { ytStart(msg.mode || 'all').then(sendResponse); return true; }
+    case 'q:ytStop': {
+      chrome.tabs.query({ url: 'https://www.youtube.com/*' }).then((tabs) => { for (const t of tabs) chrome.tabs.sendMessage(t.id, { type: 'ytStop' }).catch(() => {}); sendResponse({ ok: true }); });
+      return true;
+    }
+    case 'q:openPanel': { openPanelTab(); return false; }
     case 'parseWarning': {
-      setMeta('parseWarning', { at: Date.now(), unparsed: msg.unparsed, parsed: msg.parsed, ops: msg.ops });
+      setMeta('parseWarning', { at: Date.now(), src: msg.src || 'x', unparsed: msg.unparsed, parsed: msg.parsed, ops: msg.ops });
       broadcast({ type: 'parseWarning' });
       return false;
     }

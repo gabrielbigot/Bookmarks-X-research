@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "X Bookmarks – Recherche intelligente",
-  "version": "0.2.0",
-  "description": "Recherche sémantique + mots-clés, 100 % locale, dans tes bookmarks X.",
+  "name": "Bookmarks & Playlists – Recherche intelligente",
+  "version": "0.3.0",
+  "description": "Recherche sémantique + mots-clés, 100 % locale, dans tes bookmarks X et tes playlists YouTube.",
   "permissions": [
     "unlimitedStorage",
     "offscreen",
@@ -15,14 +15,15 @@
     "https://huggingface.co/*",
     "https://*.huggingface.co/*",
     "https://*.hf.co/*",
-    "https://pbs.twimg.com/*"
+    "https://pbs.twimg.com/*",
+    "https://www.youtube.com/*"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Rechercher dans mes bookmarks"
+    "default_title": "Rechercher dans mes bookmarks et playlists"
   },
   "commands": {
     "_execute_action": {
@@ -50,6 +51,25 @@
       ],
       "js": [
         "content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "inject-yt.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "content-yt.js"
       ],
       "run_at": "document_start"
     }

@@ -9,6 +9,7 @@ import { jevIntent, jevRerank, decide, PERIOD_DAYS } from './lib/jev.js';
 import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
 import { kmeans, labelClusters } from './lib/cluster.js';
 import { bindThemeButton } from './lib/theme.js';
+import { isVideoItem } from './lib/youtube.js';
 import { encode, decodeFull, packVectors, unpackVectors } from './lib/backup.js';
 import { score as evalScore, summarize } from './lib/evalbench.js';
 
@@ -46,7 +47,8 @@ async function load(full = false) {
 
 function updateStats() {
   const n = index.tweets.length, v = index.vectorCount();
-  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement (${modelOf(settings.embedModel).label.split(' (')[0]}) · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
+  const nv = index.tweets.reduce((c, t) => c + (isVideoItem(t) ? 1 : 0), 0);
+  $('stats').textContent = `${(n - nv).toLocaleString('fr-FR')} bookmarks${nv ? ` · ${nv.toLocaleString('fr-FR')} vidéos YouTube` : ''} · ${v.toLocaleString('fr-FR')} indexés sémantiquement (${modelOf(settings.embedModel).label.split(' (')[0]}) · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
 }
 
 // ---------- recherche ----------
@@ -69,6 +71,7 @@ function toolbarFilters() {
   const f = {};
   if (state.range !== 'all') f.since = isoDay(Date.now() - Number(state.range) * 86_400_000);
   if (state.types.size) f.has = [...state.types];
+  if (view.source && view.source !== 'all') f.source = view.source;
   return f;
 }
 
@@ -384,7 +387,34 @@ function linkCardHtml(c) {
 
 const avatarUrl = (u) => (u ? u.replace('_normal.', '_bigger.') : '');
 
+// ---------- carte d'une vidéo YouTube ----------
+function videoCard([row], terms, pos) {
+  const t = index.tweets[row];
+  const el = document.createElement('article');
+  el.className = 'tw yt' + (t.unavailable ? ' gone' : '');
+  el.tabIndex = 0;
+  el.dataset.row = row;
+  if (pos < 12) el.id = 't-' + (pos + 1);
+  const meta = [t.viewsText, t.publishedText].filter(Boolean).join(' · ');
+  const pls = (t.playlists || []).filter((p) => p.title).slice(0, 4);
+  el.innerHTML = `
+    <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}</div>
+    <div class="yt-b">
+      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}</div>
+      <div class="yt-m"><a href="#" data-q="${esc('from:@' + t.handle)}" title="Voir les vidéos de cette chaîne">${esc(t.name || t.handle)}</a>${meta ? ' · ' + esc(meta) : ''}</div>
+      ${pls.length ? `<div class="yt-pl">${pls.map((p) => `<button class="chip-pl" type="button" data-q="${esc(`playlist:"${p.title}"`)}" title="Voir cette playlist">${esc(p.title)}</button>`).join('')}</div>` : ''}
+      <div class="ac"><a href="${esc(t.url)}" target="_blank" rel="noopener" style="color:var(--acc);text-decoration:none">Ouvrir sur YouTube ↗</a>
+        ${index.hasVec[row] ? '<button class="ghost sim">≈ Similaires</button>' : ''}${last.why?.get(row) ? `<span class="why">${esc(last.why.get(row))}</span>` : ''}</div>
+    </div>`;
+  el.querySelector('img')?.addEventListener('error', (e) => e.target.remove(), { once: true });
+  el.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); $('q').value = b.dataset.q; state.ignoreAuthor = false; run(); window.scrollTo({ top: 0 }); }));
+  el.addEventListener('click', (e) => { if (!e.target.closest('a,button')) window.open(t.url, '_blank', 'noopener'); });
+  el.querySelector('.sim')?.addEventListener('click', () => similarTo(row));
+  return el;
+}
+
 function card([row], terms, pos) {
+  if (isVideoItem(index.tweets[row])) return videoCard([row], terms, pos);
   const t = index.tweets[row];
   const el = document.createElement('article');
   el.className = 'tw';
@@ -489,7 +519,7 @@ function render() {
 // ---------- affichage : liste / grille, bandeau replié ----------
 bindThemeButton($('theme'));
 const VKEY = 'xbs.view';
-const view = (() => { try { return { mode: 'list', cols: 3, folded: false, blend: 'balanced', ...JSON.parse(localStorage.getItem(VKEY) || '{}') }; } catch { return { mode: 'list', cols: 3, folded: false, blend: 'balanced' }; } })();
+const view = (() => { try { return { mode: 'list', cols: 3, folded: false, blend: 'balanced', source: 'all', ...JSON.parse(localStorage.getItem(VKEY) || '{}') }; } catch { return { mode: 'list', cols: 3, folded: false, blend: 'balanced', source: 'all' }; } })();
 if (embed) view.mode = 'list';
 const saveView = () => { try { localStorage.setItem(VKEY, JSON.stringify(view)); } catch {} };
 function applyView() {
@@ -498,6 +528,7 @@ function applyView() {
   $('fold').title = view.folded ? 'Déplier les filtres (Alt+F)' : 'Replier les filtres (Alt+F)';
   $('view').value = view.mode === 'grid' ? String(view.cols) : 'list';
   $('blend').value = view.blend;
+  $('source').value = view.source;
   // colonnes réellement affichées : pas plus que ce que la largeur permet (~320 px minimum par carte)
   const eff = view.mode === 'grid' ? Math.max(1, Math.min(view.cols, Math.floor(document.body.clientWidth / 320))) : 1;
   document.documentElement.style.setProperty('--cols', eff);
@@ -507,6 +538,7 @@ $('view').onchange = (e) => {
   else { view.mode = 'grid'; view.cols = Number(e.target.value); }
   saveView(); applyView();
 };
+$('source').onchange = (e) => { view.source = e.target.value; saveView(); run(); };
 $('blend').onchange = (e) => { view.blend = e.target.value; saveView(); run(); };
 $('fold').onclick = () => { view.folded = !view.folded; saveView(); applyView(); };
 window.addEventListener('resize', applyView);
@@ -599,9 +631,9 @@ async function renderBanners() {
     box.append(el);
   };
   const w = await getMeta('parseWarning');
-  if (w) add('err', `⚠ X a peut-être changé son format : ${w.unparsed} tweet(s) illisible(s). Si les nouveaux bookmarks n’apparaissent plus, le lecteur (<code>parse.js</code>) doit être mis à jour.`, [['Ignorer', async () => { await chrome.runtime.sendMessage({ type: 'q:clearWarning' }); renderBanners(); }]]);
+  if (w) add('err', w.src === 'youtube' ? `⚠ YouTube a peut-être changé son format : des vidéos sont illisibles. Si les nouvelles vidéos n’apparaissent plus, le lecteur (<code>youtube.js</code>) doit être mis à jour.` : `⚠ X a peut-être changé son format : ${w.unparsed} tweet(s) illisible(s). Si les nouveaux bookmarks n’apparaissent plus, le lecteur (<code>parse.js</code>) doit être mis à jour.`, [['Ignorer', async () => { await chrome.runtime.sendMessage({ type: 'q:clearWarning' }); renderBanners(); }]]);
   const orphans = (await getMeta('orphans')) || [];
-  if (orphans.length) add('', `🗑 ${orphans.length} bookmark(s) n’existent plus sur X (retirés ou supprimés).`, [
+  if (orphans.length) add('', `🗑 ${orphans.length} bookmark(s) n’existent plus (retirés de X, ou sortis de toutes tes playlists YouTube).`, [
     ['Les retirer d’ici', async () => { await chrome.runtime.sendMessage({ type: 'q:orphansDelete' }); }],
     ['Les garder', async () => { await chrome.runtime.sendMessage({ type: 'q:orphansDismiss' }); renderBanners(); }],
   ]);
@@ -756,7 +788,12 @@ const startSync = async (mode) => {
 };
 $('sync').onclick = () => startSync('full');
 $('news').onclick = () => startSync('incremental');
-$('stop').onclick = () => chrome.runtime.sendMessage({ type: 'stopBackfill' });
+$('stop').onclick = () => { chrome.runtime.sendMessage({ type: 'stopBackfill' }); chrome.runtime.sendMessage({ type: 'q:ytStop' }); };
+$('yt-sync').onclick = async () => {
+  $('progress').textContent = 'YouTube : ouverture d’un onglet en arrière-plan…';
+  const res = await chrome.runtime.sendMessage({ type: 'q:ytSync', mode: 'all' });
+  if (!res?.ok) $('progress').textContent = 'YouTube : impossible de démarrer (' + (res?.reason || 'erreur') + '). Vérifie que tu es connecté à YouTube.';
+};
 
 if (embed) {
   document.body.classList.add('embed');
@@ -1073,6 +1110,15 @@ chrome.runtime.onMessage.addListener((m) => {
       break;
     case 'indexDone': scheduleReload(500); pollStatus(); break;
     case 'indexError': case 'modelProgress': case 'enrichProgress': case 'imageProgress': pollStatus(); break;
+    case 'ytProgress': {
+      if (m.state === 'playlist-done') break;
+      const running = m.state === 'running';
+      $('stop').hidden = !running;
+      $('yt-sync').hidden = running;
+      $('progress').textContent = { running: `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
+        done: `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
+      break;
+    }
     case 'backfillProgress': {
       const running = m.state === 'running';
       $('stop').hidden = !running;
