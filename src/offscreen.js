@@ -206,8 +206,8 @@ async function indexLoop(exclude = new Set()) {
   }
 }
 
-// Passages de transcription : au plus 24 par vidéo, embeddings rangés par vidéo (la recherche prend le meilleur passage).
-const CHUNK_MAX = 24;
+// Passages de transcription : au plus 12 par vidéo, embeddings rangés par vidéo (la recherche prend le meilleur passage).
+const CHUNK_MAX = 12;
 async function chunkLoop() {
   const m = cur();
   const ids = await pendingChunkIds(m.id);

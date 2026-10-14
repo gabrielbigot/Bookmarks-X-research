@@ -1121,6 +1121,14 @@ setInterval(pollStatus, 2500);
 
 // ---------- messages de l'extension ----------
 let reloadTimer, lastHeavy = 0, needFull = false;
+// Les synchros YouTube modifient des vidéos déjà connues en rafale : au plus un rechargement complet par `gap` (pas un par page).
+let updTimer = null, lastUpdLoad = 0;
+function scheduleUpdatedReload() {
+  if (updTimer) return;
+  let gap = 20000;
+  try { gap = Number(localStorage.getItem('xbs.reloadGap')) || gap; } catch {}
+  updTimer = setTimeout(() => { updTimer = null; lastUpdLoad = Date.now(); scheduleReload(0, true); }, Math.max(1500, lastUpdLoad + gap - Date.now()));
+}
 function scheduleReload(delay = 3000, full = false) {
   needFull ||= full;
   clearTimeout(reloadTimer);
@@ -1134,7 +1142,7 @@ function scheduleReload(delay = 3000, full = false) {
 chrome.runtime.onMessage.addListener((m) => {
   switch (m.type) {
     case 'tweetsAdded': scheduleReload(); break;
-    case 'tweetsUpdated': scheduleReload(1500, true); break;
+    case 'tweetsUpdated': scheduleUpdatedReload(); break;
     case 'tweetsEnriched': scheduleReload(500, true); pollStatus(); break;
     case 'tweetsRemoved': scheduleReload(200, true); renderBanners(); break;
     case 'orphans': case 'parseWarning': renderBanners(); break;

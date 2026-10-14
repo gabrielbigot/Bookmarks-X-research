@@ -8,6 +8,7 @@ export function normalizeText(s) {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
+export const TR_INDEX_CHARS = 20000; // ~ les 20 000 premiers caractères d'une transcription (≈ 20 min de parole) sont indexés par mots
 export function tokenize(s) {
   return normalizeText(s)
     .split(/[^a-z0-9_@#+.]+/)
@@ -138,7 +139,9 @@ export class Index {
       this.tweets.push(t);
       this.rowById.set(t.id, row);
       const tf = new Map();
-      const toks = tokenize(tweetText(t) + ' ' + (t.links || []).join(' ') + (t.transcript ? ' ' + t.transcript : ''));
+      const toks = tokenize(tweetText(t) + ' ' + (t.links || []).join(' '));
+      // transcription : sans mots courants, bornée (mémoire de l'index : des milliers de vidéos × des milliers de mots)
+      if (t.transcript) for (const w of tokenize(t.transcript.slice(0, TR_INDEX_CHARS))) if (w.length >= 3 && !isStopword(w)) toks.push(w);
       for (const tok of toks) tf.set(tok, (tf.get(tok) || 0) + 1);
       this.docLen[row] = toks.length;
       this.totalLen += toks.length;
