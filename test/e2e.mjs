@@ -28,6 +28,7 @@ const CHAIN = {
 const hits = [];
 let drop = null; // id retiré côté « X » (bookmark supprimé)
 const llmLog = [];
+const jevLog = [];
 
 const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: readFileSync(`${tmp}/c.pem`) }, (req, res) => {
   const url = new URL(req.url, 'https://x.com');
@@ -48,6 +49,29 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       else if (usr.includes('Question :')) out = 'Réponse mock : le scheduler de tokio a été amélioré [1].';
       res.writeHead(200, { ...cors, 'content-type': 'application/json' });
       res.end(JSON.stringify({ choices: [{ message: { content: out } }] }));
+    });
+    return;
+  }
+  // --- faux Jev (OpenRouter Decisions API) ---
+  if (url.pathname === '/api/alpha/decisions') {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST,OPTIONS' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      const body = JSON.parse(raw);
+      jevLog.push({ auth: req.headers.authorization, model: body.model, keys: Object.keys(body.questions) });
+      const answers = {};
+      for (const key of Object.keys(body.questions)) {
+        const crit = Object.keys(body.questions[key].criteria);
+        let choice = crit.includes('none') ? 'none' : crit[0];
+        if (key === 'sort') choice = 'newest';
+        if (key === 'pertinent') choice = String(body.state?.tweet).includes('persist') ? 'oui' : 'non';
+        const probabilities = Object.fromEntries(crit.map((c) => [c, c === choice ? 0.92 : 0.08 / (crit.length - 1)]));
+        answers[key] = { choice, confidence: 0.92, probabilities };
+      }
+      res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+      res.end(JSON.stringify({ answers }));
     });
     return;
   }
@@ -210,6 +234,21 @@ await panel.click('#digest');
 await panel.waitForSelector('.ans a.cite');
 assert.match(await panel.locator('.ans').innerText(), /Infra/);
 
+// ---- Jev : reclassement + compréhension de la requête (tri) ----
+await panel.evaluate(() => chrome.storage.local.set({ settings: {
+  llm: { baseUrl: 'https://llm.test/v1', model: 'm', apiKey: 'secret-key' }, aiIntent: false, aiRerank: false, enrichLinks: false, imageSearch: false, autoSync: true,
+  decision: { url: 'https://llm.test/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: 'jev-key' }, decisionIntent: true, decisionRerank: true } }));
+await panel.reload();
+await panel.waitForSelector('.tw');
+await panel.fill('#q', 'memory agents');
+await waitFor(async () => /reclassé par Jev/.test(await panel.locator('#mode').innerText()), 'reclassement Jev', 15000);
+assert.match(await panel.locator('.tw').first().innerText(), /persist their memory/, 'Jev place le tweet jugé pertinent en premier');
+assert.ok(jevLog.some((j) => j.auth === 'Bearer jev-key' && j.model === 'typesafe/jev-1.13' && j.keys.includes('pertinent')), 'requête Decisions conforme');
+await panel.fill('#q', 'montre les tweets les plus récents sur les agents cette semaine');
+await waitFor(async () => /compris par Jev/.test(await panel.locator('#mode').innerText()), 'intention Jev', 15000);
+assert.ok(jevLog.some((j) => ['sort', 'period', 'kind'].every((k) => j.keys.includes(k))), 'questions d’intention envoyées');
+await panel.fill('#q', '');
+
 // les recherches enregistrées survivent à un rechargement
 await panel.reload();
 await panel.waitForSelector('.tw');
@@ -243,7 +282,7 @@ await panel.evaluate(async () => {
     tx.objectStore('tweets').put({ id, text: `${topics[g][0]} ${topics[g][1]} ${topics[g][2]} numero ${i}`, name: 'Th', handle: 'th' + g, links: [], media: [], stats: { likes: i },
       createdAt: '2026-08-01T10:00:00.000Z', sortIndex: String(500 - i), url: 'https://x.com/th/status/' + id, capturedAt: Date.now() });
     const v = new Float32Array(256); v[g] = 1; v[10 + (i % 7)] = 0.05;
-    tx.objectStore('vectors').put({ id, vec: v, model: 'fake' });
+    tx.objectStore('vectors').put({ id, vec: v, model: 'onnx-community/embeddinggemma-300m-ONNX' });
   }
   await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 });
@@ -260,6 +299,31 @@ assert.match(await panel.locator('#mode').innerText(), /Thème :/);
 assert.equal(await panel.locator('.tw').count(), 15, 'le thème « pain/levain » contient 15 tweets');
 await panel.locator('.tw .sim').first().click();
 assert.match(await panel.locator('#mode').innerText(), /Similaires à/);
+
+// ------------------------------------------------------------------ 9. changement de modèle : Gemma 2 (768 dim), vecteurs rattachés à leur modèle
+const setModel = (key) => panel.evaluate(async (k) => {
+  const { settings } = await chrome.storage.local.get('settings');
+  await chrome.storage.local.set({ settings: { ...settings, embedModel: k } });
+}, key);
+await setModel('gemma2');
+await panel.waitForFunction(() => /0 indexés sémantiquement \(EmbeddingGemma 2\)/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+assert.equal(await panel.locator('.tw .sim').count(), 0, 'plus de « Similaires » sans vecteur du bon modèle');
+await panel.evaluate(async () => {
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction('vectors_gemma2', 'readwrite');
+  for (let i = 0; i < 45; i++) {
+    const g = i % 3, v = new Float32Array(768); v[g * 200] = 1; v[500 + (i % 7)] = 0.05;
+    tx.objectStore('vectors_gemma2').put({ id: 'th' + i, vec: v, model: 'onnx-community/embeddinggemma-2-ONNX' });
+  }
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload();
+await panel.waitForFunction(() => /45 indexés sémantiquement \(EmbeddingGemma 2\)/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+await panel.click('#themes');
+await panel.waitForSelector('.th');
+assert.ok((await panel.locator('.th').count()) >= 3, 'thèmes en 768 dimensions');
+await setModel('gemma1');
+await panel.waitForFunction(() => /45 indexés sémantiquement \(EmbeddingGemma\)/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
 
 console.log('E2E OK');
 await ctx.close();

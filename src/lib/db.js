@@ -1,6 +1,12 @@
 // Stockage local (IndexedDB) : tweets, vecteurs, méta. Partagé par background, offscreen et panneau.
 const DB_NAME = 'xbs';
-const VERSION = 2;
+const VERSION = 3;
+
+import { MODELS } from './models.js';
+
+// Chaque modèle a son propre magasin de vecteurs : changer de modèle n'écrase jamais les vecteurs de l'autre.
+const VSTORES = ['vectors', 'vectors_gemma2'];
+export const vstore = (modelId) => (modelId === MODELS.gemma2.id ? 'vectors_gemma2' : 'vectors');
 
 let _db;
 export function openDb() {
@@ -9,7 +15,7 @@ export function openDb() {
     const req = indexedDB.open(DB_NAME, VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      for (const name of ['tweets', 'vectors', 'meta', 'imgvecs']) {
+      for (const name of ['tweets', 'vectors', 'vectors_gemma2', 'meta', 'imgvecs']) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: name === 'meta' ? 'key' : 'id' });
       }
     };
@@ -49,34 +55,37 @@ export async function getTweets(ids) {
   return (await Promise.all(ids.map((id) => wrap(store.get(id))))).filter(Boolean);
 }
 
-export async function getAllVectors() {
+// model : si fourni, seuls les vecteurs calculés avec ce modèle sont retournés.
+export async function getAllVectors(model) {
   const db = await openDb();
-  const rows = await wrap(db.transaction('vectors').objectStore('vectors').getAll());
-  return new Map(rows.map((r) => [r.id, r.vec]));
+  const rows = await wrap(db.transaction(vstore(model)).objectStore(vstore(model)).getAll());
+  return new Map(rows.filter((r) => !model || r.model === model).map((r) => [r.id, r.vec]));
 }
 
 export async function putVectors(items, model) {
   const db = await openDb();
-  const tx = db.transaction('vectors', 'readwrite');
-  for (const { id, vec } of items) tx.objectStore('vectors').put({ id, vec, model });
+  const st = vstore(model);
+  const tx = db.transaction(st, 'readwrite');
+  for (const { id, vec } of items) tx.objectStore(st).put({ id, vec, model });
   await done(tx);
 }
 
-export async function pendingIds() {
+// Tweets sans vecteur valide pour `model` (un vecteur d'un autre modèle compte comme absent).
+export async function pendingIds(model) {
   const db = await openDb();
   const [t, v] = await Promise.all([
     wrap(db.transaction('tweets').objectStore('tweets').getAllKeys()),
-    wrap(db.transaction('vectors').objectStore('vectors').getAllKeys()),
+    wrap(db.transaction(vstore(model)).objectStore(vstore(model)).getAll()),
   ]);
-  const have = new Set(v);
+  const have = new Set(v.filter((r) => !model || r.model === model).map((r) => r.id));
   return t.filter((id) => !have.has(id));
 }
 
-export async function counts() {
+export async function counts(model) {
   const db = await openDb();
   const [tweets, vectors] = await Promise.all([
     wrap(db.transaction('tweets').objectStore('tweets').count()),
-    wrap(db.transaction('vectors').objectStore('vectors').count()),
+    wrap(db.transaction(vstore(model)).objectStore(vstore(model)).count()),
   ]);
   return { tweets, vectors };
 }
@@ -92,10 +101,12 @@ export async function setMeta(key, value) {
   await done(tx);
 }
 
-export async function clearVectors() {
+// Vide les vecteurs d'un modèle (ou de tous si `model` est omis).
+export async function clearVectors(model) {
   const db = await openDb();
-  const tx = db.transaction('vectors', 'readwrite');
-  tx.objectStore('vectors').clear();
+  const stores = model ? [vstore(model)] : VSTORES;
+  const tx = db.transaction(stores, 'readwrite');
+  for (const st of stores) tx.objectStore(st).clear();
   await done(tx);
 }
 
@@ -103,15 +114,15 @@ export async function getAllTweetKeys() {
   const db = await openDb();
   return wrap(db.transaction('tweets').objectStore('tweets').getAllKeys());
 }
-export async function getAllVectorKeys() {
+export async function getAllVectorKeys(model) {
   const db = await openDb();
-  return wrap(db.transaction('vectors').objectStore('vectors').getAllKeys());
+  return wrap(db.transaction(vstore(model)).objectStore(vstore(model)).getAllKeys());
 }
-export async function getVectors(ids) {
+export async function getVectors(ids, model) {
   const db = await openDb();
-  const store = db.transaction('vectors').objectStore('vectors');
+  const store = db.transaction(vstore(model)).objectStore(vstore(model));
   const rows = await Promise.all(ids.map((id) => wrap(store.get(id))));
-  return new Map(rows.filter(Boolean).map((r) => [r.id, r.vec]));
+  return new Map(rows.filter((r) => r && (!model || r.model === model)).map((r) => [r.id, r.vec]));
 }
 
 // Fusionne `patch` dans un tweet existant (enrichissement des liens, etc.).
@@ -128,32 +139,34 @@ export async function updateTweet(id, patch) {
 export async function invalidateVectors(ids) {
   if (!ids.length) return;
   const db = await openDb();
-  const tx = db.transaction('vectors', 'readwrite');
-  for (const id of ids) tx.objectStore('vectors').delete(id);
+  const tx = db.transaction(VSTORES, 'readwrite');
+  for (const id of ids) for (const st of VSTORES) tx.objectStore(st).delete(id);
   await done(tx);
 }
 
 export async function deleteTweets(ids) {
   if (!ids.length) return;
   const db = await openDb();
-  const tx = db.transaction(['tweets', 'vectors', 'imgvecs'], 'readwrite');
-  for (const id of ids) for (const st of ['tweets', 'vectors', 'imgvecs']) tx.objectStore(st).delete(id);
+  const stores = ['tweets', ...VSTORES, 'imgvecs'];
+  const tx = db.transaction(stores, 'readwrite');
+  for (const id of ids) for (const st of stores) tx.objectStore(st).delete(id);
   await done(tx);
 }
 
-export async function putImgVectors(items) {
+// model : 'clip' ou 'gemma2' (les images n'ont de sens que dans l'espace de leur modèle).
+export async function putImgVectors(items, model) {
   const db = await openDb();
   const tx = db.transaction('imgvecs', 'readwrite');
-  for (const { id, vec } of items) tx.objectStore('imgvecs').put({ id, vec });
+  for (const { id, vec } of items) tx.objectStore('imgvecs').put({ id, vec, model });
   await done(tx);
 }
-export async function getAllImgVectors() {
+export async function getAllImgVectors(model) {
   const db = await openDb();
-  return wrap(db.transaction('imgvecs').objectStore('imgvecs').getAll());
+  const rows = await wrap(db.transaction('imgvecs').objectStore('imgvecs').getAll());
+  return rows.filter((r) => !model || (r.model || 'clip') === model);
 }
-export async function getAllImgKeys() {
-  const db = await openDb();
-  return wrap(db.transaction('imgvecs').objectStore('imgvecs').getAllKeys());
+export async function getAllImgKeys(model) {
+  return (await getAllImgVectors(model)).map((r) => r.id);
 }
 
 // Parcourt les tweets avec un curseur et retourne les ids pour lesquels predicate(tweet) est vrai.

@@ -1,9 +1,11 @@
 import { getAllTweets, getMeta, setMeta, putTweets, clearVectors, getAllImgVectors } from './lib/db.js';
-import { Index, DIM, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
+import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
 import { refresh, fullLoad } from './lib/store.js';
-import { getSettings, setSettings, llmReady } from './lib/settings.js';
+import { getSettings, setSettings, llmReady, decisionReady } from './lib/settings.js';
+import { MODELS, modelOf } from './lib/models.js';
+import { jevIntent, jevRerank, decide, PERIOD_DAYS } from './lib/jev.js';
 import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
 import { kmeans, labelClusters } from './lib/cluster.js';
 import { encode, decode } from './lib/backup.js';
@@ -12,9 +14,19 @@ import { score as evalScore, summarize } from './lib/evalbench.js';
 const $ = (id) => document.getElementById(id);
 const embed = new URLSearchParams(location.search).has('embed');
 const PAGE = 40;
-const IMGDIM = 512;
 
 const index = new Index();
+let activeModel = 'gemma1';
+// Applique le modèle choisi dans les réglages : dimension de l'index, caches. Retourne true si quelque chose a changé.
+function applyModel() {
+  const m = modelOf(settings.embedModel);
+  if (activeModel === m.key && index.dim === m.dim) return false;
+  activeModel = m.key;
+  index.setDim(m.dim);
+  imgIndex = null;
+  qCache.clear();
+  return true;
+}
 let seq = 0; // numéro de la recherche en cours (évite les rendus périmés)
 let shown = PAGE;
 let last = { rows: [], terms: [], label: '', meta: {} };
@@ -25,14 +37,15 @@ let imgIndex = null; // { ids, matrix }
 
 // ---------- chargement ----------
 async function load(full = false) {
-  if (full || !index.tweets.length) await fullLoad(index);
-  else await refresh(index);
+  const mid = modelOf(settings.embedModel).id;
+  if (full || !index.tweets.length) await fullLoad(index, mid);
+  else await refresh(index, mid);
   updateStats();
 }
 
 function updateStats() {
   const n = index.tweets.length, v = index.vectorCount();
-  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
+  $('stats').textContent = `${n.toLocaleString('fr-FR')} bookmarks · ${v.toLocaleString('fr-FR')} indexés sémantiquement (${modelOf(settings.embedModel).label.split(' (')[0]}) · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
 }
 
 // ---------- recherche ----------
@@ -42,6 +55,7 @@ async function embedQuery(text, kind) {
   const res = await chrome.runtime.sendMessage({ type: 'q:embed', text, kind });
   if (!res || res.error) throw new Error(res?.error || 'pas de réponse');
   const v = Float32Array.from(res.vec);
+  if (v.length !== (expectDim || index.dim)) throw new Error('le modèle a changé entre-temps, réessaie dans un instant');
   qCache.set(key, v);
   if (qCache.size > 80) qCache.delete(qCache.keys().next().value);
   return v;
@@ -108,7 +122,7 @@ async function run(opts = {}) {
   shown = PAGE;
 
   // Compréhension de la requête : IA (si demandée) sinon règles (« le plus vieux d'OpenAI »).
-  let sort, authors = [], aiUsed = false;
+  let sort, authors = [], aiUsed = false, jevUsed = false;
   if (opts.intent) {
     const it = fromIntent(opts.intent);
     aiUsed = true;
@@ -129,6 +143,12 @@ async function run(opts = {}) {
     }
     if (!authors.length) text = nl.sort ? nl.text : parsed.text;
   }
+  if (opts.jev) { // modèle de décision : tri / période / type de contenu
+    jevUsed = true;
+    sort = sort || opts.jev.sort;
+    if (opts.jev.period) filters = mergeFilters(filters, { since: isoDay(Date.now() - PERIOD_DAYS[opts.jev.period] * 86_400_000) });
+    if (opts.jev.kind) filters = mergeFilters(filters, { has: [opts.jev.kind] });
+  }
   authors = [...new Map(authors.map((a) => [a.handle.toLowerCase(), a])).values()];
   if (authors.length && authors.length <= 15) filters.fromAny = authors.map((a) => a.handle.toLowerCase());
   else authors = [];
@@ -136,7 +156,7 @@ async function run(opts = {}) {
   const allowed = maskFor(filters);
   const userSort = state.sort !== 'relevance' ? state.sort : null;
   const meta = { authors, ai: aiUsed };
-  const tag = aiUsed ? ' · compris par l’IA' : '';
+  const tag = aiUsed ? ' · compris par l’IA' : jevUsed ? ' · compris par Jev' : '';
 
   // Aucun mot utile : on liste (récemment bookmarkés d'abord, ou triés si demandé).
   if (!text || contentWords(text) === 0) {
@@ -152,18 +172,18 @@ async function run(opts = {}) {
   if (state.imageMode) {
     try {
       const imgs = await loadImgIndex();
-      const qv = await embedQuery(text, 'image');
+      const qv = await embedQuery(text, 'image', imgs.dim);
       if (my !== seq) return;
       const sc = [];
       for (let i = 0; i < imgs.ids.length; i++) {
         const row = index.rowById.get(imgs.ids[i]);
         if (row === undefined || (allowed && !allowed[row])) continue;
         let s = 0;
-        for (let d = 0; d < IMGDIM; d++) s += imgs.matrix[i * IMGDIM + d] * qv[d];
+        for (let d = 0; d < imgs.dim; d++) s += imgs.matrix[i * imgs.dim + d] * qv[d];
         sc.push([row, s]);
       }
       sc.sort((a, b) => b[1] - a[1]);
-      last = { rows: sc.slice(0, 200), terms: [], label: `Images (CLIP, requêtes en anglais) — ${imgs.ids.length} images indexées`, meta };
+      last = { rows: sc.slice(0, 200), terms: [], label: `Images (${imgs.model === 'gemma2' ? 'EmbeddingGemma 2' : 'CLIP, requêtes en anglais'}) — ${imgs.ids.length} images indexées`, meta };
     } catch (e) {
       last = { rows: [], terms: [], label: 'Recherche d’images indisponible : ' + e.message, meta };
     }
@@ -193,8 +213,19 @@ async function run(opts = {}) {
     }
   }
 
-  // Reclassement IA des 20 meilleurs (facultatif).
-  if (settings.aiRerank && llmReady(settings) && rows.length > 1) {
+  // Reclassement des 20 meilleurs : Jev (modèle de décision) en priorité, sinon un LLM (facultatif).
+  if (settings.decisionRerank && decisionReady(settings) && rows.length > 1) {
+    try {
+      const top = rows.slice(0, 20);
+      const sc = await jevRerank(settings.decision, text, top.map(([r]) => decodeEntities(index.tweets[r].text)));
+      if (my !== seq) return;
+      const reranked = top.map((r, i) => [r, sc[i], i]).sort((a, b) => b[1] - a[1] || a[2] - b[2]).map(([r]) => r);
+      rows = [...reranked, ...rows.slice(20)];
+      label += ' · reclassé par Jev';
+    } catch (e) {
+      label += ' · reclassement Jev impossible (' + e.message + ')';
+    }
+  } else if (settings.aiRerank && llmReady(settings) && rows.length > 1) {
     try {
       const top = rows.slice(0, 20);
       const out = parseJsonLoose(await chat(settings.llm, rerankMessages(text, top.map(([r]) => index.tweets[r])), { json: true }));
@@ -219,8 +250,15 @@ async function run(opts = {}) {
   last = { rows, terms, label: label + tag, meta, why };
   render();
 
-  // Compréhension par IA : on affiche d'abord le résultat des règles, puis on affine.
-  if (!opts.intent && settings.aiIntent && llmReady(settings) && parsed.text.split(/\s+/).length >= 4) {
+  // Compréhension de la requête : on affiche d'abord le résultat des règles, puis on affine (Jev en priorité, sinon un LLM).
+  const jevIntentOn = settings.decisionIntent && decisionReady(settings);
+  if (!opts.intent && !opts.jev && jevIntentOn && parsed.text.split(/\s+/).length >= 3) {
+    try {
+      let ji = intentCache.get('jev|' + parsed.text);
+      if (!ji) { ji = await jevIntent(settings.decision, parsed.text); intentCache.set('jev|' + parsed.text, ji); }
+      if (my === seq && (ji.sort || ji.period || ji.kind)) run({ jev: ji });
+    } catch { /* on garde le résultat des règles */ }
+  } else if (!opts.intent && !opts.jev && !jevIntentOn && settings.aiIntent && llmReady(settings) && parsed.text.split(/\s+/).length >= 4) {
     try {
       let it = intentCache.get(parsed.text);
       if (!it) {
@@ -235,7 +273,7 @@ async function run(opts = {}) {
 function similarTo(row) {
   const t = index.tweets[row];
   if (!index.hasVec[row]) return;
-  const qv = index.matrix.subarray(row * DIM, (row + 1) * DIM);
+  const qv = index.matrix.subarray(row * index.dim, (row + 1) * index.dim);
   const rows = index.vector(qv, null, 60).filter(([r]) => r !== row);
   seq++;
   shown = PAGE;
@@ -527,7 +565,7 @@ async function showThemes() {
   await new Promise((r) => setTimeout(r, 30));
   if (!themes || themes.n !== withVec.length) {
     const k = Math.max(6, Math.min(30, Math.round(Math.sqrt(withVec.length / 2))));
-    const { assign } = kmeans(index.matrix, withVec, k);
+    const { assign } = kmeans(index.matrix, withVec, k, { dim: index.dim });
     const labels = labelClusters(index.tweets, withVec, assign, k, 3);
     themes = { n: withVec.length, rows: withVec, assign, labels, names: null, k };
   }
@@ -623,11 +661,14 @@ $('digest').onclick = async () => {
 
 // ---------- index d'images ----------
 async function loadImgIndex() {
-  const rows = (await getAllImgVectors()).filter((r) => r.vec?.length === IMGDIM);
+  const tag = modelOf(settings.embedModel).imageModel;
+  const rows = (await getAllImgVectors(tag)).filter((r) => r.vec?.length > 0);
   if (!rows.length) throw new Error('aucune image indexée pour l’instant (activée dans les réglages ?)');
-  const matrix = new Float32Array(rows.length * IMGDIM);
-  rows.forEach((r, i) => matrix.set(r.vec, i * IMGDIM));
-  imgIndex = { ids: rows.map((r) => r.id), matrix };
+  const dim = rows[0].vec.length;
+  const good = rows.filter((r) => r.vec.length === dim);
+  const matrix = new Float32Array(good.length * dim);
+  good.forEach((r, i) => matrix.set(r.vec, i * dim));
+  imgIndex = { ids: good.map((r) => r.id), matrix, dim, model: tag };
   return imgIndex;
 }
 
@@ -661,6 +702,12 @@ async function openSettings() {
   $('opt-links').checked = settings.enrichLinks;
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
+  $('embed-model').replaceChildren(...Object.values(MODELS).map((m) => Object.assign(document.createElement('option'), { value: m.key, textContent: m.label, selected: m.key === settings.embedModel })));
+  $('dec-url').value = settings.decision.url;
+  $('dec-model').value = settings.decision.model;
+  $('dec-key').value = settings.decision.apiKey;
+  $('dec-intent').checked = settings.decisionIntent;
+  $('dec-rerank').checked = settings.decisionRerank;
   const h = await getMeta('syncDir');
   setDirUi(h);
   dlg.showModal();
@@ -700,6 +747,36 @@ $('llm-test').onclick = async () => {
 for (const id of ['ai-intent', 'ai-rerank']) {
   $(id).onchange = async () => { settings = await setSettings({ aiIntent: $('ai-intent').checked, aiRerank: $('ai-rerank').checked }); };
 }
+$('embed-model').onchange = async (e) => {
+  const key = e.target.value, m = MODELS[key];
+  if (key === settings.embedModel) return;
+  if (!confirm(`Passer à « ${m.label} » ?\n\nTous les tweets vont être ré-indexés avec ce modèle (long, en arrière-plan). La recherche par mots-clés reste disponible pendant ce temps.`)) {
+    e.target.value = settings.embedModel;
+    return;
+  }
+  settings = await setSettings({ embedModel: key }); // storage.onChanged recharge l'index à la bonne dimension
+  $('embed-msg').textContent = `Modèle changé : ${m.label}. Ré-indexation lancée.`;
+  chrome.runtime.sendMessage({ type: 'q:index', force: true });
+};
+
+$('dec-test').onclick = async () => {
+  const decision = { url: $('dec-url').value.trim(), model: $('dec-model').value.trim(), apiKey: $('dec-key').value.trim() };
+  const msg = $('dec-msg');
+  msg.textContent = 'Test en cours…';
+  try {
+    if (!decision.url || !decision.model || !decision.apiKey) throw new Error('URL, modèle et clé requis.');
+    const origin = new URL(decision.url).origin;
+    const ok = (await chrome.permissions.contains({ origins: [origin + '/*'] })) || (await chrome.permissions.request({ origins: [origin + '/*'] }));
+    if (!ok) throw new Error('Accès refusé à ' + origin);
+    settings = await setSettings({ decision, decisionIntent: $('dec-intent').checked, decisionRerank: $('dec-rerank').checked });
+    const a = await decide(decision, 'Bonjour !', { salutation: { type: 'choice', instructions: 'Ce message est-il une salutation ?', criteria: { oui: 'C’est une salutation', non: 'Ce n’est pas une salutation' } } });
+    const r = a.salutation;
+    msg.textContent = `✓ Connecté. Réponse : « ${r?.choice} » (confiance ${Number(r?.confidence ?? 0).toFixed(2)})`;
+  } catch (e) { msg.textContent = '⚠ ' + e.message; }
+};
+for (const id of ['dec-intent', 'dec-rerank']) {
+  $(id).onchange = async () => { settings = await setSettings({ decisionIntent: $('dec-intent').checked, decisionRerank: $('dec-rerank').checked }); };
+}
 $('opt-links').onchange = async (e) => {
   if (e.target.checked && !(await chrome.permissions.request({ origins: ['https://*/*', 'http://*/*'] }))) e.target.checked = false;
   settings = await setSettings({ enrichLinks: e.target.checked });
@@ -708,7 +785,7 @@ $('opt-images').onchange = async (e) => { settings = await setSettings({ imageSe
 $('opt-auto').onchange = async (e) => { settings = await setSettings({ autoSync: e.target.checked }); };
 $('reindex').onclick = async () => {
   if (!confirm('Recalculer tous les vecteurs ? (quelques minutes, en arrière-plan)')) return;
-  await clearVectors();
+  await clearVectors(modelOf(settings.embedModel).id);
   await load(true);
   chrome.runtime.sendMessage({ type: 'q:index', force: true });
   $('bk-msg').textContent = 'Réindexation lancée.';
@@ -880,12 +957,17 @@ chrome.runtime.onMessage.addListener((m) => {
   }
 });
 chrome.storage.onChanged.addListener(async (ch, area) => {
-  if (area === 'local' && ch.settings) { settings = await getSettings(); applySettingsUi(); }
+  if (area === 'local' && ch.settings) {
+    settings = await getSettings();
+    applySettingsUi();
+    if (applyModel()) { await load(true); run(); pollStatus(); }
+  }
 });
 
 // ---------- démarrage ----------
 (async () => {
   settings = await getSettings();
+  applyModel();
   saved = (await getMeta('saved')) || [];
   renderSaved();
   renderHistory();

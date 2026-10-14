@@ -59,7 +59,14 @@ export function passesFilters(t, f) {
 export const sortKey = (t) => (t.sortIndex || '').padStart(24, '0');
 
 export class Index {
-  constructor() {
+  constructor(dim = DIM) {
+    this.dim = dim;
+    this.reset();
+  }
+
+  // Change la dimension des vecteurs (changement de modèle) : l'index est vidé.
+  setDim(dim) {
+    this.dim = dim;
     this.reset();
   }
 
@@ -70,7 +77,7 @@ export class Index {
     this.docLen = [];
     this.totalLen = 0;
     this.cap = 0;
-    this.matrix = new Float32Array(0); // cap * DIM
+    this.matrix = new Float32Array(0); // cap * dim
     this.hasVec = new Uint8Array(0);
     this.vocab = null; // tableau trié, pour les préfixes
     this._recent = null;
@@ -83,8 +90,8 @@ export class Index {
   _grow(n) {
     if (n <= this.cap) return;
     const cap = Math.max(n, Math.ceil(this.cap * 1.5), 1024);
-    const m = new Float32Array(cap * DIM);
-    m.set(this.matrix.subarray(0, this.tweets.length * DIM));
+    const m = new Float32Array(cap * this.dim);
+    m.set(this.matrix.subarray(0, this.tweets.length * this.dim));
     const h = new Uint8Array(cap);
     h.set(this.hasVec.subarray(0, this.tweets.length));
     this.matrix = m;
@@ -111,8 +118,8 @@ export class Index {
         p.push([row, c]);
       }
       const v = vectorsById?.get(t.id);
-      if (v && v.length === DIM) {
-        this.matrix.set(v, row * DIM);
+      if (v && v.length === this.dim) {
+        this.matrix.set(v, row * this.dim);
         this.hasVec[row] = 1;
       }
     }
@@ -122,8 +129,8 @@ export class Index {
 
   setVector(id, vec) {
     const row = this.rowById.get(id);
-    if (row === undefined || !vec || vec.length !== DIM) return false;
-    this.matrix.set(vec, row * DIM);
+    if (row === undefined || !vec || vec.length !== this.dim) return false;
+    this.matrix.set(vec, row * this.dim);
     this.hasVec[row] = 1;
     return true;
   }
@@ -192,8 +199,8 @@ export class Index {
     for (let row = 0; row < n; row++) {
       if (!this.hasVec[row] || (allowed && !allowed[row])) continue;
       let s = 0;
-      const o = row * DIM;
-      for (let d = 0; d < DIM; d++) s += M[o + d] * queryVec[d];
+      const o = row * this.dim;
+      for (let d = 0; d < this.dim; d++) s += M[o + d] * queryVec[d];
       out.push([row, s]);
     }
     out.sort((a, b) => b[1] - a[1]);

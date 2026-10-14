@@ -2,25 +2,25 @@
 // enrichissement des liens, indexation sémantique, embeddings d'images. Tout tourne en local ;
 // seuls le premier téléchargement des modèles et la lecture des pages liées (si activée) sortent.
 // NB : un document offscreen n'a accès qu'à chrome.runtime -> la config arrive par message.
-import { AutoModel, AutoTokenizer, AutoProcessor, CLIPVisionModelWithProjection, CLIPTextModelWithProjection, RawImage, env } from '@huggingface/transformers';
+import { AutoModel, AutoTokenizer, AutoProcessor, CLIPVisionModelWithProjection, CLIPTextModelWithProjection, RawImage, pipeline, load_image, env } from '@huggingface/transformers';
 import { pendingIds, getTweets, putVectors, setMeta, scanTweets, updateTweet, putImgVectors, getAllImgKeys } from './lib/db.js';
-import { DIM, tweetText } from './lib/search.js';
+import { tweetText } from './lib/search.js';
+import { modelOf } from './lib/models.js';
 import { fetchMeta, isPublicUrl, linkTextOf } from './lib/links.js';
 
-export const MODEL_ID = 'onnx-community/embeddinggemma-300m-ONNX';
-const DTYPE = 'q8'; // q8 ≈ 300 Mo ; 'fp32' plus précis mais ~1,2 Go
 const BATCH = 8;
-const CLIP_ID = 'Xenova/clip-vit-base-patch32'; // recherche d'images (expérimental)
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('ort/');
 env.backends.onnx.wasm.numThreads = 1; // pas de SharedArrayBuffer dans une page d'extension
 
-let config = { enrichLinks: false, imageSearch: false };
+let config = { enrichLinks: false, imageSearch: false, embedModel: 'gemma1' };
+const cur = () => modelOf(config.embedModel);
 
 // État interrogeable par le panneau (les messages envoyés avant son ouverture seraient perdus).
 const status = {
+  modelKey: 'gemma1',
   model: 'idle', pct: 0, device: '', indexing: false, done: 0, total: 0, error: '',
   enrich: { active: false, done: 0, total: 0 },
   images: { active: false, done: 0, total: 0, error: '' },
@@ -35,30 +35,48 @@ const emit = (msg) => {
 };
 
 // ---------------- embeddings de texte ----------------
-let modelPromise;
-function loadModel() {
-  modelPromise ??= (async () => {
-    const progress_callback = (p) => {
-      if (p.status === 'progress') emit({ type: 'modelProgress', file: p.file, pct: Math.round(p.progress) });
-      if (p.status === 'ready') emit({ type: 'modelProgress', pct: 100, ready: true });
-    };
-    const tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID, { progress_callback });
-    let model;
-    const tries = navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'];
-    for (const device of tries) {
-      try {
-        model = await AutoModel.from_pretrained(MODEL_ID, { dtype: DTYPE, device, progress_callback });
-        emit({ type: 'modelDevice', device });
-        break;
-      } catch (e) {
-        console.warn('[xbs] device', device, 'a échoué', e);
-        if (device === tries.at(-1)) throw e;
-      }
+const loaded = new Map(); // clé de modèle -> promesse { kind, ... }
+const progressCb = (p) => {
+  if (p.status === 'progress') emit({ type: 'modelProgress', file: p.file, pct: Math.round(p.progress) });
+  if (p.status === 'ready') emit({ type: 'modelProgress', pct: 100, ready: true });
+};
+const devices = () => (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm']);
+
+// Essaie WebGPU puis WASM.
+async function withDevice(load) {
+  const tries = devices();
+  for (const device of tries) {
+    try {
+      const r = await load(device);
+      emit({ type: 'modelDevice', device });
+      return r;
+    } catch (e) {
+      console.warn('[xbs] device', device, 'a échoué', e);
+      if (device === tries.at(-1)) throw e;
     }
-    emit({ type: 'modelProgress', pct: 100, ready: true });
-    return { tokenizer, model };
-  })().catch((e) => { modelPromise = undefined; throw e; });
-  return modelPromise;
+  }
+}
+
+async function loadGemma1(m) {
+  const tokenizer = await AutoTokenizer.from_pretrained(m.id, { progress_callback: progressCb });
+  const model = await withDevice((device) => AutoModel.from_pretrained(m.id, { dtype: m.dtype, device, progress_callback: progressCb }));
+  return { kind: 'gemma1', tokenizer, model };
+}
+
+// EmbeddingGemma 2 (transformers.js ≥ 4.3.1) : texte seul = pipeline feature-extraction (seul l'encodeur texte est chargé).
+async function loadGemma2(m) {
+  const extractor = await withDevice((device) => pipeline('feature-extraction', m.id, { device, dtype: m.dtype, progress_callback: progressCb }));
+  return { kind: 'gemma2', extractor };
+}
+
+function loadModel() {
+  const m = cur();
+  if (!loaded.has(m.key)) {
+    loaded.set(m.key, (m.key === 'gemma2' ? loadGemma2(m) : loadGemma1(m))
+      .then((r) => { emit({ type: 'modelProgress', pct: 100, ready: true }); return r; })
+      .catch((e) => { loaded.delete(m.key); throw e; }));
+  }
+  return loaded.get(m.key);
 }
 
 function l2(v) {
@@ -70,7 +88,14 @@ function l2(v) {
 }
 
 async function embed(texts) {
-  const { tokenizer, model } = await loadModel();
+  const m = cur();
+  const loadedModel = await loadModel();
+  if (loadedModel.kind === 'gemma2') {
+    const out = await loadedModel.extractor(texts, { pooling: 'mean', normalize: true });
+    const dim = out.dims.at(-1);
+    return texts.map((_, i) => l2(Float32Array.from(out.data.subarray(i * dim, (i + 1) * dim))));
+  }
+  const { tokenizer, model } = loadedModel;
   const inputs = tokenizer(texts, { padding: true, truncation: true, max_length: 256 });
   const out = await model(inputs);
   let t = out.sentence_embedding;
@@ -93,25 +118,28 @@ async function embed(texts) {
     }
     dim = d;
   }
-  // Matryoshka : on tronque à DIM dimensions puis on renormalise.
-  return texts.map((_, i) => l2(Float32Array.from(data.subarray(i * dim, i * dim + DIM))));
+  // Matryoshka : on tronque à m.dim dimensions puis on renormalise.
+  return texts.map((_, i) => l2(Float32Array.from(data.subarray(i * dim, i * dim + m.dim))));
 }
 
 const docPrompt = (t) => `title: none | text: ${t}`;
 const queryPrompt = (q) => `task: search result | query: ${q}`;
 
-// Indexe tous les tweets sans vecteur, sauf ceux de `exclude` (en attente d'enrichissement des liens).
+// Indexe tous les tweets sans vecteur (pour le modèle courant), sauf ceux de `exclude` (en attente d'enrichissement des liens).
 async function indexLoop(exclude = new Set()) {
+  const m = cur();
   for (;;) {
-    const ids = (await pendingIds()).filter((id) => !exclude.has(id));
+    const ids = (await pendingIds(m.id)).filter((id) => !exclude.has(id));
     if (!ids.length) break;
     let done = 0;
     const total = ids.length;
     emit({ type: 'indexProgress', done, total });
     for (let i = 0; i < ids.length; i += BATCH) {
+      if (cur().key !== m.key) return; // modèle changé en cours de route : on s'arrête (la boucle sera relancée)
       const tweets = await getTweets(ids.slice(i, i + BATCH));
       const vecs = await embed(tweets.map((t) => docPrompt(tweetText(t))));
-      await putVectors(tweets.map((t, k) => ({ id: t.id, vec: vecs[k] })), MODEL_ID);
+      if (cur().key !== m.key) return;
+      await putVectors(tweets.map((t, k) => ({ id: t.id, vec: vecs[k] })), m.id);
       done += tweets.length;
       if ((i / BATCH) % 4 === 0) emit({ type: 'indexProgress', done, total });
     }
@@ -143,8 +171,10 @@ async function enrichIds(ids) {
   emit({ type: 'tweetsEnriched', count: ids.length });
 }
 
-// ---------------- recherche d'images (CLIP, expérimental) ----------------
+// ---------------- recherche d'images ----------------
+// Gemma 1 : CLIP (expérimental, anglais). Gemma 2 : les images sont dans le même espace que le texte (multimodal).
 let clipPromise;
+const CLIP_ID = 'Xenova/clip-vit-base-patch32';
 function loadClip() {
   clipPromise ??= (async () => {
     const processor = await AutoProcessor.from_pretrained(CLIP_ID);
@@ -155,10 +185,28 @@ function loadClip() {
   })().catch((e) => { clipPromise = undefined; throw e; });
   return clipPromise;
 }
+let g2Multi;
+function loadGemma2Multi() {
+  const m = modelOf('gemma2');
+  g2Multi ??= (async () => {
+    const processor = await AutoProcessor.from_pretrained(m.id, { progress_callback: progressCb });
+    const model = await withDevice((device) => AutoModel.from_pretrained(m.id, { device, dtype: m.dtype, progress_callback: progressCb }));
+    return { processor, model };
+  })().catch((e) => { g2Multi = undefined; throw e; });
+  return g2Multi;
+}
+
+const imgUrl = (url) => url + (url.includes('?') ? '&' : '?') + 'name=small';
 
 async function embedImage(url) {
+  if (cur().imageModel === 'gemma2') {
+    const { processor, model } = await loadGemma2Multi();
+    const image = await load_image(imgUrl(url));
+    const out = await model(await processor(null, image));
+    return l2(Float32Array.from(out.sentence_embedding.data));
+  }
   const { processor, vision } = await loadClip();
-  const img = await RawImage.read(url + (url.includes('?') ? '&' : '?') + 'name=small');
+  const img = await RawImage.read(imgUrl(url));
   const { image_embeds } = await vision(await processor(img));
   return l2(Float32Array.from(image_embeds.data));
 }
@@ -170,11 +218,14 @@ async function embedClipText(q) {
 }
 
 async function imageLoop() {
+  const m = cur();
+  const tag = m.imageModel;
   try {
-    const have = new Set(await getAllImgKeys());
+    const have = new Set(await getAllImgKeys(tag));
     const ids = (await scanTweets((t) => (t.media || []).length > 0)).filter((id) => !have.has(id));
     status.images = { active: true, done: 0, total: ids.length, error: '' };
     for (let i = 0; i < ids.length; i += 4) {
+      if (cur().key !== m.key) break;
       const tweets = await getTweets(ids.slice(i, i + 4));
       const items = [];
       for (const t of tweets) {
@@ -182,7 +233,7 @@ async function imageLoop() {
         try { vec = await embedImage(t.media[0].url); } catch (e) { console.warn('[xbs] image', t.id, e); }
         items.push({ id: t.id, vec });
       }
-      await putImgVectors(items);
+      await putImgVectors(items, tag);
       status.images.done += tweets.length;
       if ((i / 4) % 5 === 0) emit({ type: 'imageProgress', ...status.images });
     }
@@ -229,15 +280,21 @@ async function processAll() {
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
   if (msg?.type === 'off:index') {
-    if (msg.config) config = { ...config, ...msg.config };
+    if (msg.config) {
+      const switched = msg.config.embedModel && msg.config.embedModel !== config.embedModel;
+      config = { ...config, ...msg.config };
+      status.modelKey = config.embedModel;
+      if (switched) Object.assign(status, { model: loaded.has(config.embedModel) ? 'ready' : 'idle', pct: 0, device: '', error: '', indexing: false });
+    }
     if (msg.force) lastFailure = 0;
     processAll();
     return false;
   }
   if (msg?.type === 'off:status') { sendResponse(status); return false; }
   if (msg?.type === 'off:embedQuery') {
-    const job = msg.kind === 'image' ? embedClipText(msg.text) : embed([queryPrompt(msg.text)]).then(([v]) => v);
-    job.then((v) => sendResponse({ vec: Array.from(v) })).catch((e) => sendResponse({ error: String(e?.message || e) }));
+    const clipText = msg.kind === 'image' && cur().imageModel === 'clip';
+    const job = clipText ? embedClipText(msg.text) : embed([queryPrompt(msg.text)]).then(([v]) => v);
+    job.then((v) => sendResponse({ vec: Array.from(v), model: cur().key })).catch((e) => sendResponse({ error: String(e?.message || e) }));
     return true;
   }
   return false;

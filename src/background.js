@@ -27,7 +27,7 @@ async function kickIndexing(force = false) {
   chrome.runtime.sendMessage({
     type: 'off:index',
     force,
-    config: { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch },
+    config: { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel },
   }).catch(() => {});
 }
 

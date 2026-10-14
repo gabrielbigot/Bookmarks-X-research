@@ -1,15 +1,16 @@
 // Thèmes automatiques : k-means sphérique sur les embeddings + libellés TF-IDF.
-import { DIM, tokenize, tweetText } from './search.js';
+import { DIM as DIM_DEFAULT, tokenize, tweetText } from './search.js';
 import { isStopword } from './text.js';
 
-function dot(a, ao, b, bo) {
+function dot(a, ao, b, bo, DIM) {
   let s = 0;
   for (let d = 0; d < DIM; d++) s += a[ao + d] * b[bo + d];
   return s;
 }
 
 // rows : indices ayant un vecteur dans matrix. Retourne { centroids (k*DIM), assign: Int32Array(rows.length) }.
-export function kmeans(matrix, rows, k, { iters = 12, sample = 4000, seed = 1 } = {}) {
+export function kmeans(matrix, rows, k, { iters = 12, sample = 4000, seed = 1, dim = DIM_DEFAULT } = {}) {
+  const DIM = dim;
   let rnd = seed;
   const rand = () => ((rnd = (rnd * 1664525 + 1013904223) >>> 0) / 2 ** 32);
   k = Math.max(1, Math.min(k, rows.length));
@@ -23,7 +24,7 @@ export function kmeans(matrix, rows, k, { iters = 12, sample = 4000, seed = 1 } 
     let total = 0;
     const w = new Float32Array(pool.length);
     for (let i = 0; i < pool.length; i++) {
-      const s = dot(matrix, pool[i] * DIM, cent, (c - 1) * DIM);
+      const s = dot(matrix, pool[i] * DIM, cent, (c - 1) * DIM, DIM);
       if (s > best[i]) best[i] = s;
       w[i] = 1 - best[i] + 1e-6; // distance cosinus
       total += w[i];
@@ -34,7 +35,7 @@ export function kmeans(matrix, rows, k, { iters = 12, sample = 4000, seed = 1 } 
   }
   const assignOf = (row) => {
     let bi = 0, bs = -2;
-    for (let c = 0; c < k; c++) { const s = dot(matrix, row * DIM, cent, c * DIM); if (s > bs) { bs = s; bi = c; } }
+    for (let c = 0; c < k; c++) { const s = dot(matrix, row * DIM, cent, c * DIM, DIM); if (s > bs) { bs = s; bi = c; } }
     return bi;
   };
   for (let it = 0; it < iters; it++) {

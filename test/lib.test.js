@@ -121,3 +121,66 @@ test('« le plus ancien » porte sur TOUTES les correspondances, pas les 200 mie
   // requête longue : lot = les mieux classés
   assert.equal(selectPool(kw, kw, { words: 6, size: 50 }).pool.length, 50);
 });
+
+import { decide, probOf, jevIntent, jevRerank, INTENT_QUESTIONS } from '../src/lib/jev.js';
+import { MODELS, modelOf } from '../src/lib/models.js';
+
+function mockFetch(handler) {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, auth: init.headers.authorization, body });
+    const out = handler(body);
+    return { ok: true, status: 200, json: async () => out, text: async () => '' };
+  };
+  return calls;
+}
+
+test('jev : requête conforme (modèle, state, questions) et réponse analysée', async () => {
+  const calls = mockFetch(() => ({ answers: { sort: { choice: 'oldest', confidence: 0.9, probabilities: { oldest: 0.9, newest: 0.05, none: 0.05 } } } }));
+  const a = await decide({ url: 'https://x/decisions', model: 'typesafe/jev-1.13', apiKey: 'K' }, 'le plus vieux', INTENT_QUESTIONS);
+  assert.equal(calls[0].url, 'https://x/decisions');
+  assert.equal(calls[0].auth, 'Bearer K');
+  assert.equal(calls[0].body.model, 'typesafe/jev-1.13');
+  assert.equal(calls[0].body.state, 'le plus vieux');
+  for (const q of Object.values(calls[0].body.questions)) { assert.equal(q.type, 'choice'); assert.ok(q.instructions); assert.ok(Object.keys(q.criteria).length >= 2); }
+  assert.equal(probOf(a.sort, 'oldest'), 0.9);
+  assert.equal(probOf({ choice: 'a', confidence: 0.7 }, 'a'), 0.7); // repli sans probabilities
+  assert.equal(probOf({ choice: 'a', confidence: 0.7 }, 'b'), 0);
+});
+
+test('jev : intention — on n’accepte une réponse que si elle est assez sûre', async () => {
+  mockFetch(() => ({ answers: {
+    sort: { choice: 'newest', confidence: 0.95, probabilities: { newest: 0.95, oldest: 0.03, none: 0.02 } },
+    period: { choice: 'month', confidence: 0.4, probabilities: { month: 0.4, week: 0.3, year: 0.2, none: 0.1 } }, // trop incertain
+    kind: { choice: 'none', confidence: 0.9, probabilities: { none: 0.9 } },
+  } }));
+  assert.deepEqual(await jevIntent({ url: 'u', model: 'm', apiKey: 'k' }, 'q'), { sort: 'newest', period: null, kind: null });
+});
+
+test('jev : reclassement — un appel par tweet, score = P(oui)', async () => {
+  const calls = mockFetch((b) => ({ answers: { pertinent: { choice: 'oui', confidence: 0.5, probabilities: b.state.tweet.includes('scheduler') ? { oui: 0.95, non: 0.05 } : { oui: 0.1, non: 0.9 } } } }));
+  const scores = await jevRerank({ url: 'u', model: 'm', apiKey: 'k' }, 'tokio', ['autre sujet', 'le scheduler de tokio', 'rien']);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(scores, [0.1, 0.95, 0.1]);
+  assert.equal(calls[0].body.state.requête, 'tokio');
+});
+
+test('jev : erreur HTTP lisible', async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 401, text: async () => 'bad key' });
+  await assert.rejects(decide({ url: 'u', model: 'm', apiKey: 'k' }, 's', {}), /HTTP 401 — bad key/);
+});
+
+test('modèles : Gemma 2 en 768 dimensions, Gemma 1 tronqué à 256 ; Index suit la dimension', () => {
+  assert.equal(MODELS.gemma1.dim, 256);
+  assert.equal(MODELS.gemma2.dim, 768);
+  assert.equal(modelOf('inconnu').key, 'gemma1');
+  const idx = new Index(768);
+  idx.add([T('1', 'a'), T('2', 'b')]);
+  const v = new Float32Array(768); v[700] = 1;
+  assert.equal(idx.setVector('2', v), true);
+  assert.equal(idx.setVector('1', new Float32Array(256)), false); // mauvaise dimension refusée
+  assert.deepEqual(idx.vector(v, null).map(([r]) => idx.tweets[r].id), ['2']);
+  idx.setDim(256);
+  assert.equal(idx.tweets.length, 0); // changement de modèle : index vidé
+});

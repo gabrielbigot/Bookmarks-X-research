@@ -77,6 +77,27 @@
       </section>
 
       <section>
+        <h3>Modèle de recherche sémantique</h3>
+        <p class="hint">Changer de modèle recalcule les vecteurs de tous les tweets (long : compte plus d'une heure pour 30 000 tweets). Les vecteurs de l'autre modèle sont conservés : revenir en arrière est immédiat. EmbeddingGemma 2 place texte et images dans le même espace (active « Recherche dans les images » ci-dessous pour chercher dans les images avec n'importe quelle langue).</p>
+        <div class="grid"><label>Modèle<select id="embed-model"></select></label></div>
+        <p class="hint" id="embed-msg"></p>
+      </section>
+
+      <section>
+        <h3>Modèle de décision — Jev (facultatif)</h3>
+        <p class="hint">Un modèle de décision ne rédige pas : il classe et note, très vite et pour presque rien. Ici : comprendre le tri / la période / le type de contenu d'une requête, et reclasser les 20 meilleurs résultats (une note par tweet). Appelé via l'API Decisions d'OpenRouter (modèle <code>typesafe/jev-1.13</code>).</p>
+        <div class="grid">
+          <label>URL<input id="dec-url" placeholder="https://openrouter.ai/api/alpha/decisions"></label>
+          <label>Modèle<input id="dec-model" placeholder="typesafe/jev-1.13"></label>
+          <label>Clé d'API OpenRouter<input id="dec-key" type="password" autocomplete="off"></label>
+        </div>
+        <label class="chk"><input type="checkbox" id="dec-intent"> Comprendre mes requêtes avec Jev (tri, période, type)</label>
+        <label class="chk"><input type="checkbox" id="dec-rerank"> Reclasser les 20 meilleurs résultats avec Jev</label>
+        <div class="btns"><button type="button" id="dec-test">Enregistrer & tester</button></div>
+        <p class="hint" id="dec-msg"></p>
+      </section>
+
+      <section>
         <h3>IA (facultatif)</h3>
         <p class="hint">Active les questions-réponses, le résumé, la compréhension des requêtes et le reclassement. Fonctionne avec toute API compatible OpenAI. Rien n'est envoyé tant que ce n'est pas configuré ; la clé reste sur cet appareil.</p>
         <div class="btns">
