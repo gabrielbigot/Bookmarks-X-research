@@ -77,6 +77,7 @@ export function passesFilters(t, f) {
   }
   for (const h of f.has ?? []) {
     if (h === 'link' && !t.links.length && !t.quoted?.links?.length) return false;
+    if (h === 'transcript' && t.trState !== 'ok') return false;
     if (h === 'media' && !t.media.length) return false;
     if (h === 'image' && !t.media.some((m) => m.type === 'photo')) return false;
     if (h === 'video' && !t.media.some((m) => m.type === 'video' || m.type === 'animated_gif')) return false;
@@ -107,6 +108,7 @@ export class Index {
     this.cap = 0;
     this.matrix = new Float32Array(0); // cap * dim
     this.hasVec = new Uint8Array(0);
+    this.chunkVecs = new Map(); // ligne -> { vecs (k × dim), k } : passages de transcription
     this.vocab = null; // tableau trié, pour les préfixes
     this._recent = null;
   }
@@ -136,7 +138,7 @@ export class Index {
       this.tweets.push(t);
       this.rowById.set(t.id, row);
       const tf = new Map();
-      const toks = tokenize(tweetText(t) + ' ' + (t.links || []).join(' '));
+      const toks = tokenize(tweetText(t) + ' ' + (t.links || []).join(' ') + (t.transcript ? ' ' + t.transcript : ''));
       for (const tok of toks) tf.set(tok, (tf.get(tok) || 0) + 1);
       this.docLen[row] = toks.length;
       this.totalLen += toks.length;
@@ -160,6 +162,13 @@ export class Index {
     if (row === undefined || !vec || vec.length !== this.dim) return false;
     this.matrix.set(vec, row * this.dim);
     this.hasVec[row] = 1;
+    return true;
+  }
+
+  setChunkVecs(id, vecs, k) {
+    const row = this.rowById.get(id);
+    if (row === undefined || !vecs || k <= 0 || vecs.length !== k * this.dim) return false;
+    this.chunkVecs.set(row, { vecs, k });
     return true;
   }
 
@@ -225,10 +234,23 @@ export class Index {
     const out = [];
     const M = this.matrix;
     for (let row = 0; row < n; row++) {
-      if (!this.hasVec[row] || (allowed && !allowed[row])) continue;
-      let s = 0;
-      const o = row * this.dim;
-      for (let d = 0; d < this.dim; d++) s += M[o + d] * queryVec[d];
+      if (allowed && !allowed[row]) continue;
+      const ch = this.chunkVecs.get(row);
+      if (!this.hasVec[row] && !ch) continue;
+      let s = -Infinity;
+      if (this.hasVec[row]) {
+        s = 0;
+        const o = row * this.dim;
+        for (let d = 0; d < this.dim; d++) s += M[o + d] * queryVec[d];
+      }
+      if (ch) { // une vidéo vaut son meilleur passage (titre/description ou transcription)
+        for (let c = 0; c < ch.k; c++) {
+          let x = 0;
+          const o = c * this.dim;
+          for (let d = 0; d < this.dim; d++) x += ch.vecs[o + d] * queryVec[d];
+          if (x > s) s = x;
+        }
+      }
       out.push([row, s]);
     }
     out.sort((a, b) => b[1] - a[1]);

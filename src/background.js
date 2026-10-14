@@ -1,4 +1,4 @@
-import { putTweets, putVideos, putHistory, reconcilePlaylist, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
+import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pendingTranscriptIds, reconcilePlaylist, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
 import { toItem, toHistoryItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
 
@@ -129,6 +129,11 @@ async function ytReconcile(msg) {
 }
 
 async function ytStart(mode) {
+  let ids;
+  if (mode === 'transcripts') {
+    ids = (await pendingTranscriptIds((await getSettings()).ytTranscripts, 400)).map((id) => id.slice(3));
+    if (!ids.length) return { ok: false, reason: 'nothing-to-do' };
+  }
   const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
   const ping = (t) => chrome.tabs.sendMessage(t.id, { type: 'ytPing' }).then((r) => ({ t, r }), () => null);
   let tab = null;
@@ -147,7 +152,7 @@ async function ytStart(mode) {
     }
   }
   for (let i = 0; i < 10; i++) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
     catch { await new Promise((r) => setTimeout(r, 1000)); }
   }
   return { ok: false, reason: 'no-content-script' };
@@ -193,6 +198,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ fresh });
       }, () => sendResponse({ fresh: null }));
       return true;
+    }
+    case 'ytTranscript': {
+      (async () => {
+        if (msg.state === 'ok' && msg.chunks?.length) await putTranscript(msg.id, msg.chunks);
+        else await markNoTranscript([msg.id]);
+        broadcast({ type: 'tweetsUpdated' });
+        if (msg.state === 'ok') kickIndexing();
+      })();
+      return false;
     }
     case 'ytPlaylists': {
       getMeta('ytPlaylists').then(async (cur) => {

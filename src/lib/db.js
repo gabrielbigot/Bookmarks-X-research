@@ -1,6 +1,6 @@
 // Stockage local (IndexedDB) : tweets, vecteurs, méta. Partagé par background, offscreen et panneau.
 const DB_NAME = 'xbs';
-const VERSION = 3;
+const VERSION = 4;
 
 import { MODELS } from './models.js';
 import { mergeVideo, isVideoItem } from './youtube.js';
@@ -16,7 +16,7 @@ export function openDb() {
     const req = indexedDB.open(DB_NAME, VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
-      for (const name of ['tweets', 'vectors', 'vectors_gemma2', 'meta', 'imgvecs']) {
+      for (const name of ['tweets', 'vectors', 'vectors_gemma2', 'meta', 'imgvecs', 'transcripts', 'chunkvecs']) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: name === 'meta' ? 'key' : 'id' });
       }
     };
@@ -107,8 +107,9 @@ export async function setMeta(key, value) {
 export async function clearVectors(model) {
   const db = await openDb();
   const stores = model ? [vstore(model)] : VSTORES;
-  const tx = db.transaction(stores, 'readwrite');
+  const tx = db.transaction([...stores, 'chunkvecs'], 'readwrite');
   for (const st of stores) tx.objectStore(st).clear();
+  tx.objectStore('chunkvecs').clear(); // les vecteurs de passages se recalculent avec les autres
   await done(tx);
 }
 
@@ -149,9 +150,12 @@ export async function invalidateVectors(ids) {
 export async function deleteTweets(ids) {
   if (!ids.length) return;
   const db = await openDb();
-  const stores = ['tweets', ...VSTORES, 'imgvecs'];
-  const tx = db.transaction(stores, 'readwrite');
-  for (const id of ids) for (const st of stores) tx.objectStore(st).delete(id);
+  const stores = ['tweets', ...VSTORES, 'imgvecs', 'transcripts'];
+  const tx = db.transaction([...stores, 'chunkvecs'], 'readwrite');
+  for (const id of ids) {
+    for (const st of stores) tx.objectStore(st).delete(id);
+    for (const m of Object.values(MODELS)) tx.objectStore('chunkvecs').delete(id + '@' + m.id);
+  }
   await done(tx);
 }
 
@@ -237,4 +241,75 @@ export async function reconcilePlaylist(playlistId, seenIds) {
     await done(tx);
   }
   return orphans;
+}
+
+// ---------- transcriptions YouTube ----------
+const TR_RETRY = 30 * 86_400_000; // une vidéo « sans transcription » est ré-essayée au bout de 30 jours
+
+// chunks : [{ t, text }]. Marque aussi la vidéo (trState) pour que les listes n'aient pas à lire le texte.
+export async function putTranscript(id, chunks, extra = {}) {
+  const db = await openDb();
+  const tx = db.transaction(['transcripts', 'tweets'], 'readwrite');
+  tx.objectStore('transcripts').put({ id, chunks, at: Date.now(), ...extra });
+  const old = await wrap(tx.objectStore('tweets').get(id));
+  if (old) tx.objectStore('tweets').put({ ...old, trState: 'ok', trAt: Date.now(), trChars: chunks.reduce((n, c) => n + c.text.length, 0) });
+  await done(tx);
+}
+export async function markNoTranscript(ids) {
+  const db = await openDb();
+  const tx = db.transaction('tweets', 'readwrite');
+  const st = tx.objectStore('tweets');
+  await Promise.all(ids.map(async (id) => { const old = await wrap(st.get(id)); if (old && old.trState !== 'ok') st.put({ ...old, trState: 'none', trAt: Date.now() }); }));
+  await done(tx);
+}
+export async function getTranscripts(ids) {
+  const db = await openDb();
+  const st = db.transaction('transcripts').objectStore('transcripts');
+  return new Map((await Promise.all(ids.map((id) => wrap(st.get(id))))).filter(Boolean).map((r) => [r.id, r.chunks]));
+}
+export async function getAllTranscriptRows() {
+  const db = await openDb();
+  return wrap(db.transaction('transcripts').objectStore('transcripts').getAll());
+}
+export async function putTranscriptRows(rows) {
+  const db = await openDb();
+  const tx = db.transaction(['transcripts', 'tweets'], 'readwrite');
+  for (const r of rows) {
+    if (!r?.id || !Array.isArray(r.chunks)) continue;
+    tx.objectStore('transcripts').put({ id: r.id, chunks: r.chunks, at: r.at || Date.now(), lang: r.lang });
+    const old = await wrap(tx.objectStore('tweets').get(r.id));
+    if (old) tx.objectStore('tweets').put({ ...old, trState: 'ok', trAt: r.at || Date.now(), trChars: r.chunks.reduce((n, c) => n + c.text.length, 0) });
+  }
+  await done(tx);
+}
+
+// Vidéos à transcrire. scope : 'playlists' (dans au moins une playlist) | 'all' (+ historique).
+export async function pendingTranscriptIds(scope = 'playlists', limit = 400, now = Date.now()) {
+  const ids = await scanTweets((t) => isVideoItem(t) && !t.unavailable && (scope === 'all' || (t.playlists || []).length > 0)
+    && (!t.trState || (t.trState === 'none' && now - (t.trAt || 0) > TR_RETRY)));
+  return ids.slice(0, limit);
+}
+
+// Vecteurs des passages (par modèle) : une ligne par vidéo { id: 'yt:x@modelId', vid, model, k, vecs (k × dim, concaténés) }.
+export async function putChunkVecs(items, model) {
+  const db = await openDb();
+  const tx = db.transaction('chunkvecs', 'readwrite');
+  for (const { id, vecs, k } of items) tx.objectStore('chunkvecs').put({ id: id + '@' + model, vid: id, model, k, vecs });
+  await done(tx);
+}
+export async function getAllChunkVecs(model) {
+  const db = await openDb();
+  const rows = await wrap(db.transaction('chunkvecs').objectStore('chunkvecs').getAll());
+  return new Map(rows.filter((r) => r.model === model).map((r) => [r.vid, { vecs: r.vecs, k: r.k }]));
+}
+export async function getChunkVecKeys(model) {
+  const db = await openDb();
+  const keys = await wrap(db.transaction('chunkvecs').objectStore('chunkvecs').getAllKeys());
+  return new Set(keys.filter((k) => k.endsWith('@' + model)).map((k) => k.slice(0, -model.length - 1)));
+}
+// Vidéos avec transcription mais sans vecteurs de passages pour ce modèle.
+export async function pendingChunkIds(model) {
+  const have = await getChunkVecKeys(model);
+  const trIds = await scanTweets((t) => t.trState === 'ok');
+  return trIds.filter((id) => !have.has(id));
 }

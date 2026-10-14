@@ -51,6 +51,12 @@ const dayLabel = (n) => n === 0 ? "Aujourd'hui" : n === 1 ? 'Hier' : DAYS_FR[new
 const dayIso = (n) => { const d = new Date(Date.now() - n * 864e5); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 Object.assign(V, { h2: ['Histoire de Rome en 10 minutes', 'Hist Chan'], h4: ['Conférence sur la mémoire', 'Hist Chan'], h5: ['Tutoriel pâtes fraîches', 'Cuisine Fun'], h6: ['Nouveauté du jour : zorglub', 'Hist Chan'], h7: ['Vieux sujet oublié', 'Hist Chan'] });
 let histNew = false;
+// transcriptions : [début en ms, texte] ; les vidéos absentes d'ici n'ont pas de transcription
+const TRANSCRIPTS = {
+  w1: [[0, 'Bonjour et bienvenue ' + 'blabla '.repeat(70)], [60000, 'Aujourd’hui on parle du cortex ' + 'blabla '.repeat(70)], [125000, 'et surtout du zorglubtranscript, un mot que le titre ne contient pas'], [200000, 'Merci d’avoir regardé jusqu’au bout']],
+  p2: [[0, 'Memory is stored in synapses and consolidated during sleep']],
+  w3: [[0, 'Les futures et les tâches asynchrones expliquées avec tokio']],
+};
 const vrd = (id, pct) => ({ videoRenderer: { videoId: id, title: run(V[id][0]), ownerText: { runs: [{ text: V[id][1], navigationEndpoint: { browseEndpoint: { browseId: 'UCh', canonicalBaseUrl: '/@' + V[id][1].toLowerCase().replace(/\s+/g, '-') } } }] },
   lengthText: { simpleText: '8:00' }, viewCountText: { simpleText: '5 000 vues' }, thumbnail: { thumbnails: [{ url: 'https://llm.test/card.png' }] },
   thumbnailOverlays: pct ? [{ thumbnailOverlayResumePlaybackRenderer: { percentDurationWatched: pct } }] : [] } });
@@ -119,6 +125,20 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         ytLog.push({ auth: req.headers.authorization || '', key: url.searchParams.get('key'), ctx: !!body.context, client: req.headers['x-youtube-client-version'], body: { browseId: body.browseId, continuation: body.continuation } });
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify(ytBrowse(body)));
+      });
+      return;
+    }
+    if (/^\/youtubei\/v1\/(next|get_transcript|player)$/.test(url.pathname)) {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const body = JSON.parse(raw);
+        const ep = url.pathname.split('/').pop();
+        ytLog.push({ auth: req.headers.authorization || '', key: url.searchParams.get('key'), ctx: !!body.context, client: req.headers['x-youtube-client-version'], body: { ep, videoId: body.videoId, params: body.params } });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        if (ep === 'next') return res.end(JSON.stringify(TRANSCRIPTS[body.videoId] ? { engagementPanels: [{ engagementPanelSectionListRenderer: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: 'T_' + body.videoId } } } } } }] } : {}));
+        if (ep === 'get_transcript') { const segs = TRANSCRIPTS[(body.params || '').slice(2)] || []; return res.end(JSON.stringify({ actions: [{ updateEngagementPanelAction: { content: { transcriptRenderer: { body: { transcriptSegmentListRenderer: { initialSegments: segs.map(([ms, text]) => ({ transcriptSegmentRenderer: { startMs: String(ms), snippet: { runs: [{ text }] } } })) } } } } } }] })); }
+        return res.end('{}');
       });
       return;
     }
@@ -641,6 +661,29 @@ await panel.waitForFunction(() => /historique terminé/.test(document.getElement
 assert.deepEqual(hlog(), ['FEhistory', 'HC1', 'HC2'], 'synchro incrémentale : arrêt avant la dernière page : ' + hlog());
 await count('zorglub', 1, 'nouvelle vidéo de l’historique');
 await panel.fill('#q', '');
+
+// ------------------------------------------------------------------ 11d. YouTube : transcriptions
+ytLog.length = 0;
+await panel.fill('#q', '');
+await panel.click('#yt-tr');
+await panel.waitForFunction(() => /transcriptions terminées/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
+assert.match(await panel.locator('#progress').innerText(), /3 récupérées, 3 sans transcription/);
+assert.deepEqual(ytLog.filter((l) => l.body.ep === 'next').map((l) => l.body.videoId).sort(), ['c1', 'l1', 'm1', 'p2', 'w1', 'w3'], 'une requête « next » par vidéo de playlist (pas l’historique seul)');
+assert.ok(ytLog.every((l) => /^SAPISIDHASH/.test(l.auth)));
+await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé (transcriptions)', 15000);
+// recherche par un mot qui n'est QUE dans la transcription : extrait daté + lien à la seconde près
+await panel.fill('#q', 'zorglubtranscript');
+await waitFor(async () => /Le cerveau expliqué/.test(await panel.locator('.tw.yt').first().innerText().catch(() => '')), 'mot de la transcription trouvé', 15000);
+const sn = panel.locator('.tw.yt').first().locator('.yt-sn');
+await waitFor(async () => (await sn.count()) > 0, 'extrait de transcription', 10000);
+assert.match(await sn.innerText(), /▶ 2:05 … .*zorglubtranscript/);
+assert.equal(await sn.locator('a').getAttribute('href'), 'https://www.youtube.com/watch?v=w1&t=125s');
+assert.equal(await panel.locator('.tw.yt').first().locator('.yt-tr').count(), 1, 'badge transcription');
+await count('has:transcript', 3, 'has:transcript');
+// deuxième passage : plus rien à récupérer (les vidéos sans transcription ne sont pas redemandées avant 30 jours)
+await panel.fill('#q', '');
+await panel.click('#yt-tr');
+await panel.waitForFunction(() => /ont déjà leur transcription/.test(document.getElementById('progress').textContent), null, { timeout: 15000 });
 
 // statistiques YouTube
 const ys = await ctx.newPage();

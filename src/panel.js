@@ -1,4 +1,5 @@
-import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows } from './lib/db.js';
+import { bestChunk, fmtTime } from './lib/transcript.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
@@ -401,12 +402,15 @@ function videoCard([row], terms, pos) {
   const pls = (t.playlists || []).filter((p) => p.title).slice(0, 4);
   const wd = t.watched || [];
   const seen = wd.length ? `<div class="yt-w" title="${esc(wd.join(', '))}">Vu le ${esc(wd[wd.length - 1])}${wd.length > 1 ? ` · ×${wd.length}` : ''}${t.progress ? ` · ${t.progress} %` : ''}</div>` : '';
+  const bc = t.trChunks && terms?.length ? bestChunk(t.trChunks, terms.filter((x) => x.length >= 3), normalizeText) : null;
+  const snip = bc ? `<div class="yt-sn"><a href="${esc(t.url + '&t=' + bc.t + 's')}" target="_blank" rel="noopener" title="Ouvrir la vidéo à ce passage">▶ ${fmtTime(bc.t)}</a> … ${hl(bc.text.slice(0, 260), terms)} …</div>` : '';
   el.innerHTML = `
     <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}${t.progress ? `<span class="prog"><i style="width:${Math.min(100, t.progress)}%"></i></span>` : ''}</div>
     <div class="yt-b">
-      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}</div>
+      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}${t.trState === 'ok' ? '<span class="yt-tr" title="Transcription disponible (cherchée dans le texte parlé)">🗒</span>' : ''}</div>
       <div class="yt-m"><a href="#" data-q="${esc('from:@' + t.handle)}" title="Voir les vidéos de cette chaîne">${esc(t.name || t.handle)}</a>${meta ? ' · ' + esc(meta) : ''}</div>
       ${seen}
+      ${snip}
       ${pls.length ? `<div class="yt-pl">${pls.map((p) => `<button class="chip-pl" type="button" data-q="${esc(`playlist:"${p.title}"`)}" title="Voir cette playlist">${esc(p.title)}</button>`).join('')}</div>` : ''}
       <div class="ac"><a href="${esc(t.url)}" target="_blank" rel="noopener" style="color:var(--acc);text-decoration:none">Ouvrir sur YouTube ↗</a>
         ${index.hasVec[row] ? '<button class="ghost sim">≈ Similaires</button>' : ''}${last.why?.get(row) ? `<span class="why">${esc(last.why.get(row))}</span>` : ''}</div>
@@ -808,6 +812,13 @@ $('yt-hist').onclick = async () => {
   if (!res?.ok) $('progress').textContent = 'YouTube : impossible de démarrer (' + (res?.reason || 'erreur') + '). Vérifie que tu es connecté à YouTube.';
 };
 
+$('yt-tr').onclick = async () => {
+  $('progress').textContent = 'YouTube : préparation des transcriptions…';
+  const res = await chrome.runtime.sendMessage({ type: 'q:ytSync', mode: 'transcripts' });
+  if (res?.reason === 'nothing-to-do') $('progress').textContent = 'YouTube : toutes les vidéos concernées ont déjà leur transcription (ou n’en ont pas).';
+  else if (!res?.ok) $('progress').textContent = 'YouTube : impossible de démarrer (' + (res?.reason || 'erreur') + '). Vérifie que tu es connecté à YouTube.';
+};
+
 if (embed) {
   document.body.classList.add('embed');
   $('close').hidden = false;
@@ -829,6 +840,7 @@ async function openSettings() {
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
   $('yt-days').value = String(settings.ytHistoryDays);
+  $('yt-trscope').value = settings.ytTranscripts;
   $('ai-history').checked = settings.aiHistory;
   $('compute').value = settings.compute;
   $('opt-autoindex').checked = settings.indexMode === 'auto';
@@ -926,6 +938,7 @@ $('mem-free').onclick = async () => {
 };
 $('compute').onchange = async (e) => { settings = await setSettings({ compute: e.target.value }); };
 $('opt-linkimg').onchange = async (e) => { settings = await setSettings({ linkImages: e.target.checked }); render(); };
+$('yt-trscope').onchange = async (e) => { settings = await setSettings({ ytTranscripts: e.target.value }); };
 $('yt-days').onchange = async (e) => { settings = await setSettings({ ytHistoryDays: +e.target.value }); };
 $('ai-history').onchange = async (e) => { settings = await setSettings({ aiHistory: e.target.checked }); };
 $('opt-auto').onchange = async (e) => { settings = await setSettings({ autoSync: e.target.checked }); };
@@ -947,6 +960,8 @@ const download = (bytes, name) => {
 async function buildBackup(pass) {
   const tweets = await getAllTweets();
   const extra = { saved };
+  const trs = await getAllTranscriptRows();
+  if (trs.length) extra.transcripts = trs.map((r) => ({ id: r.id, chunks: r.chunks, at: r.at, lang: r.lang }));
   let nVec = 0;
   if ($('bk-vecs').checked) {
     const m = modelOf(settings.embedModel);
@@ -960,7 +975,7 @@ async function buildBackup(pass) {
 
 // Restaure : tweets, recherches enregistrées, vecteurs (rangés sous leur propre modèle, utilisables si le modèle correspond).
 async function restoreBackup(bytes, pass) {
-  const { tweets, saved: sv, vectors } = await decodeFull(bytes, pass);
+  const { tweets, saved: sv, vectors, transcripts } = await decodeFull(bytes, pass);
   let added = 0;
   for (let i = 0; i < tweets.length; i += 1000) added += await putTweets(tweets.slice(i, i + 1000));
   let nVec = 0;
@@ -969,6 +984,7 @@ async function restoreBackup(bytes, pass) {
     for (let i = 0; i < entries.length; i += 2000) await putVectors(entries.slice(i, i + 2000), vectors.model);
     nVec = entries.length;
   }
+  if (transcripts?.length) for (let i = 0; i < transcripts.length; i += 100) await putTranscriptRows(transcripts.slice(i, i + 100));
   const merged = [...new Set([...saved, ...sv])];
   if (merged.length !== saved.length) { saved = merged; await setMeta('saved', saved); renderSaved(); }
   await load(true);
@@ -1132,9 +1148,9 @@ chrome.runtime.onMessage.addListener((m) => {
       if (m.state === 'playlist-done') break;
       const running = m.state === 'running';
       $('stop').hidden = !running;
-      $('yt-sync').hidden = $('yt-hist').hidden = running;
-      $('progress').textContent = { running: m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
-        done: m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
+      $('yt-sync').hidden = $('yt-hist').hidden = $('yt-tr').hidden = running;
+      $('progress').textContent = { running: m.transcripts ? `YouTube : transcriptions ${m.done}/${m.total} (${m.ok} récupérées)…` : m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
+        done: m.transcripts ? `YouTube : transcriptions terminées — ${m.ok} récupérées, ${m.none} sans transcription` : m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
       break;
     }
     case 'backfillProgress': {

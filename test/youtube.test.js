@@ -204,3 +204,48 @@ test('statistiques YouTube : visionnages, temps estimé, chaînes, à regarder',
   assert.equal(computeYtStats(items, { now: NOWMS }).kpi.views, 4);
   assert.equal(fmtHours(3900), '1 h 05');
 });
+
+import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, chunkSegments, sampleChunks, bestChunk, chunksText, fmtTime } from '../src/lib/transcript.js';
+test('transcriptions : jeton, segments, json3, passages, extrait', () => {
+  const next = { engagementPanels: [{ x: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: 'PARAMS1' } } } } } }] };
+  assert.equal(findTranscriptParams(next), 'PARAMS1');
+  assert.equal(findTranscriptParams({ a: 1 }), null);
+  const tr = { actions: [{ updateEngagementPanelAction: { content: { transcriptRenderer: { content: { transcriptSearchPanelRenderer: { body: { transcriptSegmentListRenderer: { initialSegments: [
+    { transcriptSegmentRenderer: { startMs: '0', snippet: { runs: [{ text: 'Bonjour à tous' }] } } },
+    { transcriptSegmentRenderer: { startMs: '4000', snippet: { runs: [{ text: '[Musique]' }] } } },
+    { transcriptSegmentRenderer: { startMs: '65000', snippet: { runs: [{ text: 'le  cerveau\n apprend' }] } } },
+    { transcriptSectionHeaderRenderer: { x: 1 } }] } } } } } } } }] };
+  const segs = parseTranscript(tr);
+  assert.deepEqual(segs, [{ t: 0, text: 'Bonjour à tous' }, { t: 4, text: '[Musique]' }, { t: 65, text: 'le cerveau apprend' }]);
+  const chunks = chunkSegments(segs, { size: 10 });
+  assert.deepEqual(chunks.map((c) => c.t), [0, 65]); // « [Musique] » écarté
+  assert.equal(chunksText(chunks), 'Bonjour à tous le cerveau apprend ');
+  assert.deepEqual(parseJson3({ events: [{ tStartMs: 1500, segs: [{ utf8: 'a ' }, { utf8: 'b' }] }, { tStartMs: 3000 }, { tStartMs: 9000, segs: [{ utf8: '\n' }] }] }), [{ t: 2, text: 'a b' }]);
+  const pl = { captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: 'u1', languageCode: 'de', kind: 'asr' }, { baseUrl: 'u2', languageCode: 'en' }, { baseUrl: 'u3', languageCode: 'fr', kind: 'asr' }] } } };
+  assert.equal(captionTracks(pl).length, 3);
+  assert.equal(pickTrack(captionTracks(pl)).url, 'u3'); // fr > en, même automatique
+  assert.equal(pickTrack([]), null);
+  const many = Array.from({ length: 100 }, (_, i) => ({ t: i, text: 'x' + i }));
+  const s = sampleChunks(many, 10);
+  assert.equal(s.length, 10); assert.equal(s[0].t, 0); assert.ok(s[9].t >= 90);
+  assert.equal(sampleChunks(many.slice(0, 5), 10).length, 5);
+  assert.equal(bestChunk(chunks, ['cerveau'], (x) => x.toLowerCase()).t, 65);
+  assert.equal(bestChunk(chunks, ['zzz']), null);
+  assert.equal(fmtTime(65), '1:05'); assert.equal(fmtTime(3725), '1:02:05');
+});
+
+test('index : mots de la transcription et meilleur passage vectoriel', () => {
+  const dim = 4;
+  const idx = new Index(dim);
+  const vid = (id, title, transcript) => ({ ...toItem({ videoId: id, title }, null), transcript });
+  const unit = (...v) => Float32Array.from(v);
+  idx.add([vid('a', 'Vlog numéro 12', 'on parle de la photosynthèse des plantes'), vid('b', 'Autre vidéo', '')], new Map([['yt:a', unit(1, 0, 0, 0)], ['yt:b', unit(0, 1, 0, 0)]]));
+  assert.equal(idx.bm25('photosynthèse')[0][0], 0, 'les mots de la transcription sont indexés');
+  idx.setChunkVecs('yt:a', Float32Array.from([0, 0, 1, 0, 0, 0, 0, 1]), 2);
+  const r = idx.vector(unit(0, 0, 0, 1));
+  assert.equal(r[0][0], 0, 'le passage 2 de la vidéo a répond à la requête');
+  assert.ok(r[0][1] > 0.99);
+  assert.equal(idx.setChunkVecs('yt:a', new Float32Array(3), 1), false);
+  assert.equal(passesFilters({ ...vid('c', 'x'), trState: 'ok' }, parseQuery('has:transcript').filters), true);
+  assert.equal(passesFilters(vid('c', 'x'), parseQuery('has:transcript').filters), false);
+});

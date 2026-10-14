@@ -1,6 +1,7 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
 import { parseYoutube, parseHistoryHeader } from './lib/youtube.js';
+import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
 const BROWSE_RE = /\/youtubei\/v1\/browse(\?|$)/;
@@ -98,7 +99,7 @@ async function sapisidHash() {
 
 class HttpError extends Error { constructor(status) { super(`HTTP ${status}`); this.status = status; } }
 
-async function browse(body) {
+async function innertube(endpoint, body) {
   const context = cfg('INNERTUBE_CONTEXT');
   if (!context) throw new Error('contexte YouTube introuvable (ytcfg)');
   const key = cfg('INNERTUBE_API_KEY');
@@ -108,11 +109,12 @@ async function browse(body) {
   };
   const visitor = cfg('VISITOR_DATA'); if (visitor) headers['x-goog-visitor-id'] = visitor;
   const auth = await sapisidHash(); if (auth) headers.authorization = auth;
-  const res = await origFetch(`/youtubei/v1/browse?prettyPrint=false${key ? '&key=' + encodeURIComponent(key) : ''}`, { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ context, ...body }) });
+  const res = await origFetch(`/youtubei/v1/${endpoint}?prettyPrint=false${key ? '&key=' + encodeURIComponent(key) : ''}`, { method: 'POST', credentials: 'include', headers, body: JSON.stringify({ context, ...body }) });
   if (!res.ok) throw new HttpError(res.status);
   return { json: await res.json(), body };
 }
 
+const browse = (body) => innertube('browse', body);
 const progress = (state, extra = {}) => post('sync', { state, runId: currentRun, ...extra });
 
 // Remonte une playlist page par page. Retourne { count, complete }.
@@ -163,6 +165,60 @@ async function runHistory(days) {
   } catch (e) {
     const forbidden = e instanceof HttpError && (e.status === 401 || e.status === 403);
     progress('error', { message: forbidden ? `YouTube a refusé la requête (${e.message}) : ouvre youtube.com/feed/history et défile, les vidéos seront capturées au passage.` : e.message });
+  } finally {
+    busy = false; currentRun = null;
+  }
+}
+
+// ---- transcriptions ----
+// 1) panneau « Transcription » de la page vidéo : « next » donne le jeton, « get_transcript » les segments (sans jeton PO)
+// 2) repli : pistes de sous-titres du lecteur (timedtext json3)
+// Retourne { state: 'ok', chunks } | { state: 'none' } ; lève HttpError sur refus / limite de débit.
+async function fetchTranscript(videoId) {
+  let segs = [], params = null;
+  try {
+    const next = await innertube('next', { videoId });
+    params = findTranscriptParams(next.json);
+    if (params) segs = parseTranscript((await innertube('get_transcript', { params })).json);
+  } catch (e) { if (e instanceof HttpError && (e.status === 429 || e.status === 403 || e.status === 401)) throw e; }
+  if (!segs.length) {
+    try {
+      const pl = (await innertube('player', { videoId, contentCheckOk: true, racyCheckOk: true })).json;
+      const track = pickTrack(captionTracks(pl));
+      if (track) {
+        const res = await origFetch(track.url + (track.url.includes('fmt=') ? '' : '&fmt=json3'), { credentials: 'include' });
+        if (res.ok) { const txt = await res.text(); if (txt) segs = parseJson3(safeJson(txt)); }
+      }
+    } catch (e) { if (e instanceof HttpError && e.status === 429) throw e; }
+  }
+  const chunks = chunkSegments(segs);
+  return chunks.length ? { state: 'ok', chunks } : { state: 'none' };
+}
+
+async function runTranscripts(ids) {
+  if (busy) return;
+  busy = true; stopFlag = false; currentRun = String(Date.now());
+  let done = 0, ok = 0, none = 0, strikes = 0;
+  progress('running', { transcripts: true, done, total: ids.length, ok });
+  try {
+    for (const id of ids) {
+      if (stopFlag) break;
+      try {
+        const r = await fetchTranscript(id);
+        strikes = 0;
+        if (r.state === 'ok') ok++; else none++;
+        post('transcript', { id: 'yt:' + id, state: r.state, chunks: r.chunks });
+      } catch (e) {
+        if (++strikes >= 3) throw e; // refus répétés : on s'arrête là (limite de débit probable)
+      }
+      done++;
+      progress('running', { transcripts: true, done, total: ids.length, ok });
+      await sleep(1200 + Math.random() * 1800);
+    }
+    progress(stopFlag ? 'stopped' : 'done', { transcripts: true, total: ids.length, ok, none, done });
+  } catch (e) {
+    const limited = e instanceof HttpError;
+    progress('error', { message: limited ? `YouTube a refusé les requêtes (${e.message}) : réessaie plus tard (ce qui a été récupéré est conservé).` : e.message, transcripts: true });
   } finally {
     busy = false; currentRun = null;
   }
@@ -231,7 +287,8 @@ window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG + '-ctl') return;
   const d = ev.data;
   if (d.type === 'histAck') { const w = waiters.get(d.nonce); if (w) { waiters.delete(d.nonce); w(d.fresh ?? null); } }
-  if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
+  if (d.type === 'start' && d.mode === 'transcripts') runTranscripts(d.ids || []);
+  else if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
   else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll());
   if (d.type === 'stop') stopFlag = true;
   if (d.type === 'ping') post('pong', { path: location.pathname, ready: !!cfg('INNERTUBE_CONTEXT'), busy });

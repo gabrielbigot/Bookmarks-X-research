@@ -9,6 +9,7 @@ window.addEventListener('message', (ev) => {
   const d = ev.data;
   if (d.type === 'videos') send({ type: 'ytCaptured', videos: d.videos, playlist: d.playlist, runId: d.runId });
   else if (d.type === 'history') chrome.runtime.sendMessage({ type: 'ytHistory', videos: d.videos, runId: d.runId }).then((r) => ctl('histAck', { nonce: d.nonce, fresh: r?.fresh ?? null }), () => ctl('histAck', { nonce: d.nonce, fresh: null }));
+  else if (d.type === 'transcript') send({ type: 'ytTranscript', id: d.id, state: d.state, chunks: d.chunks });
   else if (d.type === 'playlists') send({ type: 'ytPlaylists', playlists: d.playlists });
   else if (d.type === 'sync') { send({ ...d, type: 'ytProgress' }); showStatus(d); }
   else if (d.type === 'warn') send({ type: 'parseWarning', src: 'youtube', unparsed: d.unparsed, parsed: 0, ops: [] });
@@ -17,7 +18,7 @@ window.addEventListener('message', (ev) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg.type === 'ytStart') ctl('start', { mode: msg.mode, days: msg.days });
+  if (msg.type === 'ytStart') ctl('start', { mode: msg.mode, days: msg.days, ids: msg.ids });
   if (msg.type === 'ytStop') ctl('stop');
   if (msg.type === 'ytPing') { ctl('ping'); setTimeout(() => sendResponse({ ready, path: lastPath, alive: Date.now() - lastPong < 1500 }), 250); return true; }
 });
@@ -25,8 +26,8 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
 function showStatus(d) {
   if (!statusEl) return;
   const t = {
-    running: d.history ? `Historique : ${d.count ?? 0} visionnages lus${d.day ? ` (jusqu’au ${d.day})` : ''}…` : `${d.playlist ? d.playlist + ' — ' : ''}${d.count ?? 0} vidéos${d.lists ? ` (${d.listIndex}/${d.lists} playlists)` : ''}…`,
-    done: d.history ? `Historique terminé : ${d.total} lus` : `Terminé : ${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}`,
+    running: d.transcripts ? `Transcriptions : ${d.done}/${d.total} (${d.ok} récupérées)…` : d.history ? `Historique : ${d.count ?? 0} visionnages lus${d.day ? ` (jusqu’au ${d.day})` : ''}…` : `${d.playlist ? d.playlist + ' — ' : ''}${d.count ?? 0} vidéos${d.lists ? ` (${d.listIndex}/${d.lists} playlists)` : ''}…`,
+    done: d.transcripts ? `Transcriptions terminées : ${d.ok} récupérées, ${d.none} sans transcription` : d.history ? `Historique terminé : ${d.total} lus` : `Terminé : ${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}`,
     stopped: 'Synchro arrêtée', error: '⚠ ' + (d.message || 'erreur'),
   }[d.state];
   if (t) statusEl.textContent = t;

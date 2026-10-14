@@ -4,7 +4,7 @@ Extension Chrome / Comet (Chromium, Manifest V3) qui ajoute une **recherche sém
 Par défaut tout est **local** : pas de serveur, pas de base de données externe, pas de clé API, coût = 0 €.
 Les fonctions d'IA, l'indexation des liens et la recherche d'images sont **facultatives** et désactivées tant que tu ne les actives pas.
 
-## YouTube : playlists et historique (v0.4)
+## YouTube : playlists, historique et transcriptions (v0.5)
 
 Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**) sont une deuxième source, cherchée **avec** tes bookmarks X (« cerveau » trouve tweets et vidéos).
 
@@ -12,7 +12,7 @@ Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**)
 - **Chercher** : cartes vidéo (miniature, durée, chaîne, vues, playlists). Filtre « Source » (Tout / X / YouTube), opérateurs `source:youtube`, `playlist:"à regarder plus tard"`, `from:@chaine`.
 - **Retraits** : après une synchro complète d'une playlist, une vidéo qui n'y est plus perd cette appartenance ; si elle n'est plus dans aucune playlist, elle t'est proposée à la suppression (jamais sans confirmation).
 - **Indexation** : manuelle comme pour X (« ▶ Indexer »). Titre + chaîne + playlists sont indexés.
-- **Limites** : tout est testé contre un faux YouTube (format `playlistVideoRenderer` **et** `lockupViewModel`) ; le format réel change souvent, un bandeau t'avertit si des vidéos deviennent illisibles. La synchro rejoue l'API interne avec ta session (`youtubei/v1/browse`, en-tête signé `SAPISIDHASH`) ; en cas de refus (HTTP 401/403), ouvre la playlist et défile : la capture passive prend le relais. Pas encore : import Google Takeout, transcriptions.
+- **Limites** : tout est testé contre un faux YouTube (format `playlistVideoRenderer` **et** `lockupViewModel`) ; le format réel change souvent, un bandeau t'avertit si des vidéos deviennent illisibles. La synchro rejoue l'API interne avec ta session (`youtubei/v1/browse`, en-tête signé `SAPISIDHASH`) ; en cas de refus (HTTP 401/403), ouvre la playlist et défile : la capture passive prend le relais. Pas encore : import Google Takeout.
 
 **Historique de visionnage** (`youtube.com/feed/history`)
 
@@ -20,6 +20,7 @@ Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**)
 - **Chercher** : l'historique est indexé comme les playlists (titre, chaîne, début de la description). Cartes : « Vu le … · ×N · 60 % » et barre de progression sur la miniature. Opérateurs : `viewed:yes` / `viewed:no` (ou `vu:oui|non`), `watched:aujourd'hui`, `watched:2026-10-12`, `watched:2026-10-01..2026-10-31`. Exemple utile : `viewed:no playlist:"à regarder plus tard"` = ce que tu n'as pas encore regardé.
 - **Vie privée** : tout reste local. L'historique n'est **jamais envoyé** à une IA externe (Demander, Résumé, reclassement, nommage des thèmes) tant que tu ne coches pas « Autoriser l'envoi de mon historique… » dans ⚙. L'export de sauvegarde le contient : chiffre-le.
 - **Statistiques YouTube** : page 📊 › onglet « YouTube ». Visionnages par jour/semaine/mois, calendrier, jours de la semaine, durée des vidéos, chaînes les plus regardées (avec temps estimé), temps regardé estimé (durée × progression ; sans progression = vue en entier), vidéos commencées sans finir, playlists, « à regarder » (nombre et durée jamais vues), « À regarder plus tard » à ressortir, plus revues, mots des titres. La période filtre l'activité ; la bibliothèque n'en dépend pas. Clic sur une barre ou un jour = recherche correspondante.
+- **Transcriptions** : panneau › « ▶ Transcriptions » (onglet YouTube en arrière-plan, ~1 à 3 s par vidéo, 400 vidéos au plus par passage ; arrêt après 3 refus consécutifs). Réglage ⚙ : vidéos de tes playlists (défaut) ou aussi l'historique. Le texte parlé est cherché **par mots** (la transcription entière est indexée) et **par sens** (jusqu'à 24 passages par vidéo, répartis sur toute la durée, vectorisés au prochain « ▶ Indexer » ; la vidéo vaut son meilleur passage). Un résultat affiche l'extrait trouvé avec son horodatage : le lien ouvre la vidéo à la seconde près. Opérateur `has:transcript`. Une vidéo sans transcription n'est redemandée qu'après 30 jours. Les transcriptions sont incluses dans l'export. Source : panneau « Transcription » de YouTube (`next` → `get_transcript`), repli sur les sous-titres du lecteur (français puis anglais, manuels avant automatiques). Elles ne sont jamais envoyées à une IA externe.
 - **Limites** : les jours sont lus dans les en-têtes de YouTube (« Aujourd'hui », « Hier », « lundi », « 12 octobre » — français et anglais) ; une langue non reconnue donne des visionnages sans date. Une vidéo vue plusieurs jours garde la liste de ses jours ; un visionnage supprimé côté YouTube n'est pas retiré ici. Testé contre un faux YouTube seulement.
 
 ## Ce que ça fait

@@ -79,6 +79,7 @@ export async function decodeFull(bytes, passphrase) {
   return {
     tweets: data.tweets.filter((t) => t && t.id && typeof t.text === 'string'),
     saved: Array.isArray(data.saved) ? data.saved.filter((q) => typeof q === 'string') : [],
+    transcripts: Array.isArray(data.transcripts) ? data.transcripts.filter((r) => r && r.id && Array.isArray(r.chunks)) : [],
     vectors: data.vectors?.data && Array.isArray(data.vectors.ids) ? data.vectors : null,
   };
 }

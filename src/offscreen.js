@@ -3,7 +3,8 @@
 // seuls le premier téléchargement des modèles et la lecture des pages liées (si activée) sortent.
 // NB : un document offscreen n'a accès qu'à chrome.runtime -> la config arrive par message.
 import { AutoModel, AutoTokenizer, AutoProcessor, CLIPVisionModelWithProjection, CLIPTextModelWithProjection, RawImage, pipeline, load_image, env } from '@huggingface/transformers';
-import { pendingIds, getTweets, putVectors, setMeta, scanTweets, updateTweet, putImgVectors, getAllImgKeys } from './lib/db.js';
+import { pendingIds, getTweets, putVectors, setMeta, scanTweets, updateTweet, putImgVectors, getAllImgKeys, pendingChunkIds, getTranscripts, putChunkVecs } from './lib/db.js';
+import { sampleChunks } from './lib/transcript.js';
 import { tweetText } from './lib/search.js';
 import { modelOf } from './lib/models.js';
 import { fetchMeta, isPublicUrl, linkTextOf, cardFromMeta } from './lib/links.js';
@@ -205,6 +206,33 @@ async function indexLoop(exclude = new Set()) {
   }
 }
 
+// Passages de transcription : au plus 24 par vidéo, embeddings rangés par vidéo (la recherche prend le meilleur passage).
+const CHUNK_MAX = 24;
+async function chunkLoop() {
+  const m = cur();
+  const ids = await pendingChunkIds(m.id);
+  if (!ids.length) return;
+  let done = 0;
+  emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
+  for (const id of ids) {
+    if (cur().key !== m.key || stopRequested) return;
+    const trs = await getTranscripts([id]);
+    const chunks = sampleChunks(trs.get(id) || [], CHUNK_MAX);
+    if (!chunks.length) { await putChunkVecs([{ id, vecs: new Float32Array(0), k: 0 }], m.id); continue; }
+    const out = new Float32Array(chunks.length * m.dim);
+    for (let i = 0; i < chunks.length; i += BATCH) {
+      const part = chunks.slice(i, i + BATCH);
+      const vecs = await embed(part.map((c) => docPrompt(c.text)));
+      if (cur().key !== m.key) return;
+      vecs.forEach((v, k) => out.set(v, (i + k) * m.dim));
+      if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
+      await sleep(config.compute === 'cpu' ? 40 : 0);
+    }
+    await putChunkVecs([{ id, vecs: out, k: chunks.length }], m.id);
+    if (++done % 5 === 0) emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
+  }
+}
+
 // ---------------- enrichissement des liens ----------------
 // cardsV : version du format des cartes (2 = avec image/site) — les tweets enrichis avant sont relus une fois.
 const CARDS_V = 2;
@@ -327,6 +355,7 @@ async function processAll(run = false) {
           await enrichIds([...waiting]);
           await indexLoop();
         }
+        await chunkLoop();
         await setMeta('lastIndexed', Date.now());
         emit({ type: 'indexDone' });
       } catch (e) {
