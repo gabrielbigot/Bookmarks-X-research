@@ -207,7 +207,6 @@ async function indexLoop(exclude = new Set()) {
 }
 
 // Passages de transcription : au plus 12 par vidéo, embeddings rangés par vidéo (la recherche prend le meilleur passage).
-const CHUNK_MAX = 12;
 async function chunkLoop() {
   const m = cur();
   const ids = await pendingChunkIds(m.id);
@@ -217,7 +216,7 @@ async function chunkLoop() {
   for (const id of ids) {
     if (cur().key !== m.key || stopRequested) return;
     const trs = await getTranscripts([id]);
-    const chunks = sampleChunks(trs.get(id) || [], CHUNK_MAX);
+    const chunks = sampleChunks(trs.get(id) || [], config.trPassages || 12);
     if (!chunks.length) { await putChunkVecs([{ id, vecs: new Float32Array(0), k: 0 }], m.id); continue; }
     const out = new Float32Array(chunks.length * m.dim);
     for (let i = 0; i < chunks.length; i += BATCH) {

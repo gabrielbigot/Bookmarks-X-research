@@ -155,6 +155,8 @@
         <label class="chk"><input type="checkbox" id="opt-images"><span>Recherche dans les images <span class="hint">(expérimental, CLIP ~150 Mo, requêtes en anglais)</span></span></label>
         <label class="chk">Historique YouTube : profondeur de la synchro <select id="yt-days"><option value="30">30 jours</option><option value="90">90 jours</option><option value="365">1 an</option><option value="0">tout</option></select></label>
         <label class="chk">Transcriptions YouTube : vidéos concernées <select id="yt-trscope"><option value="playlists">celles de mes playlists</option><option value="all">toutes (playlists + historique)</option></select></label>
+        <label class="chk">Transcriptions : profondeur de la recherche par mots <select id="yt-trwords"><option value="20000">20 min de parole (défaut, léger)</option><option value="60000">1 heure</option><option value="200000">tout (plus de mémoire)</option></select></label>
+        <label class="chk">Transcriptions : passages vectorisés par vidéo <select id="yt-trpass"><option value="12">12 (défaut)</option><option value="24">24</option><option value="48">48 (long à calculer)</option></select> <span class="hint">s'applique aux prochaines vidéos indexées</span></label>
         <label class="chk"><input type="checkbox" id="ai-history"><span>Autoriser l'envoi de mon historique de visionnage à l'IA externe <span class="hint">(désactivé par défaut ; l'export de sauvegarde contient aussi l'historique : chiffre-le)</span></span></label>
         <label class="chk"><input type="checkbox" id="opt-auto"><span>Récupérer les nouveautés automatiquement quand un onglet X est ouvert</span></label>
         <div class="btns"><button type="button" id="reindex">Tout réindexer</button></div>

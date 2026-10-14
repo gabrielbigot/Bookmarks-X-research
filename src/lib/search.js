@@ -8,7 +8,7 @@ export function normalizeText(s) {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
-export const TR_INDEX_CHARS = 20000; // ~ les 20 000 premiers caractères d'une transcription (≈ 20 min de parole) sont indexés par mots
+export const TR_INDEX_CHARS = 20000; // défaut ; réglable (⚙)
 export function tokenize(s) {
   return normalizeText(s)
     .split(/[^a-z0-9_@#+.]+/)
@@ -109,6 +109,7 @@ export class Index {
     this.cap = 0;
     this.matrix = new Float32Array(0); // cap * dim
     this.hasVec = new Uint8Array(0);
+    this.trChars = this.trChars || 0; // profondeur d'indexation des transcriptions (caractères) ; 0 = défaut
     this.chunkVecs = new Map(); // ligne -> { vecs (k × dim), k } : passages de transcription
     this.vocab = null; // tableau trié, pour les préfixes
     this._recent = null;
@@ -141,7 +142,8 @@ export class Index {
       const tf = new Map();
       const toks = tokenize(tweetText(t) + ' ' + (t.links || []).join(' '));
       // transcription : sans mots courants, bornée (mémoire de l'index : des milliers de vidéos × des milliers de mots)
-      if (t.transcript) for (const w of tokenize(t.transcript.slice(0, TR_INDEX_CHARS))) if (w.length >= 3 && !isStopword(w)) toks.push(w);
+      if (t.transcript) for (const w of tokenize(t.transcript.slice(0, this.trChars || TR_INDEX_CHARS))) if (w.length >= 3 && !isStopword(w)) toks.push(w);
+      delete t.transcript; // le texte n'est gardé nulle part en mémoire : seuls les index le sont (les extraits relisent la base)
       for (const tok of toks) tf.set(tok, (tf.get(tok) || 0) + 1);
       this.docLen[row] = toks.length;
       this.totalLen += toks.length;

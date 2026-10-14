@@ -15,6 +15,8 @@ export const DEFAULTS = {
   linkImages: true, // afficher l'image des cartes de liens (charge l'image depuis le site : désactive pour ne contacter personne)
   ytHistoryDays: 90, // profondeur de la synchro de l'historique YouTube (0 = tout)
   ytTranscripts: 'playlists', // vidéos dont on récupère la transcription : 'playlists' | 'all' (+ historique)
+  ytTrWords: 20000, // profondeur d'indexation par mots d'une transcription, en caractères (20 000 ≈ 20 min de parole)
+  ytTrPassages: 12, // passages vectorisés par vidéo (recherche par sens)
   aiHistory: false, // autoriser l'envoi de l'historique de visionnage à une IA externe
   autoSync: true, // récupérer les nouveautés tout seul quand un onglet X est ouvert
 };

@@ -26,7 +26,7 @@ async function ensureOffscreen() {
 async function getConfig() {
   const s = await getSettings();
   const hasPerm = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
-  return { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel, compute: s.compute, indexMode: s.indexMode };
+  return { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel, compute: s.compute, indexMode: s.indexMode, trPassages: s.ytTrPassages };
 }
 
 // run = demande explicite de l'utilisateur (bouton « Indexer »). En mode manuel, rien ne démarre sans elle :

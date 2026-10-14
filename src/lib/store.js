@@ -9,7 +9,7 @@ async function attachTranscripts(tweets) {
   const ids = tweets.filter((t) => t.trState === 'ok').map((t) => t.id);
   if (!ids.length) return;
   const trs = await getTranscripts(ids);
-  for (const t of tweets) { const c = trs.get(t.id); if (c) { t.trChunks = c; t.transcript = chunksText(c); } }
+  for (const t of tweets) { const c = trs.get(t.id); if (c) t.transcript = chunksText(c, 1_000_000); } // transitoire : consommé (puis supprimé) par Index.add
 }
 async function attachChunkVecs(index, model) {
   const all = await getAllChunkVecs(model);

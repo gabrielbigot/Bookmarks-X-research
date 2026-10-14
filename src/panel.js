@@ -1,4 +1,4 @@
-import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
@@ -402,19 +402,26 @@ function videoCard([row], terms, pos) {
   const pls = (t.playlists || []).filter((p) => p.title).slice(0, 4);
   const wd = t.watched || [];
   const seen = wd.length ? `<div class="yt-w" title="${esc(wd.join(', '))}">Vu le ${esc(wd[wd.length - 1])}${wd.length > 1 ? ` · ×${wd.length}` : ''}${t.progress ? ` · ${t.progress} %` : ''}</div>` : '';
-  const bc = t.trChunks && terms?.length ? bestChunk(t.trChunks, terms.filter((x) => x.length >= 3), normalizeText) : null;
-  const snip = bc ? `<div class="yt-sn"><a href="${esc(t.url + '&t=' + bc.t + 's')}" target="_blank" rel="noopener" title="Ouvrir la vidéo à ce passage">▶ ${fmtTime(bc.t)}</a> … ${hl(bc.text.slice(0, 260), terms)} …</div>` : '';
   el.innerHTML = `
     <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}${t.progress ? `<span class="prog"><i style="width:${Math.min(100, t.progress)}%"></i></span>` : ''}</div>
     <div class="yt-b">
       <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}${t.trState === 'ok' ? '<span class="yt-tr" title="Transcription disponible (cherchée dans le texte parlé)">🗒</span>' : ''}</div>
       <div class="yt-m"><a href="#" data-q="${esc('from:@' + t.handle)}" title="Voir les vidéos de cette chaîne">${esc(t.name || t.handle)}</a>${meta ? ' · ' + esc(meta) : ''}</div>
       ${seen}
-      ${snip}
       ${pls.length ? `<div class="yt-pl">${pls.map((p) => `<button class="chip-pl" type="button" data-q="${esc(`playlist:"${p.title}"`)}" title="Voir cette playlist">${esc(p.title)}</button>`).join('')}</div>` : ''}
       <div class="ac"><a href="${esc(t.url)}" target="_blank" rel="noopener" style="color:var(--acc);text-decoration:none">Ouvrir sur YouTube ↗</a>
         ${index.hasVec[row] ? '<button class="ghost sim">≈ Similaires</button>' : ''}${last.why?.get(row) ? `<span class="why">${esc(last.why.get(row))}</span>` : ''}</div>
     </div>`;
+  if (t.trState === 'ok' && terms?.length) { // extrait de transcription : le texte est relu dans la base (jamais gardé en mémoire)
+    getTranscripts([t.id]).then((m) => {
+      const bc = bestChunk(m.get(t.id), terms.filter((x) => x.length >= 3), normalizeText);
+      if (!bc || !el.isConnected) return;
+      const d = document.createElement('div');
+      d.className = 'yt-sn';
+      d.innerHTML = `<a href="${esc(t.url + '&t=' + bc.t + 's')}" target="_blank" rel="noopener" title="Ouvrir la vidéo à ce passage">▶ ${fmtTime(bc.t)}</a> … ${hl(bc.text.slice(0, 260), terms)} …`;
+      el.querySelector('.yt-m')?.after(d);
+    }).catch(() => {});
+  }
   el.querySelector('img')?.addEventListener('error', (e) => e.target.remove(), { once: true });
   el.querySelectorAll('[data-q]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); $('q').value = b.dataset.q; state.ignoreAuthor = false; run(); window.scrollTo({ top: 0 }); }));
   el.addEventListener('click', (e) => { if (!e.target.closest('a,button')) window.open(t.url, '_blank', 'noopener'); });
@@ -841,6 +848,8 @@ async function openSettings() {
   $('opt-auto').checked = settings.autoSync;
   $('yt-days').value = String(settings.ytHistoryDays);
   $('yt-trscope').value = settings.ytTranscripts;
+  $('yt-trwords').value = String(settings.ytTrWords);
+  $('yt-trpass').value = String(settings.ytTrPassages);
   $('ai-history').checked = settings.aiHistory;
   $('compute').value = settings.compute;
   $('opt-autoindex').checked = settings.indexMode === 'auto';
@@ -938,6 +947,8 @@ $('mem-free').onclick = async () => {
 };
 $('compute').onchange = async (e) => { settings = await setSettings({ compute: e.target.value }); };
 $('opt-linkimg').onchange = async (e) => { settings = await setSettings({ linkImages: e.target.checked }); render(); };
+$('yt-trwords').onchange = async (e) => { settings = await setSettings({ ytTrWords: +e.target.value }); index.trChars = settings.ytTrWords; await load(true); run(); };
+$('yt-trpass').onchange = async (e) => { settings = await setSettings({ ytTrPassages: +e.target.value }) };
 $('yt-trscope').onchange = async (e) => { settings = await setSettings({ ytTranscripts: e.target.value }); };
 $('yt-days').onchange = async (e) => { settings = await setSettings({ ytHistoryDays: +e.target.value }); };
 $('ai-history').onchange = async (e) => { settings = await setSettings({ aiHistory: e.target.checked }); };
@@ -1184,6 +1195,7 @@ chrome.storage.onChanged.addListener(async (ch, area) => {
 // ---------- démarrage ----------
 (async () => {
   settings = await getSettings();
+  index.trChars = settings.ytTrWords;
   applyModel();
   saved = (await getMeta('saved')) || [];
   renderSaved();
