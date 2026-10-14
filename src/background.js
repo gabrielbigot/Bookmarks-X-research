@@ -131,7 +131,7 @@ async function ytReconcile(msg) {
 async function ytStart(mode) {
   let ids;
   if (mode === 'transcripts') {
-    ids = (await pendingTranscriptIds((await getSettings()).ytTranscripts, 400)).map((id) => id.slice(3));
+    ids = (await pendingTranscriptIds((await getSettings()).ytTranscripts, (await getSettings()).ytTrBatch || 100000)).map((id) => id.slice(3));
     if (!ids.length) return { ok: false, reason: 'nothing-to-do' };
   }
   const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });

@@ -754,6 +754,7 @@ function showAnswer(html, sourcesNote) {
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash'); }
   }));
 }
+const etaText = (sec) => (sec >= 5400 ? `${Math.round(sec / 3600)} h` : `${Math.max(1, Math.round(sec / 60))} min`);
 // Vie privée : l'historique de visionnage ne part vers une IA externe que si tu l'as autorisé.
 const sendable = (t) => settings.aiHistory || !isVideoItem(t) || !(t.watched || []).length || (t.playlists || []).length > 0;
 async function ask() {
@@ -848,6 +849,7 @@ async function openSettings() {
   $('opt-auto').checked = settings.autoSync;
   $('yt-days').value = String(settings.ytHistoryDays);
   $('yt-trscope').value = settings.ytTranscripts;
+  $('yt-trbatch').value = String(settings.ytTrBatch);
   $('yt-trwords').value = String(settings.ytTrWords);
   $('yt-trpass').value = String(settings.ytTrPassages);
   $('ai-history').checked = settings.aiHistory;
@@ -947,6 +949,7 @@ $('mem-free').onclick = async () => {
 };
 $('compute').onchange = async (e) => { settings = await setSettings({ compute: e.target.value }); };
 $('opt-linkimg').onchange = async (e) => { settings = await setSettings({ linkImages: e.target.checked }); render(); };
+$('yt-trbatch').onchange = async (e) => { settings = await setSettings({ ytTrBatch: +e.target.value }); };
 $('yt-trwords').onchange = async (e) => { settings = await setSettings({ ytTrWords: +e.target.value }); index.trChars = settings.ytTrWords; await load(true); run(); };
 $('yt-trpass').onchange = async (e) => { settings = await setSettings({ ytTrPassages: +e.target.value }) };
 $('yt-trscope').onchange = async (e) => { settings = await setSettings({ ytTranscripts: e.target.value }); };
@@ -1168,7 +1171,7 @@ chrome.runtime.onMessage.addListener((m) => {
       const running = m.state === 'running';
       $('stop').hidden = !running;
       $('yt-sync').hidden = $('yt-hist').hidden = $('yt-tr').hidden = running;
-      $('progress').textContent = { running: m.transcripts ? `YouTube : transcriptions ${m.done}/${m.total} (${m.ok} récupérées${m.last ? ` ; dernier échec : ${m.last}` : ''})…` : m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
+      $('progress').textContent = { running: m.transcripts ? `YouTube : transcriptions ${m.done}/${m.total}${m.total - m.done > 30 ? ` · reste ≈ ${etaText((m.total - m.done) * 2.4)}` : ''} (${m.ok} récupérées${m.last ? ` ; dernier échec : ${m.last}` : ''})…` : m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
         done: m.transcripts ? `YouTube : transcriptions terminées — ${m.ok} récupérées, ${m.none} sans transcription${m.fail ? `, ${m.fail} en échec` : ''}${m.reasons ? ' — ' + m.reasons : ''}` : m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
       break;
     }
