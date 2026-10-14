@@ -604,8 +604,8 @@ await panel.waitForTimeout(500);
 assert.equal(await panel.locator('.tw.yt').count(), 0, 'vidéo retirée : plus dans la recherche');
 await panel.fill('#q', 'pain au levain');
 await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'une vidéo encore dans une autre playlist reste', 6000);
-await waitFor(async () => (await panel.locator('.tw.yt .chip-pl').allInnerTexts()).join() === 'Cuisine', 'chip Cuisine', 6000);
-assert.deepEqual(await panel.locator('.tw.yt .chip-pl').allInnerTexts(), ['Cuisine'], 'seule l’appartenance retirée disparaît');
+await waitFor(async () => (await panel.locator('.tw.yt .chip-pl').allTextContents()).join() === 'Cuisine', 'chip Cuisine', 6000);
+assert.deepEqual(await panel.locator('.tw.yt .chip-pl').allTextContents(), ['Cuisine'], 'seule l’appartenance retirée disparaît');
 await panel.fill('#q', '');
 
 // ------------------------------------------------------------------ 11c. YouTube : historique de visionnage (4 pages), badges, filtres, synchro incrémentale
@@ -641,6 +641,23 @@ await panel.waitForFunction(() => /historique terminé/.test(document.getElement
 assert.deepEqual(hlog(), ['FEhistory', 'HC1', 'HC2'], 'synchro incrémentale : arrêt avant la dernière page : ' + hlog());
 await count('zorglub', 1, 'nouvelle vidéo de l’historique');
 await panel.fill('#q', '');
+
+// statistiques YouTube
+const ys = await ctx.newPage();
+await ys.setViewportSize({ width: 1360, height: 900 });
+await ys.goto(`chrome-extension://${extId}/stats.html`);
+await ys.waitForSelector('.kpis .tile.hero');
+await ys.click('#source button:has-text("YouTube")');
+await ys.waitForFunction(() => /Vidéos en base/.test(document.querySelector('.tile.hero .l')?.textContent || ''));
+assert.equal(Number((await ys.locator('.tile.hero .v').innerText()).replace(/\D/g, '')), 11, '11 vidéos en base');
+const kt = await ys.locator('.kpis').innerText();
+assert.match(kt, /Visionnages \(90 j\)\s*\n?\s*7/, 'visionnages : ' + kt.replace(/\s+/g, ' '));
+assert.match(kt, /Temps regardé/);
+for (const t of ['Visionnages par jour', 'Calendrier de l’année', 'Chaînes les plus regardées', 'Playlists']) assert.ok(await ys.locator(`h3:has-text("${t}")`).count(), 'carte : ' + t);
+assert.match(await ys.locator('.card:has(h3:has-text("Chaînes les plus regardées"))').innerText(), /Hist Chan/);
+await ys.screenshot({ path: 'test/stats-yt.png', fullPage: true });
+await ys.evaluate(() => localStorage.removeItem('xbs.stats.src'));
+await ys.close();
 
 // ------------------------------------------------------------------ 12. mode sombre + page de statistiques (jeu de données synthétique : 300 tweets sur 100 jours)
 await panel.evaluate(async () => {

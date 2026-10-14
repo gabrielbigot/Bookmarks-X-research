@@ -2,18 +2,29 @@ import { getAllTweets } from './lib/db.js';
 import { computeStats, TYPE_LABELS } from './lib/stats.js';
 import { bindThemeButton } from './lib/theme.js';
 import { isVideoItem } from './lib/youtube.js';
+import { computeYtStats, fmtHours } from './lib/ytstats.js';
 import { timeSeries, cumulative, columns, hbars, stacked, calendar, sparkline, esc, fmtInt, fmtCompact, fmtDay, WEEKDAYS } from './lib/charts.js';
 
 const $ = (id) => document.getElementById(id);
 const RANGES = [[7, '7 j'], [30, '30 j'], [90, '90 j'], [365, '1 an'], [null, 'Tout']];
 const RKEY = 'xbs.stats.range';
-let all = [], range = 90;
+let all = [], videos = [], range = 90, src = 'x';
+try { src = localStorage.getItem('xbs.stats.src') === 'yt' ? 'yt' : 'x'; } catch {}
 try { const v = localStorage.getItem(RKEY); if (v !== null) range = v === 'all' ? null : Number(v); } catch {}
 
 bindThemeButton($('theme'));
 
 // Ouvre le panneau de recherche avec une requête (cliquer sur une barre, une case, une pastille…).
 const openQ = (q) => window.open(`panel.html?q=${encodeURIComponent(q)}`, '_blank', 'noopener');
+
+function drawSources() {
+  $('source').replaceChildren(...[['x', 'Bookmarks X'], ['yt', 'YouTube']].map(([v, label]) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = label; b.setAttribute('aria-pressed', String(v === src));
+    b.onclick = () => { src = v; try { localStorage.setItem('xbs.stats.src', v); } catch {} drawSources(); render(); };
+    return b;
+  }));
+}
 
 function drawRanges() {
   $('ranges').replaceChildren(...RANGES.map(([v, label]) => {
@@ -48,11 +59,54 @@ function dayQuery(st, k, gran) {
 const shiftDay = (k, n) => { const [y, m, d] = k.split('-').map(Number); const t = new Date(y, m - 1, d + n); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
 const lastOfMonth = (ym) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
 
+function renderYt(app) {
+  const st = computeYtStats(videos, { rangeDays: range });
+  const k = st.kpi, rl = range ? RANGES.find(([v]) => v === range)[1] : 'tout';
+  if (!videos.length) { app.innerHTML = '<p class="muted">Aucune vidéo YouTube pour l’instant : synchronise tes playlists et ton historique depuis le panneau de recherche.</p>'; return; }
+  const last30 = st.series.gran === 'day' ? st.series.points.slice(-30).map((p) => p.n) : [];
+  let html = '';
+  if (!st.hasHistory) html += '<p class="note">Aucun <b>historique de visionnage</b> synchronisé : seules les statistiques de ta bibliothèque (playlists) sont disponibles. Lance « ▶ Historique YouTube » dans le panneau pour voir l’activité, les chaînes et le temps de visionnage.</p>';
+  html += '<div class="kpis">'
+    + tile('Vidéos en base', fmtInt(k.videos), `${fmtInt(k.inPlaylists)} dans une playlist`, sparkline(last30), 'hero')
+    + (st.hasHistory ? tile(`Visionnages (${rl})`, fmtInt(k.views), `${fmtInt(k.seen)} vidéos différentes`)
+      + tile('Temps regardé (estimé)', fmtHours(k.hours), 'durée × progression ; sans progression = vue en entier')
+      + tile('Moyenne par jour actif', k.avgPerActiveDay.toFixed(1).replace('.', ','), `${fmtInt(k.activeDays)} jours actifs sur ${fmtInt(k.days)}`)
+      + tile('Jour record', fmtInt(k.best.n), k.best.day ? fmtDay(k.best.day) : '')
+      + tile('Chaînes regardées', fmtInt(k.channels), `${fmtInt(k.started)} vidéo${k.started > 1 ? "s" : ""} commencée${k.started > 1 ? "s" : ""} sans finir`) : '')
+    + tile('À regarder (playlists)', fmtInt(k.backlog), `${fmtHours(k.backlogSec)} de vidéos jamais vues`)
+    + tile('« À regarder plus tard »', fmtInt(k.wlBacklog), `${fmtHours(k.wlBacklogSec)} non vues`)
+    + '</div>';
+  const g = st.series.gran, by = 'par date de visionnage';
+  if (st.hasHistory) {
+    html += '<h2 class="sec">Activité</h2><div class="grid2">';
+    html += card(`Visionnages par ${g === 'day' ? 'jour' : g === 'week' ? 'semaine' : 'mois'}`, `${by}${g === 'day' ? ' · barres = jour, courbe = moyenne sur 7 jours' : ''} · clic = ouvrir ces vidéos`,
+      timeSeries(st.series.points, { gran: g, label: 'visionnages', onPick: (p) => openQ(watchedQ(p.k, g)) }), { full: true });
+    if (st.heat.length) html += card('Calendrier de l’année', 'visionnages des 12 derniers mois · clic = ouvrir ce jour', calendar(st.heat, { label: 'visionnages', onPick: (d) => openQ(`watched:${d.k}`) }), { full: true });
+    html += card('Par jour de la semaine', 'quand tu regardes le plus', columns(WEEKDAYS.map((label, i) => ({ label, n: st.weekday[i] })), { label: 'visionnages' }));
+    html += card('Durée des vidéos regardées', 'courtes ou longues ?', hbars(st.durations, { label: 'visionnages', labelW: 110 }));
+    html += '</div><h2 class="sec">Chaînes</h2><div class="grid2">';
+    html += card('Chaînes les plus regardées', 'visionnages · clic = ouvrir ses vidéos', hbars(st.channels.map((c) => ({ label: c.name || c.handle, n: c.n, q: `source:youtube from:@${c.handle}`, sub: `${fmtHours(c.sec)} regardées (estimé)` })), { label: 'visionnages', labelW: 200, onPick: (r) => openQ(r.q) }), { full: true });
+    html += '</div>';
+  }
+  html += '<h2 class="sec">Bibliothèque</h2><div class="grid2">';
+  html += card('Playlists', 'nombre de vidéos en base · clic = ouvrir la playlist', hbars(st.playlists.map((p) => ({ label: p.title, n: p.n, q: `playlist:"${p.title}"` })), { label: 'vidéos', labelW: 200, onPick: (r) => openQ(r.q) }));
+  html += '</div><div class="grid2">';
+  const cardHtml = (title, sub, inner) => `<section class="card"><header><div><h3>${esc(title)}</h3><p class="sub">${esc(sub)}</p></div></header>${inner}</section>`;
+  if (st.words.length) html += cardHtml('Mots des titres', 'hors mots courants · clic = chercher', chips(st.words, (w) => w));
+  if (st.oldestBacklog.length) html += cardHtml('« À regarder plus tard » : à ressortir', 'jamais vues, depuis le plus longtemps dans l’index', `<ol class="list">${st.oldestBacklog.map((t) => `<li><b>${esc(t.durationText || '')}</b><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)} — ${esc(decodeEntitiesSafe(t.text))}</a></li>`).join('')}</ol>`);
+  if (st.rewatched.length) html += cardHtml('Les plus revues', 'vidéos vues sur plusieurs jours', `<ol class="list">${st.rewatched.map((t) => `<li><b>× ${t.watched.length}</b><a href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name)} — ${esc(decodeEntitiesSafe(t.text))}</a></li>`).join('')}</ol>`);
+  html += '</div>';
+  app.innerHTML = html;
+}
+const watchedQ = (k, g) => `watched:${g === 'month' ? k + '-01..' + lastOfMonth(k) : g === 'week' ? k + '..' + shiftDay(k, 6) : k}`;
+const decodeEntitiesSafe = (s) => String(s || '').replace(/\s+/g, ' ').slice(0, 120);
+
 function render() {
   const app = $('app');
   app.classList.add('loading');
   setTimeout(() => {
     cards.length = 0;
+    if (src === 'yt') { renderYt(app); finish(app); return; }
     const st = computeStats(all, { rangeDays: range });
     if (!all.length) { app.innerHTML = '<p class="muted">Aucun bookmark pour l’instant : synchronise-les depuis le panneau de recherche.</p>'; app.classList.remove('loading'); return; }
     const k = st.kpi, by = st.savedValid ? 'par date d’enregistrement' : 'par date de publication';
@@ -117,6 +171,12 @@ function render() {
     html += '</div>';
 
     app.innerHTML = html;
+    finish(app);
+  }, 0);
+}
+
+function finish(app) {
+  {
     for (const c of cards) {
       const el = document.getElementById(c.id);
       c.chart.bind(el.querySelector('.viz'));
@@ -125,8 +185,9 @@ function render() {
     }
     app.querySelectorAll('.chip-s').forEach((b) => (b.onclick = () => openQ(b.dataset.q)));
     app.classList.remove('loading');
-  }, 0);
+  }
 }
 
+drawSources();
 drawRanges();
-getAllTweets().then((t) => { all = t.filter((x) => !isVideoItem(x)); render(); }); // ces statistiques portent sur les bookmarks X
+getAllTweets().then((t) => { all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); render(); }); // ces statistiques portent sur les bookmarks X

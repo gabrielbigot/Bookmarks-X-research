@@ -4,8 +4,8 @@ import { decodeEntities, isStopword } from './text.js';
 import { normalizeText } from './search.js';
 
 const DAY = 86_400_000;
-const count = (map, k, n = 1) => map.set(k, (map.get(k) || 0) + n);
-const top = (map, n) => [...map].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, n);
+export const count = (map, k, n = 1) => map.set(k, (map.get(k) || 0) + n);
+export const top = (map, n) => [...map].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, n);
 const median = (arr) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 const pubMs = (t) => (t.createdAt ? Date.parse(t.createdAt) : null);
 const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, '').toLowerCase(); } catch { return ''; } };
@@ -23,14 +23,14 @@ export const typeOf = (t) => {
 };
 export const TYPE_LABELS = { video: 'Vidéo', photo: 'Photo', link: 'Lien', quote: 'Citation', text: 'Texte seul' };
 
-const addDays = (key, n) => dayKey(parseDayStart(key) + n * DAY + 3 * 3600_000); // +3 h : insensible aux changements d'heure
-function eachDay(fromKey, toKey) {
+export const addDays = (key, n) => dayKey(parseDayStart(key) + n * DAY + 3 * 3600_000); // +3 h : insensible aux changements d'heure
+export function eachDay(fromKey, toKey) {
   const out = [];
   for (let k = fromKey, i = 0; k <= toKey && i < 20000; k = addDays(k, 1), i++) out.push(k);
   return out;
 }
-const mondayOf = (key) => { const d = new Date(parseDayStart(key)); return addDays(key, -((d.getDay() + 6) % 7)); };
-const monthOf = (key) => key.slice(0, 7);
+export const mondayOf = (key) => { const d = new Date(parseDayStart(key)); return addDays(key, -((d.getDay() + 6) % 7)); };
+export const monthOf = (key) => key.slice(0, 7);
 
 // rangeDays : null (tout) ou nombre de jours. now : injectable pour les tests.
 export function computeStats(all, { now = Date.now(), rangeDays = null } = {}) {

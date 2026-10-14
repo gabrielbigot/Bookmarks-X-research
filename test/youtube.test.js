@@ -184,3 +184,23 @@ test('historique : fusion avec une playlist, jours cumulés, requêtes viewed:/w
   assert.equal(passesFilters(m, f('watched:2026-10-01..2026-10-12')), false);
   assert.equal(passesFilters({ id: '1', handle: 'a', text: '' }, f('viewed:yes')), false);
 });
+
+import { computeYtStats, fmtHours } from '../src/lib/ytstats.js';
+test('statistiques YouTube : visionnages, temps estimé, chaînes, à regarder', () => {
+  const NOWMS = new Date(2026, 9, 14, 15).getTime();
+  const mk = (id, ch, sec, watched, extra = {}) => ({ ...toItem({ videoId: id, title: 'T ' + id, channel: ch, durationSec: sec }, extra.pl ? { id: extra.pl, title: extra.pl } : null), watched, progress: extra.pct || 0 });
+  const items = [mk('a', 'C1', 600, ['2026-10-14', '2026-10-13']), mk('b', 'C1', 1200, ['2026-10-14'], { pct: 50 }), mk('c', 'C2', 3600, ['2026-08-01']), mk('d', 'C2', 300, [], { pl: 'WL' }), { id: '1', handle: 'x', text: 'tweet' }];
+  const st = computeYtStats(items, { now: NOWMS, rangeDays: 30 });
+  assert.equal(st.kpi.videos, 4);
+  assert.equal(st.kpi.views, 3); // c est hors période
+  assert.equal(st.kpi.seen, 2);
+  assert.equal(st.kpi.hours, 600 * 2 + 600); // a ×2 entier, b à 50 %
+  assert.equal(st.kpi.wlBacklog, 1);
+  assert.equal(st.kpi.backlogSec, 300);
+  assert.equal(st.channels[0].handle, 'c1');
+  assert.equal(st.channels[0].n, 3);
+  assert.equal(st.series.points.at(-1).n, 2);
+  assert.equal(st.rewatched[0].id, 'yt:a');
+  assert.equal(computeYtStats(items, { now: NOWMS }).kpi.views, 4);
+  assert.equal(fmtHours(3900), '1 h 05');
+});
