@@ -247,11 +247,20 @@ async function renderMine(app) {
       const head = (chart, extra = '') => `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind] || w.kind)}${w.kind === 'compare' ? '' : ' · ' + esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}${extra}</p></div>${act(chart)}</header>`;
       const headT = (extra) => head(true, extra).replace('</header>', '<button class="tbl-btn" type="button" aria-pressed="false" title="Afficher les valeurs en tableau">Tableau</button></header>');
       const goalBar = (v) => (goal > 0 ? `<div class="goal${v >= goal ? ' done' : ''}" title="objectif ${goal}"><i style="width:${Math.min(100, (v / goal) * 100)}%"></i></div><p class="sub">objectif ${fmtInt(goal)} · ${Math.round((v / goal) * 100)} %${v >= goal ? ' ✓ atteint' : ''}</p>` : '');
+      // condition Jev : les tweets de la période sans verdict ne sont pas comptés -> on prévient que le nombre est partiel
+      const cond = condOf(w);
+      let pend = 0;
+      if (cond && ['number', 'series', 'top', 'heat', 'trend'].includes(w.kind)) {
+        const rr = evalWidget(everything, { ...w, officialOnly: false, jevDesc: '', kind: 'number' }, ctx);
+        const cm = condMaps()[condKey(cond)] || {};
+        for (const u of rr.matched) for (const t of u.members) if (!isVideoItem(t) && !(t.id in cm)) pend++;
+      }
+      const pendNote = pend ? `<p class="sub warn">⚠ ${fmtInt(pend)} tweet(s) de la période n’ont pas encore été jugés par Jev : ce nombre est partiel. Ouvre ✎ › « Faire juger par Jev » (ou active le Jev automatique dans ⚙).</p>` : '';
       const cls = `card mine sz-${sizeOf(w)}`;
-      const push = (chart, body, extra) => { const id = 'c' + cards.length; cards.push({ id, chart, title: w.title }); html += `<section class="${cls}" id="${id}" data-i="${i}">${headT(extra)}${body}<div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`; };
+      const push = (chart, body, extra) => { const id = 'c' + cards.length; cards.push({ id, chart, title: w.title }); html += `<section class="${cls}" id="${id}" data-i="${i}">${headT(extra)}${body}${pendNote}<div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`; };
       if (w.kind === 'number') {
         const r = evalWidget(everything, w, ctx);
-        html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${goalBar(r.n)}${groupedNote(r) ? `<p class="sub">${esc(groupedNote(r))}</p>` : ''}${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
+        html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${goalBar(r.n)}${groupedNote(r) ? `<p class="sub">${esc(groupedNote(r))}</p>` : ''}${pendNote}${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
       } else if (w.kind === 'ratio') {
         const defs = seriesDefs(w);
         if (defs.length < 2) { html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<p class="note">Ajoute le dénominateur (la série « divisé par ») dans ✎.</p></div></section>`; return; }
