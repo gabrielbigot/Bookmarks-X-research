@@ -236,3 +236,11 @@ test('réglages : migration de sécurité (GPU auto + indexation au démarrage -
   const d = await getSettings();
   assert.deepEqual([d.compute, d.indexMode], ['cpu', 'manual']);
 });
+
+test('parseQuery: opérateur dedupe', async () => {
+  const { parseQuery } = await import('../src/lib/search.js');
+  assert.deepEqual(parseQuery('robot dedupe:oui').filters.dedupe, { sim: 0.92, days: 7 });
+  assert.deepEqual(parseQuery('dedupe:0.9,3').filters.dedupe, { sim: 0.9, days: 3 });
+  assert.equal(parseQuery('dedupe:non').filters.dedupe, false);
+  assert.equal(parseQuery('robot dedupe:oui').text, 'robot');
+});

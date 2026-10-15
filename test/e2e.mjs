@@ -1003,6 +1003,17 @@ await waitFor(async () => /quoted:no/.test(await stats.locator('.card.mine:has-t
 await stats.evaluate(() => localStorage.removeItem('xbs.stats.src'));
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
 
+// ---- recherche : regroupement des quasi-doublons (mêmes règles que les stats)
+await panel.bringToFront();
+await panel.reload(); // recharge l'index avec les vecteurs simulés
+await panel.waitForSelector('.tw');
+await panel.fill('#q', 'agents quoted:no dedupe:0.98,30');
+try { await waitFor(async () => /sujets \(\d+ tweets/.test(await panel.locator('#mode').innerText()), 'recherche regroupée : « N sujets (M tweets…) »', 10000); } catch (e) { console.log('MODE:', await panel.locator('#mode').innerText(), '| url', panel.url()); throw e; }
+assert.ok(await panel.locator('.dupbtn').count() > 0, 'les cartes regroupées proposent « + N similaires »');
+await panel.locator('.dupbtn').first().click();
+assert.ok(await panel.locator('.dups:not([hidden]) .dup').count() > 0, 'les similaires se déplient');
+await panel.fill('#q', '');
+
 console.log('E2E OK');
 await ctx.close();
 server.close();

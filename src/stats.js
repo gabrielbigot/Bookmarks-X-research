@@ -127,7 +127,7 @@ const KINDS = { number: 'Nombre', series: 'Courbe', top: 'Classement' };
 const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
 const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
-const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.dedupe?.on ? `dedupe:${w.dedupe.sim ?? 0.92},${w.dedupe.days ?? 7}` : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 // Ce qui est compté = éléments dont le jour (enregistrement / visionnage / ajout) tombe dans la période : le clic ouvre la même chose.
 const duringRange = () => { if (!range) return ''; const to = dayKey(Date.now()), from = dayKey(Date.now() - (range - 1) * 86_400_000); return `during:${from}..${to}`; };
 const withPeriod = (q) => [q, duringRange()].filter(Boolean).join(' ');

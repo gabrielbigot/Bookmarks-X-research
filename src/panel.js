@@ -1,6 +1,6 @@
 import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog, planPlaylistDeletion, deletePlaylistData } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
-import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, eventDays } from './lib/widgets.js';
+import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, eventDays, clusterCandidates } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
@@ -521,16 +521,72 @@ function card([row], terms, pos) {
 
 
 let io = null;
+// Regroupement des quasi-doublons : mêmes règles que les stats (tweet cité, page citée, sens quasi identique
+// à quelques jours d'écart). Chaque groupe = une carte (la plus likée) + « + N similaires ».
+function dedupeOpts() {
+  const f = parseQuery($('q').value).filters.dedupe;
+  if (f === false) return null;
+  if (f) return f;
+  return view.dedupe ? { sim: 0.92, days: 7 } : null;
+}
+function groupRows(rows, { sim, days }) {
+  const sv = savedInfo(index.tweets.filter((t) => !isVideoItem(t)), Date.now());
+  const cand = rows.map(([r]) => ({ t: index.tweets[r], days: eventDays(index.tweets[r], sv) }));
+  const vecs = new Map();
+  for (const [r] of rows) if (index.hasVec[r]) vecs.set(index.tweets[r].id, index.matrix.subarray(r * index.dim, (r + 1) * index.dim));
+  const { groups } = clusterCandidates(cand, { sim, days, vecs });
+  const out = groups.map((idx) => {
+    const members = idx.slice().sort((a, b) => (cand[b].t.stats?.likes || 0) - (cand[a].t.stats?.likes || 0) || a - b);
+    return { first: Math.min(...idx), rep: rows[members[0]], members: members.slice(1).map((k) => rows[k][0]) };
+  }).sort((a, b) => a.first - b.first);
+  return out.map((g) => [g.rep[0], g.rep[1], g.members]);
+}
+function viewRows() {
+  const o = dedupeOpts();
+  if (!o || last.rows.length < 2) return last.rows;
+  const key = o.sim + '/' + o.days;
+  if (last._g?.key !== key) last._g = { key, rows: groupRows(last.rows, o) };
+  return last._g.rows;
+}
+function dupsBlock(members) {
+  const box = document.createElement('div');
+  box.className = 'dups';
+  box.hidden = true;
+  for (const r of members) {
+    const t = index.tweets[r];
+    const d = document.createElement('div');
+    d.className = 'dup';
+    const a = Object.assign(document.createElement('a'), { href: t.url, target: '_blank', rel: 'noopener', textContent: 'Ouvrir' });
+    const head = document.createElement('b');
+    head.textContent = (t.handle ? '@' + t.handle : t.channel || '') + ' · ' + (t.savedAt ? new Date(t.savedAt).toLocaleDateString('fr-FR') : '');
+    const tx = document.createElement('span');
+    tx.textContent = ' ' + decodeEntities(t.text || t.title || '').replace(/\s+/g, ' ').slice(0, 140);
+    d.append(head, tx, ' ', a);
+    box.appendChild(d);
+  }
+  return box;
+}
 function renderCards(from, to) {
   const frag = document.createDocumentFragment();
-  last.rows.slice(from, to).forEach((r, i) => frag.appendChild(card(r, last.terms, from + i)));
+  viewRows().slice(from, to).forEach((r, i) => {
+    const el = card(r, last.terms, from + i);
+    if (r[2]?.length) {
+      const btn = Object.assign(document.createElement('button'), { className: 'ghost dupbtn', textContent: `⧉ + ${r[2].length} similaire${r[2].length > 1 ? 's' : ''} ▾` });
+      const box = dupsBlock(r[2]);
+      btn.onclick = (e) => { e.stopPropagation(); box.hidden = !box.hidden; btn.textContent = `⧉ + ${r[2].length} similaire${r[2].length > 1 ? 's' : ''} ${box.hidden ? '▾' : '▴'}`; };
+      (el.querySelector('.ac') || el).append(btn);
+      const ac = el.querySelector('.ac');
+      ac ? ac.after(box) : el.appendChild(box);
+    }
+    frag.appendChild(el);
+  });
   $('results').appendChild(frag);
 }
 // Défilement infini : une sentinelle en bas de liste charge la suite avant d'être visible.
 function mountSentinel() {
   io?.disconnect();
   $('results').querySelector('.sentinel')?.remove();
-  if (last.rows.length <= shown) return;
+  if (viewRows().length <= shown) return;
   const sentinel = Object.assign(document.createElement('div'), { className: 'sentinel' });
   $('results').appendChild(sentinel);
   io = new IntersectionObserver((entries) => {
@@ -549,7 +605,9 @@ function render() {
   io?.disconnect();
   box.replaceChildren();
   const modeEl = $('mode');
-  modeEl.textContent = last.label + (last.rows.length ? ` — ${last.rows.length >= 200 ? '200+' : last.rows.length} résultats` : '');
+  const vr = viewRows();
+  const n = last.rows.length;
+  modeEl.textContent = last.label + (n ? (vr.length < n ? ` — ${vr.length} sujets (${n} tweets/vidéos regroupés)` : ` — ${n >= 200 ? '200+' : n} résultats`) : '');
   const au = last.meta?.authors;
   if (au?.length) {
     const b = document.createElement('button');
@@ -587,6 +645,7 @@ function applyView() {
   $('view').value = view.mode === 'grid' ? String(view.cols) : 'list';
   $('blend').value = view.blend;
   $('source').value = view.source;
+  $('dedupe').classList.toggle('on', !!view.dedupe);
   // colonnes réellement affichées : pas plus que ce que la largeur permet (~320 px minimum par carte)
   const eff = view.mode === 'grid' ? Math.max(1, Math.min(view.cols, Math.floor(document.body.clientWidth / 320))) : 1;
   document.documentElement.style.setProperty('--cols', eff);
@@ -597,6 +656,7 @@ $('view').onchange = (e) => {
   saveView(); applyView();
 };
 $('source').onchange = (e) => { view.source = e.target.value; saveView(); run(); };
+$('dedupe').onclick = () => { view.dedupe = !view.dedupe; $('dedupe').classList.toggle('on', !!view.dedupe); saveView(); render(); };
 $('blend').onchange = (e) => { view.blend = e.target.value; saveView(); run(); };
 $('fold').onclick = () => { view.folded = !view.folded; saveView(); applyView(); };
 window.addEventListener('resize', applyView);

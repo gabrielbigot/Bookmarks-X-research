@@ -34,7 +34,7 @@ export function parseQuery(q) {
   // valeurs entre guillemets : playlist:"à regarder plus tard" -> un seul mot pour le découpage
   const protectedQ = q.replace(/(\w+):"([^"]*)"/g, (_, k, v) => `${k}:${v.replace(/\s+/g, '\u2423')}`);
   for (const part of protectedQ.split(/\s+/).filter(Boolean)) {
-    const m = part.replace(/\u2423/g, ' ').match(/^(from|has|since|until|lang|saved|source|playlist|viewed|vu|watched|is|during|quoted|cite):(.+)$/i);
+    const m = part.replace(/\u2423/g, ' ').match(/^(from|has|since|until|lang|saved|source|playlist|viewed|vu|watched|is|during|quoted|cite|dedupe|group):(.+)$/i);
     if (!m) { rest.push(part.replace(/\u2423/g, ' ')); continue; }
     const k = m[1].toLowerCase();
     const v = m[2].replace(/^@/, '');
@@ -50,6 +50,14 @@ export function parseQuery(q) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(a)) filters.during = { from: a, to: /^\d{4}-\d{2}-\d{2}$/.test(b || '') ? b : a };
     }
     else if (k === 'quoted' || k === 'cite') filters.quoted = /^(yes|oui|true|1)$/i.test(v) ? true : /^(no|non|false|0)$/i.test(v) ? false : undefined; // quoted:no = sans citation
+    else if (k === 'dedupe' || k === 'group') { // dedupe:oui | non | 0.92,7 (ressemblance minimale, fenêtre en jours)
+      if (/^(no|non|false|0|off)$/i.test(v)) filters.dedupe = false;
+      else {
+        const [a, b] = v.split(',');
+        const sim = Number(a), days = Number(b);
+        filters.dedupe = { sim: sim >= 0.5 && sim <= 1 ? sim : 0.92, days: days >= 1 && days <= 60 ? Math.round(days) : 7 };
+      }
+    }
     else if (k === 'is') (filters.is ??= []).push(v.toLowerCase()); // détecteur(s) : plusieurs is: = ET ; is:a,b = OU ; résolu par l'appelant en filters.isIds
     else if (k === 'viewed' || k === 'vu') filters.viewed = /^(yes|oui|true|1|y|o)$/i.test(v) ? true : /^(no|non|false|0|n)$/i.test(v) ? false : undefined;
     else if (k === 'watched') {
