@@ -80,6 +80,7 @@ export async function decodeFull(bytes, passphrase) {
     tweets: data.tweets.filter((t) => t && t.id && typeof t.text === 'string'),
     saved: Array.isArray(data.saved) ? data.saved.filter((q) => typeof q === 'string') : [],
     transcripts: Array.isArray(data.transcripts) ? data.transcripts.filter((r) => r && r.id && Array.isArray(r.chunks)) : [],
+    dash: data.dash && typeof data.dash === 'object' ? { widgets: Array.isArray(data.dash.widgets) ? data.dash.widgets : [], detectors: Array.isArray(data.dash.detectors) ? data.dash.detectors : [] } : null,
     vectors: data.vectors?.data && Array.isArray(data.vectors.ids) ? data.vectors : null,
   };
 }

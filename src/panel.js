@@ -1,5 +1,6 @@
-import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
+import { detectorScores, detectorSet, slugOf } from './lib/widgets.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
@@ -122,6 +123,23 @@ function fromIntent(it) {
   };
 }
 
+// is:nom : détecteur personnel (créé dans 📊 › Mes stats). Ensemble calculé à la demande, mis en cache.
+const detCache = new Map();
+async function resolveIs(filters) {
+  if (!filters.is) return;
+  const dets = (await getMeta('dashDetectors')) || [];
+  const det = dets.find((d) => slugOf(d.name) === filters.is);
+  if (!det) { filters.isIds = new Set(); return; } // détecteur inconnu : aucun résultat
+  const mid = modelOf(settings.embedModel).id;
+  const key = `${det.id}|${mid}|${det.protoKey}|${det.threshold}|${det.pos?.length}|${det.neg?.length}`;
+  if (!detCache.has(key)) {
+    const protos = (det.protos?.[mid] || []).map((a) => Float32Array.from(a));
+    if (!protos.length) { filters.isIds = new Set(); return; }
+    detCache.set(key, detectorSet(detectorScores(await getAllVectors(mid), await getAllChunkVecs(mid), protos), det));
+  }
+  filters.isIds = detCache.get(key);
+}
+
 async function run(opts = {}) {
   const my = ++seq;
   const raw = $('q').value.trim();
@@ -129,6 +147,8 @@ async function run(opts = {}) {
   const parsed = parseQuery(raw);
   let text = parsed.text;
   let filters = mergeFilters(parsed.filters, toolbarFilters());
+  await resolveIs(filters);
+  if (my !== seq) return;
   shown = PAGE;
 
   // Compréhension de la requête : IA (si demandée) sinon règles (« le plus vieux d'OpenAI »).
@@ -992,6 +1012,8 @@ const download = (bytes, name) => {
 async function buildBackup(pass) {
   const tweets = await getAllTweets();
   const extra = { saved };
+  const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [] };
+  if (dash.widgets.length || dash.detectors.length) extra.dash = dash;
   const trs = await getAllTranscriptRows();
   if (trs.length) extra.transcripts = trs.map((r) => ({ id: r.id, chunks: r.chunks, at: r.at, lang: r.lang }));
   let nVec = 0;
@@ -1007,7 +1029,7 @@ async function buildBackup(pass) {
 
 // Restaure : tweets, recherches enregistrées, vecteurs (rangés sous leur propre modèle, utilisables si le modèle correspond).
 async function restoreBackup(bytes, pass) {
-  const { tweets, saved: sv, vectors, transcripts } = await decodeFull(bytes, pass);
+  const { tweets, saved: sv, vectors, transcripts, dash } = await decodeFull(bytes, pass);
   let added = 0;
   for (let i = 0; i < tweets.length; i += 1000) added += await putTweets(tweets.slice(i, i + 1000));
   let nVec = 0;
@@ -1015,6 +1037,11 @@ async function restoreBackup(bytes, pass) {
     const entries = unpackVectors(vectors);
     for (let i = 0; i < entries.length; i += 2000) await putVectors(entries.slice(i, i + 2000), vectors.model);
     nVec = entries.length;
+  }
+  if (dash) {
+    const merge = (cur, inc) => { const m = new Map((cur || []).map((x) => [x.id, x])); for (const x of inc || []) if (x?.id && !m.has(x.id)) m.set(x.id, x); return [...m.values()]; };
+    await setMeta('dashWidgets', merge(await getMeta('dashWidgets'), dash.widgets));
+    await setMeta('dashDetectors', merge(await getMeta('dashDetectors'), dash.detectors));
   }
   if (transcripts?.length) for (let i = 0; i < transcripts.length; i += 100) await putTranscriptRows(transcripts.slice(i, i + 100));
   const merged = [...new Set([...saved, ...sv])];

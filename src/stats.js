@@ -1,4 +1,8 @@
-import { getAllTweets } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from './lib/db.js';
+import { getSettings } from './lib/settings.js';
+import { modelOf } from './lib/models.js';
+import { savedInfo } from './lib/time.js';
+import { evalWidget, detectorScores, detectorSet, detectorMargin, textOf, slugOf } from './lib/widgets.js';
 import { computeStats, TYPE_LABELS } from './lib/stats.js';
 import { bindThemeButton } from './lib/theme.js';
 import { isVideoItem } from './lib/youtube.js';
@@ -6,10 +10,10 @@ import { computeYtStats, fmtHours } from './lib/ytstats.js';
 import { timeSeries, cumulative, columns, hbars, stacked, calendar, sparkline, esc, fmtInt, fmtCompact, fmtDay, WEEKDAYS } from './lib/charts.js';
 
 const $ = (id) => document.getElementById(id);
-const RANGES = [[7, '7 j'], [30, '30 j'], [90, '90 j'], [365, '1 an'], [null, 'Tout']];
+const RANGES = [[1, '1 j'], [7, '7 j'], [30, '30 j'], [90, '90 j'], [365, '1 an'], [null, 'Tout']];
 const RKEY = 'xbs.stats.range';
-let all = [], videos = [], range = 90, src = 'x';
-try { src = localStorage.getItem('xbs.stats.src') === 'yt' ? 'yt' : 'x'; } catch {}
+let all = [], videos = [], everything = [], range = 90, src = 'x', widgets = [], detectors = [];
+try { const v = localStorage.getItem('xbs.stats.src'); src = v === 'yt' || v === 'mine' ? v : 'x'; } catch {}
 try { const v = localStorage.getItem(RKEY); if (v !== null) range = v === 'all' ? null : Number(v); } catch {}
 
 bindThemeButton($('theme'));
@@ -18,7 +22,7 @@ bindThemeButton($('theme'));
 const openQ = (q) => window.open(`panel.html?q=${encodeURIComponent(q)}`, '_blank', 'noopener');
 
 function drawSources() {
-  $('source').replaceChildren(...[['x', 'Bookmarks X'], ['yt', 'YouTube']].map(([v, label]) => {
+  $('source').replaceChildren(...[['x', 'Bookmarks X'], ['yt', 'YouTube'], ['mine', 'Mes stats']].map(([v, label]) => {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = label; b.setAttribute('aria-pressed', String(v === src));
     b.onclick = () => { src = v; try { localStorage.setItem('xbs.stats.src', v); } catch {} drawSources(); render(); };
@@ -58,6 +62,256 @@ function dayQuery(st, k, gran) {
 }
 const shiftDay = (k, n) => { const [y, m, d] = k.split('-').map(Number); const t = new Date(y, m - 1, d + n); return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`; };
 const lastOfMonth = (ym) => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
+
+
+// =====================================================================================================================
+// Mes stats : requêtes et détecteurs comptés dans le temps (période = filtre du haut)
+// =====================================================================================================================
+const saveWidgets = () => setMeta('dashWidgets', widgets);
+const saveDetectors = () => setMeta('dashDetectors', detectors);
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+const byId = () => new Map(everything.map((t) => [t.id, t]));
+
+// Vecteurs chargés une fois (les détecteurs comparent les exemples à tous les vecteurs de la base).
+let vecCache = null;
+async function loadVectors() {
+  if (vecCache) return vecCache;
+  const mid = modelOf((await getSettings()).embedModel).id;
+  vecCache = { mid, vecs: await getAllVectors(mid), chunks: await getAllChunkVecs(mid) };
+  return vecCache;
+}
+const scoreCache = new Map(); // id du détecteur + exemples -> scores
+async function scoresOf(det) {
+  const { mid, vecs, chunks } = await loadVectors();
+  const protos = (det.protos?.[mid] || []).map((a) => Float32Array.from(a));
+  if (!protos.length) return null;
+  const key = det.id + '|' + mid + '|' + det.protoKey;
+  if (!scoreCache.has(key)) scoreCache.set(key, detectorScores(vecs, chunks, protos));
+  return scoreCache.get(key);
+}
+async function detectorSetsFor(ids) {
+  const out = new Map(), missing = [];
+  for (const id of ids) {
+    const det = detectors.find((d) => d.id === id);
+    if (!det) continue;
+    const sc = await scoresOf(det);
+    if (!sc) { missing.push(det.name); out.set(id, new Set()); } else out.set(id, detectorSet(sc, det));
+  }
+  return { sets: out, missing };
+}
+async function embedTexts(texts) {
+  const out = [];
+  for (const text of texts) {
+    const res = await chrome.runtime.sendMessage({ type: 'q:embed', text, kind: 't' });
+    if (!res || res.error) throw new Error('le modèle de recherche n’est pas disponible pour l’instant (' + (res?.error || 'pas de réponse') + ')');
+    out.push(Array.from(res.vec));
+  }
+  return out;
+}
+
+const KINDS = { number: 'Nombre', series: 'Courbe', top: 'Classement' };
+const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
+const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
+const wQuery = (w) => [w.q, w.det ? 'is:' + slugOf(detectors.find((d) => d.id === w.det)?.name) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+const rangeLabel = () => (range ? RANGES.find(([v]) => v === range)[1] : 'tout');
+const delta = (n, prev) => (prev == null ? '' : prev === 0 ? (n ? 'nouveau' : '=') : `${n >= prev ? '▲' : '▼'} ${Math.abs(Math.round(((n - prev) / prev) * 100))} % vs période précédente`);
+
+const TEMPLATES = [
+  { title: 'Tweets avec un lien', kind: 'series', q: 'has:link', source: 'x' },
+  { title: 'Vidéos YouTube vues', kind: 'series', q: 'viewed:yes', source: 'youtube' },
+  { title: 'À regarder, pas encore vu', kind: 'number', q: 'playlist:"à regarder plus tard" viewed:no', source: 'youtube' },
+  { title: 'Auteurs les plus enregistrés', kind: 'top', q: '', source: 'x', by: 'author' },
+];
+const LAUNCH_DETECTOR = { name: 'Lancements', desc: 'Annonce d’un lancement : produit, entreprise, fonctionnalité', examples: ['Today, we launch our new product', 'Introducing our new app, available now', 'We just shipped a major update', 'Aujourd’hui, nous lançons notre startup', 'Lancement officiel de notre nouvelle version'], threshold: 0.55 };
+
+async function renderMine(app) {
+  const sv = savedInfo(all, Date.now());
+  const needed = new Set(widgets.map((w) => w.det).filter(Boolean));
+  const { sets, missing } = await detectorSetsFor(needed);
+  const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets };
+  let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button></div>`;
+  if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
+  if (!widgets.length) {
+    html += `<p class="muted">Aucune stat personnalisée pour l’instant. Une stat compte ce que tu veux dans le temps, avec le filtre de période du haut : une requête de recherche (mots, <code>from:@…</code>, <code>has:link</code>, <code>playlist:"…"</code>) ou un <b>détecteur</b> qui comprend le sens (par exemple « annonce d’un lancement »).</p>
+      <div class="tpl">${TEMPLATES.map((t, i) => `<button type="button" class="gbtn" data-tpl="${i}">+ ${esc(t.title)}</button>`).join('')}<button type="button" class="gbtn" data-tpl="launch">+ Détecteur « Lancements »</button></div>`;
+  } else {
+    html += '<div class="grid2">';
+    widgets.forEach((w, i) => {
+      const r = evalWidget(everything, w, ctx);
+      const q = wQuery(w);
+      const head = `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind])} · ${esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}</p></div>
+        <div class="wact"><button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${i < widgets.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div></header>`;
+      if (w.kind === 'number') {
+        html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(q)}" title="Ouvrir ces éléments dans la recherche">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
+      } else {
+        const chart = w.kind === 'series'
+          ? timeSeries(r.series.points, { gran: r.series.gran, label: 'éléments', onPick: () => openQ(q) })
+          : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(x.q) });
+        const id = 'c' + cards.length;
+        cards.push({ id, chart });
+        html += `<section class="card mine${w.kind === 'series' ? ' full' : ''}" id="${id}">${head}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(q)}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
+      }
+    });
+    html += '</div>';
+  }
+  app.innerHTML = html;
+  app.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openQ(b.dataset.open)));
+  $('w-add').onclick = () => editWidget(null);
+  $('d-manage').onclick = () => manageDetectors();
+  app.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = async () => {
+    if (b.dataset.tpl === 'launch') return editDetector(null, LAUNCH_DETECTOR);
+    widgets.push({ id: uid(), ...TEMPLATES[+b.dataset.tpl] }); await saveWidgets(); render();
+  }));
+  app.querySelectorAll('.wact button').forEach((b) => (b.onclick = async () => {
+    const i = +b.dataset.i, a = b.dataset.act;
+    if (a === 'edit') return editWidget(i);
+    if (a === 'dup') widgets.splice(i + 1, 0, { ...widgets[i], id: uid(), title: widgets[i].title + ' (copie)' });
+    if (a === 'up' && i) [widgets[i - 1], widgets[i]] = [widgets[i], widgets[i - 1]];
+    if (a === 'down' && i < widgets.length - 1) [widgets[i + 1], widgets[i]] = [widgets[i], widgets[i + 1]];
+    if (a === 'del') { if (!confirm(`Supprimer « ${widgets[i].title} » ?`)) return; widgets.splice(i, 1); }
+    await saveWidgets(); render();
+  }));
+}
+
+// ---------- éditeur d'une stat ----------
+function dialog() {
+  let d = $('dlg');
+  if (!d) { d = document.createElement('dialog'); d.id = 'dlg'; document.body.append(d); }
+  return d;
+}
+async function editWidget(i, init) {
+  const w = i === null ? { id: uid(), title: '', kind: 'number', q: '', det: '', source: 'all', by: 'author', ...init } : { ...widgets[i] };
+  const d = dialog();
+  const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  d.innerHTML = `<form method="dialog" class="ed"><h3>${i === null ? 'Nouvelle stat' : 'Modifier la stat'}</h3>
+    <label>Nom<input name="title" value="${esc(w.title)}" placeholder="Ex. : Lancements"></label>
+    <div class="row"><label>Forme<select name="kind">${opt(KINDS, w.kind)}</select></label><label>Source<select name="source">${opt(SOURCES, w.source || 'all')}</select></label>
+      <label class="byl">Regrouper par<select name="by">${opt(BYS, w.by || 'author')}</select></label></div>
+    <label>Requête <span class="hint">mots (tous requis), <code>from:@x</code>, <code>has:link</code>, <code>lang:fr</code>, <code>playlist:"…"</code>, <code>viewed:no</code>…</span><input name="q" value="${esc(w.q)}" placeholder="vide = tout"></label>
+    <label>Détecteur (sens) <span class="hint">facultatif, se combine avec la requête</span><span class="row2"><select name="det"><option value="">(aucun)</option>${detectors.map((x) => `<option value="${x.id}"${x.id === w.det ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select><button type="button" class="gbtn" id="ed-newdet">+ Nouveau détecteur</button></span></label>
+    <div class="pv" id="pv">…</div>
+    <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="ed-ok">Enregistrer</button></menu></form>`;
+  const f = d.querySelector('form');
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), det: fd.get('det') }; };
+  let timer = 0, seq = 0;
+  const preview = async () => {
+    const draft = read(), my = ++seq;
+    f.querySelector('.byl').style.display = draft.kind === 'top' ? '' : 'none';
+    const { sets } = await detectorSetsFor(new Set([draft.det].filter(Boolean)));
+    if (my !== seq) return;
+    const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets });
+    const idm = byId();
+    $('pv').innerHTML = `<b>${fmtInt(r.n)}</b> élément(s) sur la période (${esc(rangeLabel())})${r.prev != null ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}</li>`).join('')}</ol>`;
+  };
+  f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
+  f.addEventListener('change', preview);
+  $('ed-newdet').onclick = () => { d.close('cancel'); editDetector(null, { ...LAUNCH_DETECTOR, name: '', desc: '', examples: [] }, w); };
+  d.onclose = async () => {
+    if (d.returnValue !== 'ok') return;
+    const nw = read();
+    if (!nw.title) nw.title = nw.q || (nw.det ? detectors.find((x) => x.id === nw.det)?.name : '') || 'Ma stat';
+    if (i === null) widgets.push(nw); else widgets[i] = nw;
+    await saveWidgets(); render();
+  };
+  d.showModal();
+  preview();
+}
+
+// ---------- détecteurs ----------
+function manageDetectors() {
+  const d = dialog();
+  d.innerHTML = `<form method="dialog" class="ed"><h3>Détecteurs</h3>
+    <p class="muted">Un détecteur reconnaît un <b>type de contenu</b> par son sens (« annonce d’un lancement », « recrutement »…), dans toutes les langues. Il sert dans les stats et dans la recherche (<code>is:nom</code>).</p>
+    <ul class="dets">${detectors.map((x, k) => `<li><b>${esc(x.name)}</b> <span class="muted">is:${esc(slugOf(x.name))} · seuil ${x.threshold.toFixed(2)}</span> <button type="button" class="gbtn" data-e="${k}">Modifier</button> <button type="button" class="gbtn" data-x="${k}">Supprimer</button></li>`).join('') || '<li class="muted">Aucun détecteur.</li>'}</ul>
+    <div class="row2"><button type="button" class="gbtn" id="dn">+ Nouveau</button><button type="button" class="gbtn" id="dl">+ Modèle « Lancements »</button></div>
+    <menu><button value="cancel" class="pbtn">Fermer</button></menu></form>`;
+  d.querySelectorAll('[data-e]').forEach((b) => (b.onclick = () => { d.close('cancel'); editDetector(+b.dataset.e); }));
+  d.querySelectorAll('[data-x]').forEach((b) => (b.onclick = async () => {
+    const k = +b.dataset.x;
+    if (!confirm(`Supprimer le détecteur « ${detectors[k].name} » ? Les stats qui l’utilisent seront vidées.`)) return;
+    const id = detectors[k].id; detectors.splice(k, 1);
+    widgets.forEach((w) => { if (w.det === id) w.det = ''; });
+    await Promise.all([saveDetectors(), saveWidgets()]); d.close('cancel'); render();
+  }));
+  $('dn').onclick = () => { d.close('cancel'); editDetector(null); };
+  $('dl').onclick = () => { d.close('cancel'); editDetector(null, LAUNCH_DETECTOR); };
+  d.onclose = null;
+  d.showModal();
+}
+
+async function editDetector(k, init, backTo) {
+  const base = k === null ? { id: uid(), name: '', desc: '', examples: [], threshold: 0.55, pos: [], neg: [], protos: {}, protoKey: '', ...init } : JSON.parse(JSON.stringify(detectors[k]));
+  const det = { ...base, pos: [...(base.pos || [])], neg: [...(base.neg || [])] };
+  const d = dialog();
+  d.innerHTML = `<form method="dialog" class="ed wide"><h3>${k === null ? 'Nouveau détecteur' : 'Modifier le détecteur'}</h3>
+    <label>Nom<input name="name" value="${esc(det.name)}" placeholder="Ex. : Lancements"></label>
+    <label>Description <span class="hint">une phrase : ce que tu cherches</span><input name="desc" value="${esc(det.desc)}"></label>
+    <label>Exemples <span class="hint">un par ligne, dans n’importe quelle langue (plus il y en a de variés, mieux c’est)</span><textarea name="examples" rows="5">${esc(det.examples.join('\n'))}</textarea></label>
+    <label>Seuil de ressemblance <b id="thv"></b> <span class="hint">plus bas = plus de résultats, moins sûrs</span><input type="range" name="th" min="0.2" max="0.9" step="0.01" value="${det.threshold}"></label>
+    <div id="dstat" class="muted">Analyse…</div>
+    <div class="cols"><div><h4>Retenus (les moins sûrs)</h4><ul class="ex" id="ex-above"></ul></div><div><h4>Écartés (les plus proches)</h4><ul class="ex" id="ex-below"></ul></div></div>
+    <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="d-ok">Enregistrer</button></menu></form>`;
+  const f = d.querySelector('form');
+  const idm = byId();
+  const texts = () => { const fd = new FormData(f); return [fd.get('desc').trim(), ...fd.get('examples').split('\n').map((x) => x.trim())].filter(Boolean); };
+  const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')) }; };
+  let current = null, seq = 0, embedTimer = 0, protoErr = '';
+  const { mid } = await loadVectors();
+  const protoKeyOf = (arr) => arr.join('␞');
+  const lists = () => {
+    const dd = draft();
+    $('thv').textContent = dd.threshold.toFixed(2);
+    if (!current) return;
+    const set = detectorSet(current, dd);
+    $('dstat').textContent = `${fmtInt(set.size)} élément(s) retenus au total (sur ${fmtInt(current.size)} avec un vecteur) · ${dd.pos.length} validé(s), ${dd.neg.length} écarté(s) à la main`;
+    const { above, below } = detectorMargin(current, dd, 8);
+    const li = (id, s, tag) => { const t = idm.get(id); return `<li><span class="sc">${s.toFixed(2)}</span> ${esc(t ? textOf(t) : id)} <span class="vb"><button type="button" data-v="ok" data-id="${esc(id)}" title="Oui, c’en est un">✓</button><button type="button" data-v="no" data-id="${esc(id)}" title="Non">✗</button></span></li>`; };
+    $('ex-above').innerHTML = above.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
+    $('ex-below').innerHTML = below.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
+  };
+  const analyse = async () => {
+    const my = ++seq, tx = texts();
+    if (!tx.length) { $('dstat').textContent = 'Ajoute une description ou des exemples.'; current = null; return; }
+    const key = protoKeyOf(tx);
+    try {
+      if (!det.protos?.[mid] || det.protoKey !== key) {
+        $('dstat').textContent = 'Analyse des exemples (le modèle se charge la première fois)…';
+        const vecs = await embedTexts(tx);
+        if (my !== seq) return;
+        det.protos = { ...(det.protos || {}), [mid]: vecs }; det.protoKey = key;
+      }
+      const sc = await scoresOf({ ...det, id: det.id });
+      current = sc; protoErr = '';
+      lists();
+    } catch (e) { protoErr = e.message; $('dstat').textContent = '⚠ ' + e.message; }
+  };
+  f.addEventListener('input', (ev) => { if (ev.target.name === 'th') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
+  d.addEventListener('click', (ev) => {
+    const b = ev.target.closest('button[data-v]');
+    if (!b) return;
+    const id = b.dataset.id;
+    det.pos = det.pos.filter((x) => x !== id); det.neg = det.neg.filter((x) => x !== id);
+    (b.dataset.v === 'ok' ? det.pos : det.neg).push(id);
+    lists();
+  });
+  d.onclose = async () => {
+    if (d.returnValue === 'ok') {
+      const dd = draft();
+      if (!dd.name) dd.name = dd.desc.slice(0, 30) || 'Détecteur';
+      if (protoErr && !dd.protos?.[mid]) { alert('Détecteur non enregistré : ' + protoErr); }
+      else {
+        scoreCache.clear();
+        if (k === null) detectors.push(dd); else detectors[k] = dd;
+        await saveDetectors();
+        if (backTo) { backTo.det = dd.id; widgets.length; return editWidget(null, backTo); }
+      }
+    }
+    render();
+  };
+  d.showModal();
+  lists();
+  analyse();
+}
 
 function renderYt(app) {
   const st = computeYtStats(videos, { rangeDays: range });
@@ -107,6 +361,7 @@ function render() {
   setTimeout(() => {
     cards.length = 0;
     if (src === 'yt') { renderYt(app); finish(app); return; }
+    if (src === 'mine') { renderMine(app).then(() => finish(app), (e) => { app.innerHTML = `<p class="note">⚠ ${esc(e.message)}</p>`; finish(app); }); return; }
     const st = computeStats(all, { rangeDays: range });
     if (!all.length) { app.innerHTML = '<p class="muted">Aucun bookmark pour l’instant : synchronise-les depuis le panneau de recherche.</p>'; app.classList.remove('loading'); return; }
     const k = st.kpi, by = st.savedValid ? 'par date d’enregistrement' : 'par date de publication';
@@ -190,4 +445,4 @@ function finish(app) {
 
 drawSources();
 drawRanges();
-getAllTweets().then((t) => { all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); render(); }); // ces statistiques portent sur les bookmarks X
+Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors')]).then(([t, w, dts]) => { everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X

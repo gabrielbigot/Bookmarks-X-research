@@ -158,3 +158,13 @@ export function computeStats(all, { now = Date.now(), rangeDays = null } = {}) {
     topLiked, dupLinks: top(links, 50).filter(([, n]) => n > 1).slice(0, 10).map(([key, n]) => [linkUrl.get(key) || key, n]),
   };
 }
+
+// Série temporelle à partir d'un Map jour -> n : par jour (+ moyenne 7 j), par semaine ou par mois selon la durée.
+export function seriesFrom(perDay, startKey, endKey) {
+  const days = eachDay(startKey, endKey);
+  const daily = days.map((k) => ({ k, n: perDay.get(k) || 0 }));
+  daily.forEach((d, i) => { const w = daily.slice(Math.max(0, i - 6), i + 1); d.ma = w.reduce((s, x) => s + x.n, 0) / w.length; });
+  if (days.length > 800) { const m = new Map(); for (const d of daily) count(m, monthOf(d.k), d.n); return { gran: 'month', points: [...m].map(([k, n]) => ({ k, n })) }; }
+  if (days.length > 120) { const m = new Map(); for (const d of daily) count(m, mondayOf(d.k), d.n); return { gran: 'week', points: [...m].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, n]) => ({ k, n })) }; }
+  return { gran: 'day', points: daily };
+}

@@ -824,6 +824,44 @@ assert.equal(await stats.evaluate(() => document.documentElement.dataset.theme),
 assert.equal(await stats.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(13, 13, 13)');
 await stats.screenshot({ path: 'test/stats-dark.png', fullPage: true });
 
+// ------------------------------------------------------------------ 13. Mes stats : stat personnalisée (requête) qui suit le filtre de période, persiste, se supprime
+await stats.click('#source button:has-text("Mes stats")');
+await stats.waitForSelector('#w-add');
+assert.ok(await stats.locator('.tpl [data-tpl]').count() >= 4, 'modèles proposés quand il n’y a aucune stat');
+await stats.click('#w-add');
+await stats.fill('#dlg input[name="title"]', 'Agents');
+await stats.fill('#dlg input[name="q"]', 'agents mémoire');
+await stats.waitForFunction(() => /\b2[67]\d\b|270/.test(document.getElementById('pv')?.textContent || ''), null, { timeout: 8000 });
+assert.match(await stats.locator('#pv').innerText(), /270 élément\(s\) sur la période \(90 j\)/, 'aperçu en direct');
+await stats.click('#dlg #ed-ok');
+await stats.waitForSelector('.card.mine .bignum');
+const bignum = async () => Number((await stats.locator('.card.mine .bignum').first().innerText()).replace(/\D/g, ''));
+assert.equal(await bignum(), 270, 'sur 90 jours');
+await stats.click('#ranges button:has-text("7 j")');
+await waitFor(async () => { const n = await bignum(); return n >= 18 && n <= 24; }, 'la stat suit le filtre « 7 j »', 6000);
+await stats.click('#ranges button:has-text("1 j")');
+await waitFor(async () => (await bignum()) <= 4, 'la stat suit le filtre « 1 j »', 6000);
+await stats.click('#ranges button:has-text("Tout")');
+await waitFor(async () => (await bignum()) === 300, 'la stat suit « Tout »', 6000);
+// courbe et classement
+await stats.click('.wact [data-act="dup"]');
+await stats.waitForFunction(() => document.querySelectorAll('.card.mine').length === 2);
+await stats.locator('.wact [data-act="edit"]').nth(1).click();
+await stats.selectOption('#dlg select[name="kind"]', 'top');
+await stats.click('#dlg #ed-ok');
+await stats.waitForSelector('.card.mine svg.chart');
+assert.match(await stats.locator('.card.mine').nth(1).innerText(), /Auteur/, 'classement des auteurs');
+// persistance
+await stats.reload();
+await stats.waitForSelector('.card.mine');
+assert.equal(await stats.locator('.card.mine').count(), 2, 'stats conservées après rechargement');
+stats.on('dialog', (d) => d.accept());
+await stats.locator('.wact [data-act="del"]').nth(1).click();
+await stats.locator('.wact [data-act="del"]').first().click();
+await stats.waitForSelector('.tpl [data-tpl]');
+await stats.evaluate(() => localStorage.removeItem('xbs.stats.src'));
+await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
+
 console.log('E2E OK');
 await ctx.close();
 server.close();
