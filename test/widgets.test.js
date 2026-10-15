@@ -177,3 +177,15 @@ test('opérateur during: (période d’une stat)', () => {
   const d = eventDays(items[0], sv)[0];
   assert.ok(d >= '2026-10-14' && d <= '2026-10-14');
 });
+
+import { estimateJudgeCost, fmtDollars } from '../src/lib/jev.js';
+test('estimation du coût Jev : tokens d’entrée × prix (sortie gratuite)', () => {
+  const texts = Array.from({ length: 1000 }, () => 'x'.repeat(300));
+  const e = estimateJudgeCost('Annonce d’un lancement', texts);
+  assert.equal(e.calls, 1000);
+  assert.ok(e.tokens > 150_000 && e.tokens < 250_000, 'tokens : ' + e.tokens);
+  assert.ok(e.dollars > 0.005 && e.dollars < 0.02, 'dollars : ' + e.dollars); // ~0,01 $ pour 1 000 appels à 0,042 $/M
+  assert.equal(estimateJudgeCost('d', texts, 0.1).dollars > e.dollars, true);
+  assert.equal(fmtDollars(0.004), '< 0,01 $');
+  assert.equal(fmtDollars(1.234), '1,23 $');
+});

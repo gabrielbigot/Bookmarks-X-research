@@ -6,7 +6,7 @@ export const DEFAULTS = {
   enrichLinks: false, // indexer le titre/description des pages liées
   imageSearch: false, // recherche d'images (CLIP, expérimental)
   embedModel: 'gemma1', // 'gemma1' (300 M, texte) | 'gemma2' (multimodal)
-  decision: { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: '' }, // modèle de décision (Jev)
+  decision: { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: '', priceInPerM: 0.042 }, // priceInPerM : $ par million de tokens d'entrée (estimation du coût) // modèle de décision (Jev)
   decisionIntent: false, // tri / période / type compris par le modèle de décision
   decisionRerank: false, // reclassement par le modèle de décision
   compute: 'cpu', // 'cpu' = WASM (plus lent, mémoire prévisible, par défaut) | 'auto' = GPU si possible (rapide, mais gourmand : à activer en connaissance de cause)

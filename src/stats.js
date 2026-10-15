@@ -3,7 +3,7 @@ import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
 import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
-import { jevJudge } from './lib/jev.js';
+import { jevJudge, estimateJudgeCost, fmtDollars } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
 import { computeStats, TYPE_LABELS } from './lib/stats.js';
@@ -259,6 +259,9 @@ function manageDetectors() {
   d.showModal();
 }
 
+// Texte envoyé à Jev pour un élément.
+const jtext = (t) => ({ id: t.id, text: isVideoItem(t) ? `${t.text} — ${t.name}${t.desc ? ' — ' + t.desc : ''}` : `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}${t.quoted ? ' | cite : ' + decodeEntities(t.quoted.text) : ''}` });
+
 async function editDetector(k, init, backTo) {
   const base = k === null ? { id: uid(), name: '', desc: '', examples: [], threshold: 0.55, pos: [], neg: [], protos: {}, protoKey: '', ...init } : JSON.parse(JSON.stringify(detectors[k]));
   const det = { ...base, pos: [...(base.pos || [])], neg: [...(base.neg || [])] };
@@ -282,6 +285,7 @@ async function editDetector(k, init, backTo) {
   const texts = () => { const fd = new FormData(f); return [fd.get('desc').trim(), ...fd.get('examples').split('\n').map((x) => x.trim())].filter(Boolean); };
   const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')), confirm: { on: fd.get('cf') === 'on', band: Number(fd.get('bd')) } }; };
   let current = null, seq = 0, embedTimer = 0, protoErr = '', touched = k !== null;
+  let costPrice = (await getSettings()).decision.priceInPerM;
   const { mid } = await loadVectors();
   const protoKeyOf = (arr) => arr.join('␞');
   const lists = () => {
@@ -302,7 +306,9 @@ async function editDetector(k, init, backTo) {
     $('jvbox').hidden = !dd.confirm.on;
     if (dd.confirm.on) {
       const pend = ambiguousIds(current, dd, vd).length, judged = Object.keys(vd).length;
-      $('jvstat').textContent = `${fmtInt(pend)} cas ambigu(s) à juger · ${fmtInt(judged)} déjà jugé(s) par Jev (jamais redemandés)`;
+      const pids = ambiguousIds(current, dd, vd);
+      const est = estimateJudgeCost(dd.desc, pids.map((id) => idm.get(id)).filter(Boolean).map((t) => jtext(t).text), costPrice);
+      $('jvstat').textContent = `${fmtInt(pend)} cas ambigu(s) à juger${pend ? ` (≈ ${fmtDollars(est.dollars)} pour tous, estimation)` : ''} · ${fmtInt(judged)} déjà jugé(s) par Jev (jamais redemandés)`;
     }
     $('dstat').textContent = `${fmtInt(set.size)} élément(s) retenus au total (sur ${fmtInt(current.size)} avec un vecteur) · ${dd.pos.length} validé(s), ${dd.neg.length} écarté(s) à la main`;
     const { above, below } = detectorMargin(current, dd, 8);
@@ -340,9 +346,10 @@ async function editDetector(k, init, backTo) {
     const ids = ambiguousIds(current, dd, vd).slice(0, max);
     // vie privée : pas d'historique de visionnage envoyé à un service externe sauf autorisation
     const sendable = (t) => settings.aiHistory || !isVideoItem(t) || !(t.watched || []).length || (t.playlists || []).length > 0;
-    const items = ids.map((id) => idm.get(id)).filter((t) => t && sendable(t)).map((t) => ({ id: t.id, text: isVideoItem(t) ? `${t.text} — ${t.name}${t.desc ? ' — ' + t.desc : ''}` : `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}${t.quoted ? ' | cite : ' + decodeEntities(t.quoted.text) : ''}` }));
+    const items = ids.map((id) => idm.get(id)).filter((t) => t && sendable(t)).map(jtext);
     if (!items.length) return msg('Rien à juger pour l’instant.');
-    if (!confirm(`Envoyer le texte de ${items.length} élément(s) à ${settings.decision.url} (modèle ${settings.decision.model}) pour confirmation ?\nChaque élément est jugé une seule fois ; les verdicts sont conservés.`)) return;
+    const est = estimateJudgeCost(dd.desc, items.map((x) => x.text), settings.decision.priceInPerM);
+    if (!confirm(`Envoyer le texte de ${items.length} élément(s) à ${settings.decision.url} (modèle ${settings.decision.model}) pour confirmation ?\nCoût estimé : ${fmtDollars(est.dollars)} (≈ ${Math.round(est.tokens / 1000)} k tokens d’entrée à ${settings.decision.priceInPerM} $ le million ; la sortie est gratuite).\nChaque élément est jugé une seule fois ; les verdicts sont conservés.`)) return;
     abort = new AbortController();
     $('jv-go').disabled = true; $('jv-stop').hidden = false;
     let done = 0;

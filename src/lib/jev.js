@@ -144,3 +144,13 @@ export async function jevJudge(cfg, description, items, { concurrency = 4, signa
   if (failed && !out.size) throw failed; // rien n'a abouti : erreur d'accès (clé, quota…)
   return { done: out, error: failed ? String(failed.message || failed) : '' };
 }
+
+// Estimation du coût d'une série de jugements : tokens d'entrée ≈ caractères / 3,5 (+ consignes) ; la sortie de Jev est gratuite chez OpenRouter.
+// priceInPerM : dollars par million de tokens d'entrée (0,042 pour jev-1.13 au moment de l'écriture ; à vérifier sur la fiche du modèle).
+export const DEFAULT_PRICE_IN_PER_M = 0.042;
+export function estimateJudgeCost(description, texts, priceInPerM = DEFAULT_PRICE_IN_PER_M) {
+  const overhead = (description || '').length + 260; // consignes + critères + clés JSON
+  const tokens = texts.reduce((n, t) => n + Math.ceil((Math.min(900, t.length) + overhead) / 3.5), 0);
+  return { calls: texts.length, tokens, dollars: (tokens / 1e6) * priceInPerM };
+}
+export const fmtDollars = (d) => (d < 0.01 ? '< 0,01 $' : d.toFixed(2).replace('.', ',') + ' $');
