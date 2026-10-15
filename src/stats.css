@@ -157,3 +157,6 @@ dialog::backdrop{background:#0008}
 .jvt.y{background:color-mix(in srgb,var(--s3) 25%,transparent)}.jvt.n{background:color-mix(in srgb,var(--s2) 25%,transparent)}
 .dsel{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--text-2)}.dsel .dlist{display:flex;flex-wrap:wrap;gap:4px 14px}.dsel .lab{font-size:13px}
 .sug{background:color-mix(in srgb,var(--s4) 16%,transparent);border-radius:10px;padding:8px 10px;font-size:13px}.warn{margin:0 0 6px;color:var(--s2)}
+.mine-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;align-items:start}
+.mine-grid .card.wide{grid-column:span 2}
+@media (max-width:760px){.mine-grid{grid-template-columns:1fr}.mine-grid .card.wide{grid-column:auto}}

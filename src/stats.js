@@ -148,7 +148,7 @@ async function renderMine(app) {
     html += `<p class="muted">Aucune stat personnalisée pour l’instant. Une stat compte ce que tu veux dans le temps, avec le filtre de période du haut : une requête de recherche (mots, <code>from:@…</code>, <code>has:link</code>, <code>playlist:"…"</code>) ou un <b>détecteur</b> qui comprend le sens (par exemple « annonce d’un lancement »).</p>
       <div class="tpl">${TEMPLATES.map((t, i) => `<button type="button" class="gbtn" data-tpl="${i}">+ ${esc(t.title)}</button>`).join('')}<button type="button" class="gbtn" data-tpl="launch">+ Détecteur « Lancements »</button></div>`;
   } else {
-    html += '<div class="grid2">';
+    html += '<div class="mine-grid">';
     widgets.forEach((w, i) => {
       const r = evalWidget(everything, w, ctx);
       const q = wQuery(w);
@@ -162,7 +162,7 @@ async function renderMine(app) {
           : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) });
         const id = 'c' + cards.length;
         cards.push({ id, chart });
-        html += `<section class="card mine${w.kind === 'series' ? ' full' : ''}" id="${id}">${head}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
+        html += `<section class="card mine wide" id="${id}">${head}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
       }
     });
     html += '</div>';
