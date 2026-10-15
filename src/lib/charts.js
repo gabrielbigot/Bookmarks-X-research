@@ -247,3 +247,126 @@ export function sparkline(values, { w = 120, h = 28 } = {}) {
   const last = values.length - 1;
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" aria-hidden="true"><path class="line-soft" d="${pts}"/><circle class="dot" cx="${(w - 3).toFixed(1)}" cy="${(h - 4 - (values[last] / max) * (h - 8)).toFixed(1)}" r="3"/></svg>`;
 }
+
+// ---------- comparaison : plusieurs séries sur les mêmes jours (barres, barres empilées, courbes, aires) ----------
+const col = (i, s) => (s?.label === 'Autres' ? 'var(--s8)' : `var(--s${(i % 7) + 1})`);
+const movAvg = (v, n = 7) => v.map((_, i) => { const w = v.slice(Math.max(0, i - n + 1), i + 1); return w.reduce((a, b) => a + b, 0) / w.length; });
+const runSum = (v) => { let t = 0; return v.map((x) => (t += x)); };
+export function multiSeries(model, { viz = 'bars', cumul = false, ma = false, pct = false, prev = false, goal = 0, height = 220, label = 'éléments', onPick } = {}) {
+  const { gran, keys } = model, S = model.series, N = keys.length, nS = S.length;
+  const m = { l: 44, r: 12, t: 12, b: 26 }, iw = W - m.l - m.r, ih = height - m.t - m.b;
+  const fix = (v) => { let r = v; if (ma && gran === 'day') r = movAvg(r); if (cumul && !pct) r = runSum(r); return r; };
+  let V = S.map((s) => fix(s.vals));
+  if (pct) { const tot = keys.map((_, i) => V.reduce((a, v) => a + v[i], 0)); V = V.map((v) => v.map((x, i) => (tot[i] ? (x / tot[i]) * 100 : 0))); }
+  const P = prev && !pct && S.every((s) => s.prevVals) ? S.map((s) => fix(s.prevVals)) : null;
+  const stack = viz === 'stacked' || pct && viz !== 'lines';
+  const sums = keys.map((_, i) => V.reduce((a, v) => a + v[i], 0));
+  const max = Math.max(1, pct ? 100 : 0, stack ? Math.max(...sums) : Math.max(...V.flat()), P ? Math.max(...P.flat()) : 0, goal || 0);
+  const { top, ticks } = niceTicks(max);
+  const y = (v) => m.t + ih - (v / top) * ih;
+  const slot = iw / Math.max(1, N), x = (i) => m.l + slot * i + slot / 2;
+  const unit = pct ? ' %' : '';
+  let g = '';
+  for (const t of ticks) g += `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${y(t)}" y2="${y(t)}"/><text class="ax" x="${m.l - 6}" y="${y(t) + 4}" text-anchor="end">${fmtCompact(t)}${unit}</text>`;
+  g += `<line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${y(0)}" y2="${y(0)}"/>`;
+  const kind = stack ? 'stacked' : viz === 'lines' || viz === 'area' ? viz : 'bars';
+  if (kind === 'bars') {
+    const bw = Math.max(1, Math.min(24, (slot - 2) / nS));
+    V.forEach((v, si) => v.forEach((val, i) => { g += `<path style="fill:${col(si, S[si])}" d="${topRounded(x(i) - (bw * nS) / 2 + bw * si, y(val), Math.max(1, bw - 0.5), y(0) - y(val), bw >= 8 ? 3 : 1)}"/>`; }));
+  } else if (kind === 'stacked') {
+    const bw = Math.max(1, Math.min(28, slot - 2)), acc = new Array(N).fill(0);
+    V.forEach((v, si) => v.forEach((val, i) => { const y0 = y(acc[i]), y1 = y(acc[i] + val); acc[i] += val; if (val > 0) g += `<rect style="fill:${col(si, S[si])}" x="${x(i) - bw / 2}" y="${y1}" width="${bw}" height="${Math.max(0, y0 - y1 - (y0 - y1 > 2 ? 0.5 : 0))}"/>`; }));
+  } else {
+    const xs = (i) => (N <= 1 ? m.l + iw / 2 : m.l + (iw * i) / (N - 1));
+    V.forEach((v, si) => {
+      const line = v.map((val, i) => `${i ? 'L' : 'M'}${xs(i).toFixed(1)},${y(val).toFixed(1)}`).join('');
+      if (kind === 'area' && N > 1) g += `<path style="fill:${col(si, S[si])};opacity:.14" d="${line}L${xs(N - 1)},${y(0)}L${xs(0)},${y(0)}Z"/>`;
+      g += `<path style="fill:none;stroke:${col(si, S[si])};stroke-width:2;stroke-linejoin:round;stroke-linecap:round" d="${line}"/>`;
+    });
+  }
+  if (P) {
+    const xs = (i) => (kind === 'lines' || kind === 'area' ? (N <= 1 ? m.l + iw / 2 : m.l + (iw * i) / (N - 1)) : x(i));
+    P.forEach((v, si) => { g += `<path style="fill:none;stroke:${col(si, S[si])};stroke-width:1.6;stroke-dasharray:4 4;opacity:.6" d="${v.map((val, i) => `${i ? 'L' : 'M'}${xs(i).toFixed(1)},${y(val).toFixed(1)}`).join('')}"/>`; });
+  }
+  if (goal > 0) g += `<line style="stroke:var(--text-2);stroke-width:1.2;stroke-dasharray:2 4" x1="${m.l}" x2="${W - m.r}" y1="${y(goal)}" y2="${y(goal)}"/><text class="ax" x="${W - m.r}" y="${y(goal) - 4}" text-anchor="end">objectif ${fmtCompact(goal)}${unit}</text>`;
+  const every = Math.max(1, Math.ceil(N / 6)), fmtK = gran === 'month' ? fmtMonth : fmtDayShort;
+  const lineLike = kind === 'lines' || kind === 'area';
+  const xl = (i) => (lineLike ? (N <= 1 ? m.l + iw / 2 : m.l + (iw * i) / (N - 1)) : x(i));
+  keys.forEach((k, i) => { if (i % every === 0) g += `<text class="ax" x="${xl(i)}" y="${height - 8}" text-anchor="middle">${esc(fmtK(k))}</text>`; });
+  const tot = S.map((s) => s.vals.reduce((a, b) => a + b, 0));
+  const legend = nS > 1 || P ? `<ul class="legend inline">${S.map((s, si) => `<li class="lg"><span class="sw" style="background:${col(si, s)}"></span><span class="lg-l">${esc(s.label)}</span><b>${fmtInt(s.n ?? tot[si])}</b></li>`).join('')}${P ? '<li class="lg"><span class="sw dash"></span><span class="lg-l">période précédente (pointillés)</span></li>' : ''}</ul>` : '';
+  const html = `<svg class="chart" viewBox="0 0 ${W} ${height}" role="img" aria-label="${esc(label)} par ${gran === 'day' ? 'jour' : gran === 'week' ? 'semaine' : 'mois'}">${g}<line class="xh" y1="${m.t}" y2="${y(0)}" x1="0" x2="0" style="display:none"/><rect class="hit" x="${m.l}" y="${m.t}" width="${iw}" height="${ih + 4}" fill="transparent"/></svg>${legend}`;
+  const fmtV = (v) => (pct ? v.toFixed(0) + ' %' : cumul || ma ? (Math.round(v * 10) / 10).toLocaleString('fr-FR') : fmtInt(v));
+  const table = tableOf([gran === 'month' ? 'Mois' : gran === 'week' ? 'Semaine du' : 'Jour', ...S.map((s) => s.label), ...(P ? S.map((s) => s.label + ' (période préc.)') : [])],
+    keys.map((k, i) => [gran === 'month' ? fmtMonth(k) : fmtDay(k), ...V.map((v) => fmtV(v[i])), ...(P ? P.map((v) => fmtV(v[i])) : [])]));
+  const bind = (root) => {
+    const svg = root.querySelector('svg.chart'), hit = svg.querySelector('.hit'), xh = svg.querySelector('.xh');
+    const at = (ev) => {
+      const r = svg.getBoundingClientRect(), px = ((ev.clientX - r.left) / r.width) * W, py = ((ev.clientY - r.top) / r.height) * height;
+      const i = lineLike ? Math.max(0, Math.min(N - 1, Math.round(((px - m.l) / iw) * (N - 1)))) : Math.max(0, Math.min(N - 1, Math.floor((px - m.l) / slot)));
+      let si = 0;
+      if (nS > 1) {
+        if (stack) { let a = 0; si = nS - 1; for (let k = 0; k < nS; k++) { a += V[k][i]; if (py >= y(a)) { si = k; break; } } }
+        else si = V.map((v, k) => [Math.abs(y(v[i]) - py), k]).sort((a, b) => a[0] - b[0])[0][1];
+      }
+      return { i, si };
+    };
+    hit.addEventListener('pointermove', (ev) => {
+      const { i } = at(ev), px = xl(i);
+      xh.setAttribute('x1', px); xh.setAttribute('x2', px); xh.style.display = '';
+      const lines = S.map((s, si) => [s.label + (P ? ' · préc. ' + fmtV(P[si][i]) : ''), fmtV(V[si][i])]);
+      if (stack && !pct && nS > 1) lines.push(['total', fmtV(sums[i])]);
+      tip.show(ev.clientX, ev.clientY, (gran === 'month' ? fmtMonth(keys[i]) : (gran === 'week' ? 'Semaine du ' : '') + fmtDay(keys[i])), lines);
+    });
+    hit.addEventListener('pointerleave', () => { xh.style.display = 'none'; tip.hide(); });
+    if (onPick) { hit.style.cursor = 'pointer'; hit.addEventListener('click', (ev) => { const { i, si } = at(ev); onPick(si, keys[i], gran); }); }
+  };
+  return { html, table, bind };
+}
+
+// ---------- anneau (parts d'un tout), légende cliquable ----------
+export function donut(rows, { label = 'éléments', onPick } = {}) {
+  const total = rows.reduce((a, r) => a + r.n, 0) || 1, R = 80, r = 52, C = 100;
+  const pt = (a, rad) => `${(C + rad * Math.sin(a)).toFixed(2)},${(C - rad * Math.cos(a)).toFixed(2)}`;
+  let a0 = 0, g = '';
+  rows.forEach((d, i) => {
+    const da = (d.n / total) * Math.PI * 2;
+    if (da <= 0) return;
+    const a1 = a0 + Math.min(da, Math.PI * 2 - 0.0001), large = a1 - a0 > Math.PI ? 1 : 0;
+    g += `<path class="mk dn" tabindex="0" data-i="${i}" style="fill:${col(i, d)}" d="M${pt(a0, R)}A${R},${R} 0 ${large} 1 ${pt(a1, R)}L${pt(a1, r)}A${r},${r} 0 ${large} 0 ${pt(a0, r)}Z" role="img" aria-label="${esc(d.label)} : ${d.n}"/>`;
+    a0 += da;
+  });
+  g += `<text x="${C}" y="${C + 2}" text-anchor="middle" class="val" style="font-size:20px">${fmtCompact(total)}</text><text x="${C}" y="${C + 18}" text-anchor="middle" class="ax">${esc(label)}</text>`;
+  const pc = (n) => ((n / total) * 100).toFixed(n / total < 0.1 ? 1 : 0).replace('.', ',') + ' %';
+  const legend = rows.map((d, i) => `<li class="lg mk" tabindex="0" data-i="${i}"><span class="sw" style="background:${col(i, d)}"></span><span class="lg-l">${esc(d.label)}</span><b>${fmtInt(d.n)}</b><span class="lg-p">${pc(d.n)}</span></li>`).join('');
+  const html = `<div class="donut"><svg class="chart" viewBox="0 0 200 200" role="group" aria-label="${esc(label)}">${g}</svg><ul class="legend">${legend}</ul></div>`;
+  const table = tableOf(['', label, 'Part'], rows.map((d) => [d.label, fmtInt(d.n), pc(d.n)]));
+  const bind = (root) => root.querySelectorAll('.mk').forEach((el) => {
+    const d = rows[el.dataset.i], show = () => tipAt(el, d.label, [[label, fmtInt(d.n)], ['part', pc(d.n)]]);
+    el.addEventListener('pointerenter', show); el.addEventListener('focus', show);
+    el.addEventListener('pointerleave', () => tip.hide()); el.addEventListener('blur', () => tip.hide());
+    if (onPick && d.q) { el.style.cursor = 'pointer'; el.addEventListener('click', () => onPick(d)); }
+  });
+  return { html, table, bind };
+}
+
+// ---------- carte de chaleur jour de la semaine × heure ----------
+export function heatmap(mx, { label = 'tweets' } = {}) {
+  const left = 34, topM = 18, cw = (W - left - 4) / 24, ch = 22, height = topM + 7 * ch + 4;
+  const max = Math.max(1, ...mx.flat());
+  const lvl = (v) => (v <= 0 ? 0 : Math.min(5, 1 + Math.floor((v / max) * 4.999)));
+  let g = '';
+  for (let h = 0; h < 24; h += 3) g += `<text class="ax" x="${left + h * cw + cw / 2}" y="11" text-anchor="middle">${h} h</text>`;
+  WEEKDAYS.forEach((d, wd) => {
+    g += `<text class="ax" x="${left - 6}" y="${topM + wd * ch + ch / 2 + 4}" text-anchor="end">${d}</text>`;
+    for (let h = 0; h < 24; h++) g += `<rect class="cell h${lvl(mx[wd][h])} mk" tabindex="0" data-d="${wd}" data-h="${h}" x="${left + h * cw + 1}" y="${topM + wd * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="3" role="img" aria-label="${d} ${h} h : ${mx[wd][h]}"/>`;
+  });
+  const html = `<svg class="chart" viewBox="0 0 ${W} ${height}" role="group" aria-label="${esc(label)} par jour et heure">${g}</svg>`;
+  const table = tableOf(['Jour', ...Array.from({ length: 24 }, (_, h) => h + ' h')], WEEKDAYS.map((d, wd) => [d, ...mx[wd].map(String)]));
+  const bind = (root) => root.querySelectorAll('.cell').forEach((el) => {
+    const show = () => tipAt(el, `${WEEKDAYS[el.dataset.d]} ${el.dataset.h} h`, [[label, fmtInt(mx[el.dataset.d][el.dataset.h])]]);
+    el.addEventListener('pointerenter', show); el.addEventListener('focus', show);
+    el.addEventListener('pointerleave', () => tip.hide()); el.addEventListener('blur', () => tip.hide());
+  });
+  return { html, table, bind };
+}

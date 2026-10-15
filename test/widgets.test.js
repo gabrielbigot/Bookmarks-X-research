@@ -332,3 +332,35 @@ test('source primaire : commentaire qui nomme l’auteur relié à l’annonce, 
   assert.equal(passesFilters(official, { primary: true, primarySet: new Set(['typesafeai']) }), true);
   assert.equal(passesFilters(comment, { primary: true, primarySet: new Set(['typesafeai']) }), false);
 });
+
+import { evalMulti, seriesDefs, groupKeys } from '../src/lib/widgets.js';
+test('comparaison de séries, découpage, période précédente, chaleur, tendances', () => {
+  const mk = (id, text, daysAgo, extra = {}) => ({ ...tw(id, text, daysAgo, extra), createdAt: new Date(NOW - daysAgo * DAY).toISOString() });
+  const xs = [mk('a', 'robot launch humanoid', 1), mk('b', 'robot launch arm', 2), mk('c', 'cooking pasta', 3, { lang: 'fr' }), mk('d', 'robot humanoid update', 12), mk('e', 'robot humanoid demo', 13)];
+  const sv = savedInfo(xs, NOW);
+  const ctx = { sv, now: NOW, rangeDays: 7 };
+  // deux séries alignées (robot vs tout)
+  const w = { kind: 'series', q: 'robot', slabel: 'Robot', more: [{ label: 'Tout', q: '' }], prev: true };
+  assert.equal(seriesDefs(w).length, 2);
+  const m = evalMulti(xs, w, ctx);
+  assert.equal(m.keys.length, 7);
+  assert.deepEqual(m.series.map((s) => s.label), ['Robot', 'Tout']);
+  assert.deepEqual(m.series.map((s) => s.n), [2, 3]);
+  assert.equal(m.series[0].vals.reduce((a, b) => a + b, 0), 2);
+  assert.equal(m.series[0].prevVals.length, 7);
+  assert.equal(m.series[0].prevVals.reduce((a, b) => a + b, 0), 2, 'la période précédente (d, e) est ramenée sur la période courante');
+  assert.equal(m.series[0].prev, 2);
+  // découpage par langue : en (a, b, d, e) et fr (c)
+  const sp = evalMulti(xs, { kind: 'series', q: '', split: 'lang' }, ctx);
+  assert.deepEqual(sp.series.map((s) => s.label).sort(), ['en', 'fr']);
+  assert.equal(sp.series.find((s) => s.label === 'en').n, 2);
+  // chaleur + tendances
+  const h = evalWidget(xs, { kind: 'heat', q: '' }, ctx);
+  assert.equal(h.heat.n, 3);
+  const tr = evalWidget(xs, { kind: 'trend', by: 'word', q: '' }, { ...ctx, rangeDays: 7 });
+  assert.ok(tr.trendOk);
+  assert.ok(tr.trend.some((x) => x.key === 'launch' && x.n === 2 && x.prev === 0), JSON.stringify(tr.trend));
+  assert.ok(!tr.trend.some((x) => x.key === 'robot' && x.d > 0), 'robot : 2 puis 2, ne monte pas');
+  assert.equal(evalWidget(xs, { kind: 'trend', by: 'word', q: '' }, { ...ctx, rangeDays: null }).trendOk, false);
+  assert.deepEqual(groupKeys('word', xs[0]).sort(), ['humanoid', 'launch', 'robot']);
+});

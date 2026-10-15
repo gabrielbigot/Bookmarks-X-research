@@ -287,33 +287,97 @@ export function evalWidget(items, w, ctx) {
     });
   } else units = cand.map((c) => ({ rep: c.t, days: c.days, members: [c.t] }));
 
-  const perDay = new Map(), matched = [];
+  const perDay = new Map(), prevPer = new Map(), splitPer = new Map(), matched = [], prevReps = [];
+  const splitOf = w.split === 'source' ? (t) => (isVideoItem(t) ? 'YouTube' : 'X') : w.split === 'lang' ? (t) => (isVideoItem(t) ? '–' : t.lang || '?') : null;
   let n = 0, prev = 0, noDate = 0, tweets = 0;
   for (const u of units) {
     if (!u.days.length) { noDate++; if (!R) { n++; tweets += u.members.length; matched.push({ t: u.rep, day: '', members: u.members }); } continue; }
     let hit = null, p = false;
     for (const d of u.days) {
-      if (inRange(d)) { count(perDay, d); if (!hit || d > hit) hit = d; }
-      if (inPrev(d)) p = true;
+      if (inRange(d)) {
+        count(perDay, d); if (!hit || d > hit) hit = d;
+        if (splitOf) { const g = splitOf(u.rep); if (!splitPer.has(g)) splitPer.set(g, new Map()); count(splitPer.get(g), d); }
+      }
+      if (inPrev(d)) { p = true; count(prevPer, dayKey(dayMs(d) + R * DAY)); } // décalé d'une période : se superpose à la période courante
     }
     if (hit) { n++; tweets += u.members.length; matched.push({ t: u.rep, day: hit, members: u.members }); }
-    if (p) prev++;
+    if (p) { prev++; prevReps.push(u.rep); }
   }
   matched.sort((a, b) => (a.day < b.day ? 1 : -1));
   const keys = [...perDay.keys()].sort();
   const startKey = fromKey || keys[0] || todayKey;
-  const out = { n, prev: R ? prev : null, noDate, matched, startKey, endKey: todayKey, tweets, grouped: !!dd, limited };
+  const out = { n, prev: R ? prev : null, noDate, matched, startKey, endKey: todayKey, tweets, grouped: !!dd, limited, perDay, prevPer, splitPer };
   if (w.kind === 'series') out.series = seriesFrom(perDay, startKey, todayKey);
+  if (w.kind === 'heat') { // jour de la semaine × heure de publication (heure locale) des tweets retenus
+    const m = Array.from({ length: 7 }, () => new Array(24).fill(0));
+    let hn = 0;
+    for (const { t } of matched) {
+      if (isVideoItem(t) || !t.createdAt) continue;
+      const dt = new Date(t.createdAt);
+      if (isNaN(dt)) continue;
+      m[(dt.getDay() + 6) % 7][dt.getHours()]++; hn++;
+    }
+    out.heat = { m, n: hn };
+  }
+  if (w.kind === 'trend') { // ce qui monte : fréquence sur la période vs la précédente
+    const cnt = (reps) => { const c = new Map(), names = new Map(); for (const t of reps) for (const k of groupKeys(w.by || 'word', t)) { count(c, k); if (!names.has(k)) names.set(k, t.name || k); } return { c, names }; };
+    const cur = cnt(matched.map((m) => m.t)), old = cnt(prevReps);
+    const minN = Math.max(2, Math.min(5, Math.round(n / 40)));
+    out.trend = [...cur.c.entries()].filter(([, c]) => c >= minN).map(([k, c]) => ({ key: k, n: c, prev: old.c.get(k) || 0, label: w.by === 'author' ? `@${k}` : k }))
+      .map((x) => ({ ...x, d: x.n - x.prev, ratio: x.prev ? x.n / x.prev : Infinity }))
+      .filter((x) => x.d > 0).sort((a, b) => b.d - a.d || b.n - a.n).slice(0, 15);
+    out.trendOk = !!R;
+  }
   if (w.kind === 'top') {
     const groups = new Map(), names = new Map();
     for (const { t } of matched) {
-      const keysOf = w.by === 'site' ? [...new Set((t.links || []).map((l) => { try { return new URL(l).hostname.replace(/^www\./, ''); } catch { return ''; } }).filter((h) => h && !/^(x\.com|twitter\.com|t\.co)$/.test(h)))]
-        : w.by === 'lang' ? (t.lang ? [t.lang] : []) : [t.handle];
+      const keysOf = groupKeys(w.by, t);
       for (const k of keysOf) { count(groups, k); if (!names.has(k)) names.set(k, t.name || k); }
     }
     out.top = top(groups, 15).map(([k, c]) => ({ key: k, label: w.by === 'author' || !w.by ? (names.get(k) && names.get(k) !== k ? `${names.get(k)} (@${k})` : '@' + k) : k, n: c }));
   }
   return out;
+}
+
+// Clés de regroupement d'un élément : auteur, site cité, langue ou mot marquant
+const WORD_SKIP = /^(https?|www|amp|this|that|with|from|have|will|your|just|more|than|what|when|they|their|about|also|into|been|were|dans|pour|avec|plus|mais|cette|sont|nous|vous|tout|comme|elle|fait|sans|very|here|them|some|like|only|over)$/;
+export function groupKeys(by, t) {
+  if (by === 'site') return [...new Set((t.links || []).map((l) => { try { return new URL(l).hostname.replace(/^www\./, ''); } catch { return ''; } }).filter((h) => h && !/^(x\.com|twitter\.com|t\.co)$/.test(h)))];
+  if (by === 'lang') return t.lang ? [t.lang] : [];
+  if (by === 'word') return isVideoItem(t) ? [] : [...new Set(tokenize(decodeEntities(t.text || '')).filter((w) => w.length >= 4 && !/^[0-9@#+._]+$/.test(w) && !isStopword(w) && !WORD_SKIP.test(w)))];
+  return t.handle ? [t.handle] : [];
+}
+
+// Séries d'une courbe comparée : la série de base + celles de w.more ({ label, q, dets, detMode, source }).
+export function seriesDefs(w) {
+  const base = { ...w, more: undefined, split: undefined };
+  return [{ def: base, label: w.slabel || w.title || 'Série 1' },
+    ...(w.more || []).map((m, k) => ({ def: { ...w, more: undefined, split: undefined, slabel: undefined, q: m.q || '', dets: m.dets || [], det: undefined, detMode: m.detMode || w.detMode, source: m.source || w.source }, label: m.label || m.q || `Série ${k + 2}` }))];
+}
+// Plusieurs séries alignées sur les mêmes jours (comparaison, découpage par source/langue) + période précédente superposée
+export function evalMulti(items, w, ctx) {
+  const now = ctx.now ?? Date.now();
+  const R = ctx.rangeDays, todayKey = dayKey(now);
+  const defs = seriesDefs(w);
+  let S;
+  if (w.split && !(w.more || []).length) {
+    const r = evalWidget(items, { ...defs[0].def, split: w.split, kind: 'number' }, ctx);
+    const tot = [...r.splitPer.entries()].map(([k, m]) => [k, m, [...m.values()].reduce((a, b) => a + b, 0)]).sort((a, b) => b[2] - a[2]);
+    const keep = tot.slice(0, 5), rest = tot.slice(5);
+    S = keep.map(([k, m, n]) => ({ label: k, perDay: m, prevPer: new Map(), n }));
+    if (rest.length) { const m = new Map(); for (const [, mm] of rest) for (const [d, c] of mm) m.set(d, (m.get(d) || 0) + c); S.push({ label: 'Autres', perDay: m, prevPer: new Map(), n: rest.reduce((a, x) => a + x[2], 0) }); }
+    if (!S.length) S = [{ label: defs[0].label, perDay: new Map(), prevPer: new Map(), n: 0 }];
+    S.base = r;
+  } else {
+    S = defs.map(({ def, label }) => { const r = evalWidget(items, { ...def, kind: 'number' }, ctx); return { label, perDay: r.perDay, prevPer: r.prevPer, n: r.n, prev: r.prev, r }; });
+  }
+  const firsts = S.flatMap((x) => [...x.perDay.keys()]).sort();
+  const startKey = R ? dayKey(now - (R - 1) * DAY) : firsts[0] || todayKey;
+  const shaped = S.map((x) => seriesFrom(x.perDay, startKey, todayKey));
+  const gran = shaped[0].gran;
+  const keys = shaped[0].points.map((p) => p.k);
+  const prevVals = R ? S.map((x) => seriesFrom(x.prevPer, startKey, todayKey).points.map((p) => p.n)) : null;
+  return { gran, keys, series: S.map((x, i) => ({ label: x.label, vals: shaped[i].points.map((p) => p.n), prevVals: prevVals ? prevVals[i] : null, n: x.n, prev: x.prev ?? null })), startKey, split: !!(w.split && !(w.more || []).length), defs };
 }
 
 export const textOf = (t) => decodeEntities(isVideoItem(t) ? t.text : t.text || '').replace(/\s+/g, ' ').slice(0, 160);

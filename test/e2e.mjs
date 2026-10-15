@@ -1009,6 +1009,27 @@ await waitFor(async () => /Sources primaires \(2\)/.test(await stats.locator('#p
 await stats.locator('.card.mine:has-text("Sujets") [data-act="edit"]').click();
 assert.ok(await stats.locator('#dlg input[name="po"]').count() === 1 && await stats.locator('#dlg input[name="oo"]').count() === 1 && await stats.locator('#off-go').count() === 1, 'options sources primaires / annonces officielles');
 await stats.click('#dlg button[value="cancel"]');
+// ---- nouvelles formes : modèles (comparaison, empilé, anneau, chaleur, tendances, ratio), export CSV, tableaux de bord
+const TPLS = ['X vs YouTube', 'Activité par source', 'Langues', 'Quand les tweets sont publiés', 'Sujets qui montent (mots)', 'Part des tweets avec un lien'];
+for (const label of TPLS) {
+  await stats.selectOption('#tpl-sel', { label });
+  await waitFor(async () => (await stats.locator(`.card.mine:has-text("${label}")`).count()) > 0, `carte « ${label} »`, 10000);
+}
+assert.ok(await stats.locator('.card.mine:has-text("X vs YouTube") svg.chart').count() === 1 && await stats.locator('.card.mine:has-text("X vs YouTube") .legend li').count() >= 2, 'comparaison : une courbe par série + légende');
+assert.ok(await stats.locator('.card.mine:has-text("Activité par source") svg.chart').count() === 1, 'barres empilées par source');
+assert.ok(await stats.locator('.card.mine:has-text("Langues") .donut path.dn').count() > 0, 'anneau des langues');
+assert.ok(await stats.locator('.card.mine:has-text("Quand les tweets") rect.cell').count() === 168, 'carte de chaleur 7 × 24');
+assert.ok(await stats.locator('.card.mine:has-text("Part des tweets avec un lien") .bignum').innerText().then((t) => /%/.test(t)), 'ratio en %');
+const [dl] = await Promise.all([stats.waitForEvent('download'), stats.locator('.card.mine:has-text("X vs YouTube") [data-act="csv"]').click()]);
+assert.match(dl.suggestedFilename(), /\.csv$/);
+await stats.evaluate(() => { window.prompt = () => 'Veille IA'; });
+await stats.click('#b-add');
+await waitFor(async () => /Veille IA/.test(await stats.locator('.boards .bt.on').innerText()), 'nouveau tableau de bord actif', 8000);
+assert.equal(await stats.locator('.card.mine').count(), 0, 'le nouveau tableau est vide');
+await stats.selectOption('#tpl-sel', { label: 'Langues' });
+await waitFor(async () => (await stats.locator('.card.mine').count()) === 1, 'stat ajoutée au nouveau tableau', 8000);
+await stats.click('.boards .bt[data-b="main"]');
+await waitFor(async () => (await stats.locator('.card.mine:has-text("X vs YouTube")').count()) === 1, 'retour au tableau Général', 8000);
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
 
 // ---- recherche : regroupement des quasi-doublons (mêmes règles que les stats)
@@ -1018,8 +1039,10 @@ await panel.waitForSelector('.tw');
 await panel.fill('#q', 'agents quoted:no dedupe:0.98,30');
 try { await waitFor(async () => /sujets \(\d+ tweets/.test(await panel.locator('#mode').innerText()), 'recherche regroupée : « N sujets (M tweets…) »', 10000); } catch (e) { console.log('MODE:', await panel.locator('#mode').innerText(), '| url', panel.url()); throw e; }
 assert.ok(await panel.locator('.dupbtn').count() > 0, 'les cartes regroupées proposent « + N similaires »');
-await panel.locator('.dupbtn').first().click();
-assert.ok(await panel.locator('.dups:not([hidden]) .dup').count() > 0, 'les similaires se déplient');
+try {
+  await panel.locator('.dupbtn').first().click();
+  await waitFor(async () => (await panel.locator('.dups:not([hidden]) .dup').count()) > 0, 'les similaires se déplient', 6000);
+} catch (e) { console.log('DUPS:', await panel.locator('.dupbtn').count(), await panel.locator('.dups').count(), await panel.locator('#mode').innerText()); throw e; }
 await panel.fill('#q', '');
 
 console.log('E2E OK');

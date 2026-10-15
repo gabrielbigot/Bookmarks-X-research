@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
-import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf, OFFICIAL_DESC, OFFICIAL_MIN, judgeText, suggestPrimary, handleKey } from './lib/widgets.js';
+import { detsOf, evalWidget, evalMulti, seriesDefs, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf, OFFICIAL_DESC, OFFICIAL_MIN, judgeText, suggestPrimary, handleKey } from './lib/widgets.js';
 import { jevJudge, estimateJudgeCost, fmtDollars } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
@@ -10,7 +10,7 @@ import { computeStats, TYPE_LABELS } from './lib/stats.js';
 import { bindThemeButton } from './lib/theme.js';
 import { isVideoItem } from './lib/youtube.js';
 import { computeYtStats, fmtHours } from './lib/ytstats.js';
-import { timeSeries, cumulative, columns, hbars, stacked, calendar, sparkline, esc, fmtInt, fmtCompact, fmtDay, WEEKDAYS } from './lib/charts.js';
+import { timeSeries, cumulative, columns, hbars, stacked, calendar, sparkline, multiSeries, donut, heatmap, esc, fmtInt, fmtCompact, fmtDay, WEEKDAYS } from './lib/charts.js';
 
 const $ = (id) => document.getElementById(id);
 const RANGES = [[1, '1 j'], [7, '7 j'], [30, '30 j'], [90, '90 j'], [365, '1 an'], [null, 'Tout']];
@@ -126,9 +126,13 @@ async function embedTexts(texts) {
   return out;
 }
 
-const KINDS = { number: 'Nombre', series: 'Courbe', top: 'Classement' };
+const KINDS = { number: 'Nombre', series: 'Courbe / comparaison', top: 'Classement', ratio: 'Ratio (A ÷ B)', heat: 'Carte de chaleur (jour × heure)', trend: 'Tendances (ce qui monte)' };
+const VIZ = { bars: 'Barres', stacked: 'Barres empilées', lines: 'Courbes', area: 'Aires' };
+const TVIZ = { bars: 'Barres', donut: 'Anneau' };
+const SIZES = { '': 'Taille automatique', 1: 'Petite', 2: 'Moyenne', 3: 'Grande', all: 'Pleine largeur' };
+const sizeOf = (w) => w.size || (w.kind === 'number' || w.kind === 'ratio' ? 1 : 2);
 const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
-const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
+const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues', word: 'Mots marquants' };
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
 const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.primaryOnly ? 'primary:oui' : '', w.officialOnly ? 'official:oui' : '', w.dedupe?.on ? `dedupe:${w.dedupe.sim ?? 0.92},${w.dedupe.days ?? 7}` : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 // Ce qui est compté = éléments dont le jour (enregistrement / visionnage / ajout) tombe dans la période : le clic ouvre la même chose.
@@ -144,39 +148,126 @@ const TEMPLATES = [
   { title: 'Vidéos YouTube vues', kind: 'series', q: 'viewed:yes', source: 'youtube' },
   { title: 'À regarder, pas encore vu', kind: 'number', q: 'playlist:"à regarder plus tard" viewed:no', source: 'youtube' },
   { title: 'Auteurs les plus enregistrés', kind: 'top', q: '', source: 'x', by: 'author' },
+  { title: 'X vs YouTube', kind: 'series', q: '', source: 'x', slabel: 'X', more: [{ label: 'YouTube', q: '', source: 'youtube' }], viz: 'lines' },
+  { title: 'Activité par source', kind: 'series', q: '', source: 'all', split: 'source', viz: 'stacked' },
+  { title: 'Langues', kind: 'top', q: '', source: 'x', by: 'lang', viz: 'donut' },
+  { title: 'Quand les tweets sont publiés', kind: 'heat', q: '', source: 'x' },
+  { title: 'Sujets qui montent (mots)', kind: 'trend', q: '', source: 'x', by: 'word' },
+  { title: 'Part des tweets avec un lien', kind: 'ratio', q: 'has:link', source: 'x', slabel: 'Avec lien', more: [{ label: 'Tous les tweets', q: '', source: 'x' }] },
 ];
 const LAUNCH_DETECTOR = { name: 'Lancements', desc: 'Annonce d’un lancement : produit, entreprise, fonctionnalité', examples: ['Today, we launch our new product', 'Introducing our new app, available now', 'We just shipped a major update', 'Aujourd’hui, nous lançons notre startup', 'Lancement officiel de notre nouvelle version'], threshold: 0.4 };
 
+// ---------- tableaux de bord ----------
+let boards = [], board = 'main';
+const MAIN = { id: 'main', name: 'Général' };
+const allBoards = () => [MAIN, ...boards.filter((b) => b.id !== 'main')];
+const boardOf = (w) => (allBoards().some((b) => b.id === w.board) ? w.board : 'main');
+try { board = localStorage.getItem('xbs.stats.board') || 'main'; } catch {}
+const saveBoards = () => setMeta('dashBoards', boards);
+
+// ---------- export ----------
+function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
+const fileSlug = (t) => slugOf(t || 'stat');
+function exportCsv(chart, title) {
+  const cell = (v) => (/[",;\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+  download(fileSlug(title) + '.csv', new Blob(['﻿' + [chart.table.head, ...chart.table.rows].map((r) => r.map(cell).join(';')).join('\n')], { type: 'text/csv;charset=utf-8' }));
+}
+function exportPng(el, title) {
+  const svg = el.querySelector('svg.chart');
+  if (!svg) return;
+  const clone = svg.cloneNode(true);
+  const src = [svg, ...svg.querySelectorAll('*')], dst = [clone, ...clone.querySelectorAll('*')];
+  src.forEach((n, i) => { // les styles viennent de la feuille de style : on les fige dans le SVG exporté
+    const cs = getComputedStyle(n), d = dst[i];
+    d.setAttribute('style', ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity', 'font-size', 'font-weight', 'font-family'].map((k) => `${k}:${cs.getPropertyValue(k)}`).join(';'));
+  });
+  clone.querySelectorAll('.xh,.hit').forEach((n) => n.remove());
+  const vb = svg.viewBox.baseVal, w = 1200, h = Math.round((w * vb.height) / vb.width), head = 70;
+  clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); clone.setAttribute('width', w); clone.setAttribute('height', h);
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = w; c.height = h + head;
+    const g = c.getContext('2d'), css = getComputedStyle(document.documentElement);
+    g.fillStyle = css.getPropertyValue('--surface').trim() || '#fff'; g.fillRect(0, 0, c.width, c.height);
+    g.fillStyle = css.getPropertyValue('--text-1').trim() || '#000'; g.font = '600 28px system-ui,sans-serif'; g.fillText(title || 'Stat', 24, 44);
+    g.drawImage(img, 0, head, w, h);
+    c.toBlob((b) => b && download(fileSlug(title) + '.png', b), 'image/png');
+  };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+}
+
+// requête qui ouvre exactement une série (utilisée au clic)
+const seriesQuery = (w, si, multi) => {
+  if (multi.split) { const g = multi.series[si].label; return [wQuery(w), w.split === 'source' ? (g === 'YouTube' ? 'source:youtube' : g === 'X' ? 'source:x' : '') : w.split === 'lang' && g !== 'Autres' && g !== '–' ? 'lang:' + g : ''].filter(Boolean).join(' '); }
+  return wQuery(multi.defs[si].def);
+};
+const keyQuery = (w, by, key) => [wQuery(w), by === 'author' ? `from:@${key}` : by === 'lang' ? `lang:${key}` : key].filter(Boolean).join(' ');
+
 async function renderMine(app) {
   const sv = savedInfo(all, Date.now());
-  const needed = new Set(widgets.flatMap(detsOf));
+  const needed = new Set(widgets.flatMap((w) => [...detsOf(w), ...(w.more || []).flatMap((m) => m.dets || [])]));
   const { sets, missing } = await detectorSetsFor(needed);
   const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets, primary: primarySet(), official: official.m };
   if (widgets.some((w) => w.dedupe?.on)) ctx.vecs = (await loadVectors()).vecs; // regroupement par le sens
-  let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button><button type="button" class="gbtn" id="p-manage">Sources primaires (${primaryList.length})</button></div>`;
+  if (!allBoards().some((b) => b.id === board)) board = 'main';
+  let html = `<div class="boards">${allBoards().map((b) => `<button type="button" class="bt${b.id === board ? ' on' : ''}" data-b="${esc(b.id)}">${esc(b.name)}</button>`).join('')}<button type="button" class="bt add" id="b-add">+ Tableau</button>${board !== 'main' ? '<button type="button" class="bt" id="b-ren">Renommer</button><button type="button" class="bt" id="b-del">Supprimer</button>' : '<button type="button" class="bt" id="b-ren">Renommer</button>'}</div>`;
+  html += `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><select id="tpl-sel" class="gbtn" title="Ajouter une stat toute prête"><option value="">+ Modèle…</option>${TEMPLATES.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('')}</select><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button><button type="button" class="gbtn" id="p-manage">Sources primaires (${primaryList.length})</button></div>`;
   if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
   const emptyDets = [...needed].filter((id) => sets.has(id) && sets.get(id).size === 0 && !missing.includes(detectors.find((d) => d.id === id)?.name)).map((id) => detectors.find((d) => d.id === id)?.name).filter(Boolean);
   if (emptyDets.length) html += `<p class="note">⚠ Détecteur(s) <b>${esc(emptyDets.join(', '))}</b> : aucun élément retenu. Le seuil est probablement trop haut : ouvre « Détecteurs » › Modifier, une suggestion de seuil y est proposée.</p>`;
-  if (!widgets.length) {
-    html += `<p class="muted">Aucune stat personnalisée pour l’instant. Une stat compte ce que tu veux dans le temps, avec le filtre de période du haut : une requête de recherche (mots, <code>from:@…</code>, <code>has:link</code>, <code>playlist:"…"</code>) ou un <b>détecteur</b> qui comprend le sens (par exemple « annonce d’un lancement »).</p>
+  const mine = widgets.map((w, i) => [w, i]).filter(([w]) => boardOf(w) === board);
+  if (!mine.length) {
+    html += `<p class="muted">${widgets.length ? 'Ce tableau est vide.' : 'Aucune stat personnalisée pour l’instant.'} Une stat compte ce que tu veux dans le temps, avec le filtre de période du haut : une requête de recherche (mots, <code>from:@…</code>, <code>has:link</code>, <code>playlist:"…"</code>) ou un <b>détecteur</b> qui comprend le sens (par exemple « annonce d’un lancement »). Elle peut comparer plusieurs séries sur un même graphique, se découper par source ou par langue, et prendre la forme d’une courbe, de barres empilées, d’un anneau, d’une carte de chaleur, d’un ratio ou d’un classement de tendances.</p>
       <div class="tpl">${TEMPLATES.map((t, i) => `<button type="button" class="gbtn" data-tpl="${i}">+ ${esc(t.title)}</button>`).join('')}<button type="button" class="gbtn" data-tpl="launch">+ Détecteur « Lancements »</button></div>`;
   } else {
     html += '<div class="mine-grid">';
-    widgets.forEach((w, i) => {
-      const r = evalWidget(everything, w, ctx);
+    mine.forEach(([w, i]) => {
       const q = wQuery(w);
-      const head = `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind])} · ${esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}</p></div>
-        <div class="wact"><button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${i < widgets.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div></header>`;
-      const headT = head.replace('</header>', '<button class="tbl-btn" type="button" aria-pressed="false" title="Afficher les valeurs en tableau">Tableau</button></header>');
+      const nb = mine.findIndex(([, j]) => j === i);
+      const goal = Number(w.goal) || 0;
+      const act = (chart) => `<div class="wact"><button type="button" class="grab" data-act="grab" data-i="${i}" title="Glisser pour déplacer">⠿</button>${chart ? `<button type="button" data-act="csv" data-i="${i}" title="Exporter les valeurs (CSV)">CSV</button><button type="button" data-act="png" data-i="${i}" title="Exporter l’image (PNG)">PNG</button>` : ''}<button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${nb ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${nb < mine.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div>`;
+      const head = (chart, extra = '') => `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind] || w.kind)} · ${esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}${extra}</p></div>${act(chart)}</header>`;
+      const headT = (extra) => head(true, extra).replace('</header>', '<button class="tbl-btn" type="button" aria-pressed="false" title="Afficher les valeurs en tableau">Tableau</button></header>');
+      const goalBar = (v) => (goal > 0 ? `<div class="goal${v >= goal ? ' done' : ''}" title="objectif ${goal}"><i style="width:${Math.min(100, (v / goal) * 100)}%"></i></div><p class="sub">objectif ${fmtInt(goal)} · ${Math.round((v / goal) * 100)} %${v >= goal ? ' ✓ atteint' : ''}</p>` : '');
+      const cls = `card mine sz-${sizeOf(w)}`;
+      const push = (chart, body, extra) => { const id = 'c' + cards.length; cards.push({ id, chart, title: w.title }); html += `<section class="${cls}" id="${id}" data-i="${i}">${headT(extra)}${body}<div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`; };
       if (w.kind === 'number') {
-        html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${groupedNote(r) ? `<p class="sub">${esc(groupedNote(r))}</p>` : ''}${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
+        const r = evalWidget(everything, w, ctx);
+        html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${goalBar(r.n)}${groupedNote(r) ? `<p class="sub">${esc(groupedNote(r))}</p>` : ''}${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
+      } else if (w.kind === 'ratio') {
+        const defs = seriesDefs(w);
+        if (defs.length < 2) { html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<p class="note">Ajoute le dénominateur (la série « divisé par ») dans ✎.</p></div></section>`; return; }
+        const a = evalWidget(everything, { ...defs[0].def, kind: 'number' }, ctx), b = evalWidget(everything, { ...defs[1].def, kind: 'number' }, ctx);
+        const pc = b.n ? (a.n / b.n) * 100 : null, pp = b.prev ? (a.prev / b.prev) * 100 : null;
+        const f1 = (v) => (v == null ? '–' : v.toFixed(v < 10 ? 1 : 0).replace('.', ','));
+        html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(wQuery(defs[0].def)))}" title="Ouvrir le numérateur dans la recherche">${f1(pc)} %</button><span class="dl">${pc != null && pp != null ? esc(`${pc >= pp ? '▲' : '▼'} ${Math.abs(pc - pp).toFixed(1).replace('.', ',')} pt vs période précédente`) : ''}</span></div>${goalBar(pc || 0)}<p class="sub">${esc(defs[0].label)} : ${fmtInt(a.n)} · ${esc(defs[1].label)} : ${fmtInt(b.n)}</p></div></section>`;
+      } else if (w.kind === 'series') {
+        const multi = evalMulti(everything, w, ctx);
+        const r0 = multi.series[0];
+        const legacy = !w.viz && !(w.more || []).length && !w.split && !w.cumul && !w.pct && !w.prev && !goal;
+        const chart = legacy
+          ? timeSeries(seriesFromVals(multi), { gran: multi.gran, label: 'éléments', onPick: (pt) => openQ(`${q} ${duringBucket(pt.k, multi.gran)}`.trim()) })
+          : multiSeries(multi, { viz: w.viz || (multi.series.length > 1 ? 'lines' : 'bars'), cumul: !!w.cumul, ma: !!w.ma, pct: !!w.pct, prev: !!w.prev, goal, label: 'éléments', onPick: (si, k, g) => openQ(`${seriesQuery(w, si, multi)} ${duringBucket(k, g)}`.trim()) });
+        const single = multi.series.length === 1;
+          const total = multi.series.reduce((a, s) => a + s.n, 0);
+        push(chart, `<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(single ? q : seriesQuery(w, 0, multi)))}">${fmtInt(single ? r0.n : total)}</button><span class="dl">${esc(single ? delta(r0.n, r0.prev) : multi.split ? 'total, découpé par ' + (w.split === 'lang' ? 'langue' : 'source') : 'total des séries')}</span></div>`, '');
+      } else if (w.kind === 'heat') {
+        const r = evalWidget(everything, w, ctx);
+        const chart = heatmap(r.heat.m, { label: 'tweets' });
+        push(chart, `<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.heat.n)}</button><span class="dl">tweets · heure locale de publication</span></div>`, '');
+      } else if (w.kind === 'trend') {
+        const r = evalWidget(everything, { ...w, by: w.by || 'word' }, ctx);
+        const by = w.by || 'word';
+        if (!r.trendOk) { html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<p class="note">Les tendances comparent la période choisie à la précédente : choisis 1 j, 7 j, 30 j, 90 j ou 1 an (pas « Tout »).</p></div></section>`; return; }
+        const rows = r.trend.map((x) => ({ label: x.label, n: x.n, sub: `+${x.d} (avant : ${x.prev})`, q: keyQuery(w, by, x.key) }));
+        const chart = rows.length ? hbars(rows, { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) }) : { html: '<p class="muted">Rien ne monte nettement sur cette période.</p>', table: { head: [''], rows: [] }, bind() {} };
+        push(chart, `<p class="sub">Ce qui apparaît plus souvent que sur la période précédente (${esc(BYS[by] || by)}).</p>`, '');
       } else {
-        const chart = w.kind === 'series'
-          ? timeSeries(r.series.points, { gran: r.series.gran, label: 'éléments', onPick: (pt) => openQ(`${q} ${duringBucket(pt.k, r.series.gran)}`.trim()) })
-          : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) });
-        const id = 'c' + cards.length;
-        cards.push({ id, chart });
-        html += `<section class="card mine wide" id="${id}">${headT}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(groupedNote(r) || delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
+        const r = evalWidget(everything, w, ctx);
+        const by = w.by || 'author';
+        const rows = (r.top || []).map((x) => ({ label: x.label, n: x.n, q: keyQuery(w, by, x.key) }));
+        const chart = w.viz === 'donut' ? donut(rows.slice(0, 8), { label: 'éléments', onPick: (x) => openQ(withPeriod(x.q)) }) : hbars(rows, { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) });
+        push(chart, `<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(groupedNote(r) || delta(r.n, r.prev))}</span></div>`, '');
       }
     });
     html += '</div>';
@@ -186,19 +277,70 @@ async function renderMine(app) {
   $('w-add').onclick = () => editWidget(null);
   $('d-manage').onclick = () => manageDetectors();
   $('p-manage').onclick = () => manageSources();
+  app.querySelectorAll('[data-b]').forEach((b) => (b.onclick = () => { board = b.dataset.b; try { localStorage.setItem('xbs.stats.board', board); } catch {} render(); }));
+  $('b-add').onclick = async () => {
+    const name = (prompt('Nom du nouveau tableau de bord :') || '').trim();
+    if (!name) return;
+    const b = { id: uid(), name: name.slice(0, 40) };
+    boards.push(b); board = b.id; try { localStorage.setItem('xbs.stats.board', board); } catch {}
+    await saveBoards(); render();
+  };
+  $('b-ren').onclick = async () => {
+    const cur = allBoards().find((b) => b.id === board);
+    const name = (prompt('Nouveau nom :', cur.name) || '').trim();
+    if (!name) return;
+    if (board === 'main') MAIN.name = name.slice(0, 40); else boards.find((b) => b.id === board).name = name.slice(0, 40);
+    await setMeta('dashMainName', MAIN.name); await saveBoards(); render();
+  };
+  $('b-del')?.addEventListener('click', async () => {
+    const n = widgets.filter((w) => w.board === board).length;
+    if (!confirm(`Supprimer ce tableau ?${n ? ` Ses ${n} stat(s) seront déplacées dans « ${MAIN.name} ».` : ''}`)) return;
+    widgets.forEach((w) => { if (w.board === board) w.board = 'main'; });
+    boards = boards.filter((b) => b.id !== board); board = 'main';
+    await saveBoards(); await saveWidgets(); render();
+  });
+  $('tpl-sel').onchange = async (e) => {
+    if (e.target.value === '') return;
+    widgets.push({ id: uid(), board, ...structuredClone(TEMPLATES[+e.target.value]) }); await saveWidgets(); render();
+  };
   app.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = async () => {
     if (b.dataset.tpl === 'launch') return editDetector(null, LAUNCH_DETECTOR);
-    widgets.push({ id: uid(), ...TEMPLATES[+b.dataset.tpl] }); await saveWidgets(); render();
+    widgets.push({ id: uid(), board, ...structuredClone(TEMPLATES[+b.dataset.tpl]) }); await saveWidgets(); render();
   }));
-  app.querySelectorAll('.wact button').forEach((b) => (b.onclick = async () => {
+  // glisser-déposer : on attrape la poignée ⠿, on dépose sur une autre carte
+  app.querySelectorAll('.card.mine[data-i]').forEach((el) => {
+    el.addEventListener('dragstart', (ev) => { ev.dataTransfer.setData('text/plain', el.dataset.i); el.classList.add('dragging'); });
+    el.addEventListener('dragend', () => { el.draggable = false; el.classList.remove('dragging'); app.querySelectorAll('.over').forEach((n) => n.classList.remove('over')); });
+    el.addEventListener('dragover', (ev) => { ev.preventDefault(); el.classList.add('over'); });
+    el.addEventListener('dragleave', () => el.classList.remove('over'));
+    el.addEventListener('drop', async (ev) => {
+      ev.preventDefault();
+      const from = Number(ev.dataTransfer.getData('text/plain')), to = Number(el.dataset.i);
+      if (Number.isNaN(from) || from === to) return;
+      const [moved] = widgets.splice(from, 1);
+      widgets.splice(to, 0, moved);
+      await saveWidgets(); render();
+    });
+  });
+  app.querySelectorAll('.wact button').forEach((b) => {
     const i = +b.dataset.i, a = b.dataset.act;
-    if (a === 'edit') return editWidget(i);
-    if (a === 'dup') widgets.splice(i + 1, 0, { ...widgets[i], id: uid(), title: widgets[i].title + ' (copie)' });
-    if (a === 'up' && i) [widgets[i - 1], widgets[i]] = [widgets[i], widgets[i - 1]];
-    if (a === 'down' && i < widgets.length - 1) [widgets[i + 1], widgets[i]] = [widgets[i], widgets[i + 1]];
-    if (a === 'del') { if (!confirm(`Supprimer « ${widgets[i].title} » ?`)) return; widgets.splice(i, 1); }
-    await saveWidgets(); render();
-  }));
+    if (a === 'grab') { b.addEventListener('pointerdown', () => { const c = b.closest('.card'); c.draggable = true; }); return; }
+    b.onclick = async () => {
+      const sameBoard = (j) => boardOf(widgets[j]) === boardOf(widgets[i]);
+      if (a === 'edit') return editWidget(i);
+      if (a === 'csv' || a === 'png') { const c = cards.find((x) => x.id === b.closest('.card').id); if (!c) return; return a === 'csv' ? exportCsv(c.chart, c.title) : exportPng(document.getElementById(c.id), c.title); }
+      if (a === 'dup') widgets.splice(i + 1, 0, { ...structuredClone(widgets[i]), id: uid(), title: widgets[i].title + ' (copie)' });
+      if (a === 'up') { let j = i - 1; while (j >= 0 && !sameBoard(j)) j--; if (j >= 0) [widgets[j], widgets[i]] = [widgets[i], widgets[j]]; }
+      if (a === 'down') { let j = i + 1; while (j < widgets.length && !sameBoard(j)) j++; if (j < widgets.length) [widgets[j], widgets[i]] = [widgets[i], widgets[j]]; }
+      if (a === 'del') { if (!confirm(`Supprimer « ${widgets[i].title} » ?`)) return; widgets.splice(i, 1); }
+      await saveWidgets(); render();
+    };
+  });
+}
+// points d'une seule série (ancien affichage en barres + moyenne 7 j)
+function seriesFromVals(multi) {
+  const v = multi.series[0].vals;
+  return multi.keys.map((k, i) => ({ k, n: v[i], ma: v.slice(Math.max(0, i - 6), i + 1).reduce((a, b) => a + b, 0) / Math.min(7, i + 1) }));
 }
 
 // ---------- éditeur d'une stat ----------
@@ -208,14 +350,29 @@ function dialog() {
   return d;
 }
 async function editWidget(i, init) {
-  const w = i === null ? { id: uid(), title: '', kind: 'number', q: '', dets: [], detMode: 'and', source: 'all', by: 'author', ...init } : { ...widgets[i] };
+  const w = i === null ? { id: uid(), board, title: '', kind: 'number', q: '', dets: [], detMode: 'and', source: 'all', by: 'author', ...init } : { ...widgets[i] };
   w.dets = detsOf(w); delete w.det;
+  const more = structuredClone(w.more || []);
   const d = dialog();
   const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
   d.innerHTML = `<form method="dialog" class="ed"><h3>${i === null ? 'Nouvelle stat' : 'Modifier la stat'}</h3>
     <label>Nom<input name="title" value="${esc(w.title)}" placeholder="Ex. : Lancements"></label>
     <div class="row"><label>Forme<select name="kind">${opt(KINDS, w.kind)}</select></label><label>Source<select name="source">${opt(SOURCES, w.source || 'all')}</select></label>
       <label class="byl">Regrouper par<select name="by">${opt(BYS, w.by || 'author')}</select></label></div>
+    <div id="optbox" class="jv dd">
+      <div class="vopts" id="vseries"><label>Affichage <select name="viz">${opt(VIZ, w.viz || '')}</select></label>
+        <label class="chk"><input type="checkbox" name="cumul"${w.cumul ? ' checked' : ''}> Cumul</label>
+        <label class="chk"><input type="checkbox" name="ma"${w.ma ? ' checked' : ''}> Lissage 7 j</label>
+        <label class="chk"><input type="checkbox" name="pct"${w.pct ? ' checked' : ''}> Parts en % <span class="hint">(plusieurs séries)</span></label>
+        <label class="chk"><input type="checkbox" name="prev"${w.prev ? ' checked' : ''}> Période précédente en pointillés</label>
+        <label>Découper par <select name="split"><option value="">—</option><option value="source"${w.split === 'source' ? ' selected' : ''}>Source (X / YouTube)</option><option value="lang"${w.split === 'lang' ? ' selected' : ''}>Langue</option></select></label></div>
+      <div class="vopts" id="vtop"><label>Affichage <select name="tviz">${opt(TVIZ, w.viz === 'donut' ? 'donut' : 'bars')}</select></label></div>
+      <div class="vopts"><label>Objectif <input name="goal" type="number" min="0" step="any" value="${w.goal || ''}" placeholder="aucun" style="width:90px"></label>
+        <label>Taille <select name="size">${opt(SIZES, w.size || '')}</select></label></div>
+    </div>
+    <div id="msbox"><span class="lab" id="mslab">Séries à comparer</span> <span class="hint" id="mshint">la requête et les détecteurs ci-dessous forment la première série ; chaque série ajoutée a les siens</span>
+      <label id="slabl" class="inl">Nom de la première série <input name="slabel" value="${esc(w.slabel || '')}" placeholder="ex. : Robotique"></label>
+      <div id="msrows"></div><button type="button" class="gbtn" id="ms-add">+ Ajouter une série</button></div>
     <label>Requête <span class="hint">mots (tous requis), <code>a | b</code> = l’un ou l’autre, <code>from:@x</code>, <code>has:link</code>, <code>lang:fr</code>, <code>playlist:"…"</code>, <code>viewed:no</code>…</span><input name="q" value="${esc(w.q)}" placeholder="vide = tout"></label>
     <div class="jv dd"><label class="chk"><input type="checkbox" name="noq"${w.noQuotes ? ' checked' : ''}> Ignorer les tweets qui citent un autre tweet</label>
       <label class="chk"><input type="checkbox" name="dd"${w.dedupe?.on ? ' checked' : ''}> Compter des sujets distincts <span class="hint">(plusieurs tweets sur le même sujet = un seul)</span></label>
@@ -231,23 +388,53 @@ async function editWidget(i, init) {
     <div class="pv" id="pv">…</div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="ed-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
-  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), noQuotes: fd.get('noq') === 'on', primaryOnly: fd.get('po') === 'on', officialOnly: fd.get('oo') === 'on', dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), slabel: (fd.get('slabel') || '').trim(), more: more.map((m) => ({ ...m })), viz: fd.get('kind') === 'top' ? (fd.get('tviz') === 'donut' ? 'donut' : '') : fd.get('viz') || '', cumul: fd.get('cumul') === 'on', ma: fd.get('ma') === 'on', pct: fd.get('pct') === 'on', prev: fd.get('prev') === 'on', split: fd.get('split') || '', goal: Number(fd.get('goal')) || 0, size: fd.get('size') || '', noQuotes: fd.get('noq') === 'on', primaryOnly: fd.get('po') === 'on', officialOnly: fd.get('oo') === 'on', dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
+  const drawRows = () => {
+    $('msrows').innerHTML = more.map((m, k) => `<div class="msrow" data-k="${k}"><label>Nom<input data-f="label" value="${esc(m.label || '')}" placeholder="Série ${k + 2}"></label><label>Requête<input data-f="q" value="${esc(m.q || '')}" placeholder="vide = tout"></label>
+      <button type="button" class="gbtn" data-rm="${k}" title="Retirer cette série">✕</button>
+      <label>Source<select data-f="source"><option value="">comme la première</option>${opt(SOURCES, m.source || '')}</select></label>
+      <div class="dl2">${detectors.map((x) => `<label class="chk"><input type="checkbox" data-f="det" value="${x.id}"${(m.dets || []).includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join(' ') || '<span class="muted">Aucun détecteur.</span>'}</div></div>`).join('');
+  };
+  drawRows();
+  $('ms-add').onclick = () => { more.push({ label: '', q: '', dets: [], source: '' }); drawRows(); preview(); };
+  $('msrows').addEventListener('click', (ev) => { const b = ev.target.closest('[data-rm]'); if (!b) return; more.splice(+b.dataset.rm, 1); drawRows(); preview(); });
+  $('msrows').addEventListener('input', (ev) => {
+    const row = ev.target.closest('.msrow'); if (!row) return;
+    const m = more[+row.dataset.k], fld = ev.target.dataset.f;
+    if (fld === 'det') m.dets = [...row.querySelectorAll('[data-f="det"]:checked')].map((x) => x.value);
+    else if (fld) m[fld] = ev.target.value;
+  });
+  $('msrows').addEventListener('change', (ev) => { const row = ev.target.closest('.msrow'); if (row) { const m = more[+row.dataset.k]; if (ev.target.dataset.f === 'det') m.dets = [...row.querySelectorAll('[data-f="det"]:checked')].map((x) => x.value); } });
   let timer = 0, seq = 0;
   const preview = async () => {
     const draft = read(), my = ++seq;
-    f.querySelector('.byl').style.display = draft.kind === 'top' ? '' : 'none';
-    f.querySelector('#dm').style.display = draft.dets.length > 1 ? '' : 'none';
+    f.querySelector('.byl').style.display = draft.kind === 'top' || draft.kind === 'trend' ? '' : 'none';
+    const isS = draft.kind === 'series', isR = draft.kind === 'ratio';
+    $('vseries').style.display = isS ? '' : 'none'; $('vtop').style.display = draft.kind === 'top' ? '' : 'none';
+    $('msbox').style.display = isS || isR ? '' : 'none';
+    $('mslab').textContent = isR ? 'Ratio : la requête ci-dessous ÷ la série ci-dessous' : 'Séries à comparer';
+    $('mshint').textContent = isR ? 'ex. : « avec lien » ÷ « tous les tweets »' : 'la requête et les détecteurs ci-dessous forment la première série ; chaque série ajoutée a les siens';
+    $('ms-add').style.display = more.length >= (isR ? 1 : 4) ? 'none' : '';
+    $('ms-add').textContent = isR ? '+ Ajouter le dénominateur' : '+ Ajouter une série';
+    f.querySelector('select[name="split"]').disabled = more.length > 0;
+        f.querySelector('#dm').style.display = draft.dets.length > 1 ? '' : 'none';
     $('ddbox').hidden = !draft.dedupe.on;
     $('dsv').textContent = draft.dedupe.sim.toFixed(2); $('ddv').textContent = draft.dedupe.days;
-    const { sets } = await detectorSetsFor(new Set(draft.dets));
+    const { sets } = await detectorSetsFor(new Set([...draft.dets, ...more.flatMap((m) => m.dets || [])]));
     const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
     if (my !== seq) return;
-    const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs, primary: primarySet(), official: official.m });
+    const pctx = { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs, primary: primarySet(), official: official.m };
+    const r = evalWidget(everything, { ...draft, kind: 'number' }, pctx);
+    let ser = '';
+    if ((draft.kind === 'series' || draft.kind === 'ratio') && (more.length || draft.split)) {
+      const mu = evalMulti(everything, draft, pctx);
+      ser = `<p class="muted">${mu.series.map((x) => `${esc(x.label)} : <b>${fmtInt(x.n)}</b>`).join(' · ')}${draft.kind === 'ratio' && mu.series[1]?.n ? ` · ratio ${(mu.series[0].n / mu.series[1].n * 100).toFixed(1).replace('.', ',')} %` : ''}</p>`;
+    }
     const idm = byId();
     const sizes = draft.dets.map((id) => [detectors.find((x) => x.id === id)?.name || id, sets.get(id)?.size ?? 0]);
     const empty = sizes.filter(([, n]) => n === 0).map(([nm]) => nm);
     const warn = empty.length ? `<p class="warn">⚠ ${esc(empty.join(', '))} ne retien${empty.length > 1 ? 'nent' : 't'} <b>aucun élément</b> : le seuil est trop haut (ou les exemples n’ont pas été analysés). Ouvre « Détecteurs » › Modifier : une suggestion de seuil y est proposée.</p>` : sizes.length ? `<p class="muted">${sizes.map(([nm, n]) => `${esc(nm)} : ${fmtInt(n)} retenus au total`).join(' · ')}</p>` : '';
-    $('pv').innerHTML = `${warn}<b>${fmtInt(r.n)}</b> ${r.grouped ? 'sujet(s) distinct(s)' : 'élément(s)'} sur la période (${esc(rangeLabel())})${r.grouped ? ` · ${fmtInt(r.tweets)} tweets regroupés${r.limited ? ' (regroupement par le sens désactivé : trop d’éléments)' : ''}` : ''}${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day, members }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}${members.length > 1 ? ` <span class="jvt y" title="${esc(members.map((m) => '@' + m.handle).join(', '))}">+ ${members.length - 1} similaire${members.length > 2 ? 's' : ''}</span>` : ''}</li>`).join('')}</ol>`;
+    $('pv').innerHTML = `${warn}${ser}<b>${fmtInt(r.n)}</b> ${r.grouped ? 'sujet(s) distinct(s)' : 'élément(s)'} sur la période (${esc(rangeLabel())})${r.grouped ? ` · ${fmtInt(r.tweets)} tweets regroupés${r.limited ? ' (regroupement par le sens désactivé : trop d’éléments)' : ''}` : ''}${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day, members }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}${members.length > 1 ? ` <span class="jvt y" title="${esc(members.map((m) => '@' + m.handle).join(', '))}">+ ${members.length - 1} similaire${members.length > 2 ? 's' : ''}</span>` : ''}</li>`).join('')}</ol>`;
   };
   f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
   f.addEventListener('change', preview);
@@ -623,4 +810,4 @@ function finish(app) {
 
 drawSources();
 drawRanges();
-Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts')]).then(([t0, w, dts, vds, ps, ov]) => { verdicts = vds || {}; primaryList = ps || []; official = ov?.v === OFFICIAL_DESC ? ov : { v: OFFICIAL_DESC, m: {} }; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
+Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts'), getMeta('dashBoards'), getMeta('dashMainName')]).then(([t0, w, dts, vds, ps, ov, bds, mn]) => { boards = bds || []; if (mn) MAIN.name = mn; verdicts = vds || {}; primaryList = ps || []; official = ov?.v === OFFICIAL_DESC ? ov : { v: OFFICIAL_DESC, m: {} }; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
