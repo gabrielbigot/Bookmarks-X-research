@@ -80,7 +80,11 @@ export async function decodeFull(bytes, passphrase) {
     tweets: data.tweets.filter((t) => t && t.id && typeof t.text === 'string'),
     saved: Array.isArray(data.saved) ? data.saved.filter((q) => typeof q === 'string') : [],
     transcripts: Array.isArray(data.transcripts) ? data.transcripts.filter((r) => r && r.id && Array.isArray(r.chunks)) : [],
-    dash: data.dash && typeof data.dash === 'object' ? { widgets: Array.isArray(data.dash.widgets) ? data.dash.widgets : [], detectors: Array.isArray(data.dash.detectors) ? data.dash.detectors : [], verdicts: data.dash.verdicts && typeof data.dash.verdicts === 'object' ? data.dash.verdicts : {} } : null,
+    dash: data.dash && typeof data.dash === 'object' ? { widgets: Array.isArray(data.dash.widgets) ? data.dash.widgets : [], detectors: Array.isArray(data.dash.detectors) ? data.dash.detectors : [], verdicts: data.dash.verdicts && typeof data.dash.verdicts === 'object' ? data.dash.verdicts : {},
+      boards: Array.isArray(data.dash.boards) ? data.dash.boards.filter((b) => b && typeof b.id === 'string' && typeof b.name === 'string') : [],
+      mainName: typeof data.dash.mainName === 'string' ? data.dash.mainName.slice(0, 40) : '',
+      primary: Array.isArray(data.dash.primary) ? data.dash.primary.filter((h) => typeof h === 'string') : [],
+      official: data.dash.official && typeof data.dash.official === 'object' && data.dash.official.m && typeof data.dash.official.m === 'object' ? { v: String(data.dash.official.v || ''), m: data.dash.official.m } : null } : null,
     vectors: data.vectors?.data && Array.isArray(data.vectors.ids) ? data.vectors : null,
   };
 }

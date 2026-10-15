@@ -1030,6 +1030,10 @@ await stats.selectOption('#tpl-sel', { label: 'Langues' });
 await waitFor(async () => (await stats.locator('.card.mine').count()) === 1, 'stat ajoutée au nouveau tableau', 8000);
 await stats.click('.boards .bt[data-b="main"]');
 await waitFor(async () => (await stats.locator('.card.mine:has-text("X vs YouTube")').count()) === 1, 'retour au tableau Général', 8000);
+// mise à jour automatique : un message « nouvelles données » recharge l'affichage sans toucher à rien
+await stats.evaluate(() => { document.querySelector('.mine-bar').dataset.m = '1'; });
+await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'tweetsAdded', added: 1 }));
+await waitFor(async () => (await stats.evaluate(() => document.querySelector('.mine-bar')?.dataset.m)) !== '1', 'les stats se rechargent après « nouvelles données »', 20000);
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
 
 // ---- recherche : regroupement des quasi-doublons (mêmes règles que les stats)

@@ -1186,8 +1186,9 @@ const download = (bytes, name) => {
 async function buildBackup(pass) {
   const tweets = await getAllTweets();
   const extra = { saved };
-  const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [], verdicts: (await getMeta('detVerdicts')) || {} };
-  if (dash.widgets.length || dash.detectors.length) extra.dash = dash;
+  const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [], verdicts: (await getMeta('detVerdicts')) || {},
+    boards: (await getMeta('dashBoards')) || [], mainName: (await getMeta('dashMainName')) || '', primary: (await getMeta('primarySources')) || [], official: (await getMeta('officialVerdicts')) || null };
+  if (dash.widgets.length || dash.detectors.length || dash.boards.length || dash.primary.length || dash.official) extra.dash = dash;
   const trs = await getAllTranscriptRows();
   if (trs.length) extra.transcripts = trs.map((r) => ({ id: r.id, chunks: r.chunks, at: r.at, lang: r.lang }));
   let nVec = 0;
@@ -1220,6 +1221,14 @@ async function restoreBackup(bytes, pass) {
     const cur = (await getMeta('detVerdicts')) || {};
     for (const [id, vd] of Object.entries(dash.verdicts || {})) cur[id] = cur[id]?.key === vd.key ? { key: vd.key, v: { ...vd.v, ...cur[id].v } } : cur[id] || vd; // les verdicts déjà payés ne sont jamais écrasés
     await setMeta('detVerdicts', cur);
+    if (dash.boards?.length) await setMeta('dashBoards', merge(await getMeta('dashBoards'), dash.boards));
+    if (dash.mainName && !(await getMeta('dashMainName'))) await setMeta('dashMainName', dash.mainName);
+    if (dash.primary?.length) await setMeta('primarySources', [...new Set([...((await getMeta('primarySources')) || []), ...dash.primary])]);
+    if (dash.official) { // verdicts « annonce officielle » déjà payés : jamais écrasés
+      const co = await getMeta('officialVerdicts');
+      if (!co || co.v !== dash.official.v) { if (!co) await setMeta('officialVerdicts', dash.official); }
+      else await setMeta('officialVerdicts', { v: co.v, m: { ...dash.official.m, ...co.m } });
+    }
   }
   if (transcripts?.length) for (let i = 0; i < transcripts.length; i += 100) await putTranscriptRows(transcripts.slice(i, i + 100));
   const merged = [...new Set([...saved, ...sv])];

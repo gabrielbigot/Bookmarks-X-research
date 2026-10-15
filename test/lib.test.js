@@ -244,3 +244,14 @@ test('parseQuery: opérateur dedupe', async () => {
   assert.equal(parseQuery('dedupe:non').filters.dedupe, false);
   assert.equal(parseQuery('robot dedupe:oui').text, 'robot');
 });
+
+test('sauvegarde : tableaux de bord, sources primaires et verdicts officiels font l’aller-retour', async () => {
+  const { encode, decodeFull } = await import('../src/lib/backup.js');
+  const dash = { widgets: [{ id: 'w', title: 't', board: 'b1' }], detectors: [], verdicts: {}, boards: [{ id: 'b1', name: 'Veille IA' }, { bad: 1 }], mainName: 'Accueil', primary: ['openai', 7], official: { v: 'desc', m: { 1: 90 } } };
+  const out = await decodeFull(await encode([{ id: '1', text: 'x' }], '', { dash }), '');
+  assert.deepEqual(out.dash.boards, [{ id: 'b1', name: 'Veille IA' }]);
+  assert.equal(out.dash.mainName, 'Accueil');
+  assert.deepEqual(out.dash.primary, ['openai']);
+  assert.deepEqual(out.dash.official, { v: 'desc', m: { 1: 90 } });
+  assert.equal(out.dash.widgets[0].board, 'b1');
+});

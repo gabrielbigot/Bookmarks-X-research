@@ -805,8 +805,52 @@ function finish(app) {
     app.querySelectorAll('.chip-s').forEach((b) => (b.onclick = () => openQ(b.dataset.q)));
   } catch (e) { console.error('[xbs] stats', e); } finally {
     app.classList.remove('loading'); // quoi qu'il arrive, l'écran ne reste jamais grisé
+    if (savedScroll != null) { const y = savedScroll; savedScroll = null; requestAnimationFrame(() => window.scrollTo(0, y)); }
   }
 }
+
+// ---------- mise à jour automatique : les stats suivent les nouvelles données ----------
+// Écoute les messages de l'extension (nouveaux tweets/vidéos, indexation, fin de « Tout mettre à jour »). Au plus un rechargement
+// toutes les 45 s, jamais pendant l'édition (boîte de dialogue ouverte) ni onglet caché (rattrapage au retour).
+let refreshAt = 0, refreshTimer = 0, refreshDirty = false, vecDirty = false, refreshing = false, savedScroll = null;
+const REFRESH_GAP = 45_000;
+async function refreshData() {
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const [t0, ov] = await Promise.all([getAllTweets(), getMeta('officialVerdicts')]);
+    if (ov?.v === OFFICIAL_DESC) official = ov;
+    const t = t0.filter((x) => !x.off);
+    everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem);
+    if (vecDirty) { vecCache = null; scoreCache.clear(); learnCache.clear(); vecDirty = false; }
+    refreshDirty = false;
+    savedScroll = window.scrollY;
+    render();
+  } catch (e) { console.error('[xbs] refresh', e); } finally { refreshing = false; refreshAt = Date.now(); }
+}
+function wantRefresh(force = false) {
+  refreshDirty = true;
+  if (refreshTimer && !force) return; // un rechargement est déjà prévu (pas de report en boucle pendant l'indexation)
+  clearTimeout(refreshTimer);
+  const wait = force ? 1500 : Math.max(4000, refreshAt + REFRESH_GAP - Date.now());
+  refreshTimer = setTimeout(function go() {
+    refreshTimer = 0;
+    if (document.hidden) return; // rattrapage dans visibilitychange
+    if ($('dlg')?.open) { refreshTimer = setTimeout(go, 5000); return; }
+    refreshData();
+  }, wait);
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && refreshDirty) wantRefresh(true); });
+try {
+  chrome.runtime.onMessage.addListener((m) => {
+    switch (m?.type) {
+      case 'tweetsAdded': case 'tweetsUpdated': case 'tweetsRemoved': case 'tweetsEnriched': wantRefresh(); break;
+      case 'indexProgress': vecDirty = true; wantRefresh(); break;
+      case 'indexDone': vecDirty = true; wantRefresh(true); break;
+      case 'updateProgress': if (m.step === 'end') { vecDirty = true; wantRefresh(true); } break;
+    }
+  });
+} catch { /* hors extension */ }
 
 drawSources();
 drawRanges();
