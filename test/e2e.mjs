@@ -761,6 +761,28 @@ await ys.screenshot({ path: 'test/stats-yt.png', fullPage: true });
 await ys.evaluate(() => localStorage.removeItem('xbs.stats.src'));
 await ys.close();
 
+// ------------------------------------------------------------------ 11g. supprimer toutes les données d'une playlist
+panel.on('dialog', (d) => d.accept());
+await panel.click('#gear');
+await panel.waitForSelector('#ytpl-list [data-del="PL3"]');
+await panel.click('#ytpl-list [data-del="PL3"]');
+await panel.waitForFunction(() => /1 vidéo\(s\) supprimée\(s\), 0 conservée\(s\)/.test(document.getElementById('progress').textContent), null, { timeout: 20000 });
+const idbGet = (id) => panel.evaluate(async (k) => { const db = await new Promise((res) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); }); return await new Promise((res) => { const g = db.transaction('tweets').objectStore('tweets').get(k); g.onsuccess = () => res(g.result); }); }, id);
+assert.equal(await idbGet('yt:m1'), undefined, 'la vidéo propre à la playlist « Musique » est supprimée de la base');
+assert.ok((await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.ytExcluded.includes('PL3'), 'playlist décochée après suppression (plus synchronisée)');
+// « Neurosciences » : p2 n'est que là (supprimée), w1 est aussi dans « À regarder plus tard » et a été vue (conservée, détachée)
+await panel.click('#ytpl-list [data-del="PL1"]');
+await panel.waitForFunction(() => /1 vidéo\(s\) supprimée\(s\), 1 conservée\(s\)/.test(document.getElementById('progress').textContent), null, { timeout: 20000 });
+assert.equal(await idbGet('yt:p2'), undefined);
+assert.deepEqual((await idbGet('yt:w1')).playlists.map((p) => p.id), ['WL'], 'w1 garde « À regarder plus tard » et perd « Neurosciences »');
+await panel.keyboard.press('Escape');
+await panel.fill('#q', 'lo-fi');
+await panel.waitForTimeout(600);
+assert.equal(await panel.locator('.tw.yt').count(), 0, 'plus de résultat pour la vidéo supprimée');
+await waitFor(async () => /9 vidéos YouTube/.test(await panel.locator('#stats').innerText()), 'compteur après suppressions', 8000);
+panel.removeAllListeners('dialog');
+await panel.fill('#q', '');
+
 // ------------------------------------------------------------------ 12. mode sombre + page de statistiques (jeu de données synthétique : 300 tweets sur 100 jours)
 await panel.evaluate(async () => {
   const X_EPOCH = 1288834974657n, DAY = 86_400_000, now = Date.now();

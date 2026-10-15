@@ -3,7 +3,7 @@ const DB_NAME = 'xbs';
 const VERSION = 4;
 
 import { MODELS } from './models.js';
-import { mergeVideo, isVideoItem, videoOff } from './youtube.js';
+import { mergeVideo, isVideoItem, videoOff, playlistFate } from './youtube.js';
 
 // Chaque modèle a son propre magasin de vecteurs : changer de modèle n'écrase jamais les vecteurs de l'autre.
 const VSTORES = ['vectors', 'vectors_gemma2'];
@@ -375,4 +375,62 @@ export async function playlistCatalog() {
     req.onerror = () => rej(req.error);
   });
   return [...map.values()].sort((a, b) => (a.id === 'WL' ? -1 : b.id === 'WL' ? 1 : a.id === 'LL' ? -1 : b.id === 'LL' ? 1 : a.title.localeCompare(b.title)));
+}
+
+// ---------- suppression des données d'une playlist ----------
+async function scanPlan(pid, alsoWatched) {
+  const db = await openDb();
+  const plan = { del: [], detach: [], watchedKept: 0, otherKept: 0 };
+  await new Promise((res, rej) => {
+    const req = db.transaction('tweets').objectStore('tweets').openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return res();
+      const t = c.value;
+      if (typeof t.id === 'string' && t.id.startsWith('yt:')) {
+        const f = playlistFate(t, pid, alsoWatched);
+        if (f === 'delete') plan.del.push(t.id);
+        else if (f === 'detach') { plan.detach.push(t.id); if ((t.watched || []).length && (t.playlists || []).every((p) => p.id === pid)) plan.watchedKept++; else plan.otherKept++; }
+      }
+      c.continue();
+    };
+    req.onerror = () => rej(req.error);
+  });
+  return plan;
+}
+// Aperçu (rien n'est modifié) : combien de vidéos seraient supprimées / conservées.
+export async function planPlaylistDeletion(pid, alsoWatched = false) {
+  const p = await scanPlan(pid, alsoWatched);
+  return { total: p.del.length + p.detach.length, toDelete: p.del.length, watchedKept: p.watchedKept, otherKept: p.otherKept };
+}
+// Supprime les vidéos propres à la playlist (avec vecteurs, transcriptions, vecteurs de passages, verdicts) ; les autres perdent seulement l'appartenance.
+export async function deletePlaylistData(pid, { alsoWatched = false, onProgress } = {}) {
+  const plan = await scanPlan(pid, alsoWatched);
+  const db = await openDb();
+  for (let i = 0; i < plan.detach.length; i += 500) {
+    const tx = db.transaction('tweets', 'readwrite');
+    const st = tx.objectStore('tweets');
+    await Promise.all(plan.detach.slice(i, i + 500).map(async (id) => {
+      const t = await wrap(st.get(id));
+      if (t) st.put({ ...t, playlists: (t.playlists || []).filter((p) => p.id !== pid) });
+    }));
+    await done(tx);
+  }
+  let deleted = 0;
+  for (let i = 0; i < plan.del.length; i += 500) {
+    await deleteTweets(plan.del.slice(i, i + 500));
+    deleted += Math.min(500, plan.del.length - i);
+    onProgress?.(deleted, plan.del.length);
+  }
+  // ménage : files d'attente et verdicts qui référençaient ces vidéos
+  const gone = new Set(plan.del);
+  if (gone.size) {
+    const orph = (await getMeta('orphans')) || [];
+    if (orph.some((id) => gone.has(id))) await setMeta('orphans', orph.filter((id) => !gone.has(id)));
+    const vds = (await getMeta('detVerdicts')) || {};
+    let touched = false;
+    for (const d of Object.values(vds)) for (const id of Object.keys(d.v || {})) if (gone.has(id)) { delete d.v[id]; touched = true; }
+    if (touched) await setMeta('detVerdicts', vds);
+  }
+  return { deleted: plan.del.length, detached: plan.detach.length };
 }

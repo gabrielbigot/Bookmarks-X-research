@@ -273,3 +273,15 @@ test('transcriptions : jeton get_transcript réécrit pour une autre vidéo', ()
   assert.equal(learnTemplate(std, 'zzzzzzzzzzz'), null, 'identifiant absent : pas de modèle');
   assert.equal(learnTemplate('pas du base64 !!', 'dQw4w9WgXcQ'), null);
 });
+
+import { playlistFate } from '../src/lib/youtube.js';
+test('suppression d’une playlist : qui est supprimé, qui est seulement détaché', () => {
+  const v = (pls, watched = []) => ({ id: 'yt:x', playlists: pls.map((id) => ({ id })), watched });
+  assert.equal(playlistFate(v(['A']), 'A'), 'delete', 'propre à la playlist, jamais vue');
+  assert.equal(playlistFate(v(['A', 'B']), 'A'), 'detach', 'aussi dans une autre playlist');
+  assert.equal(playlistFate(v(['A'], ['2026-10-01']), 'A'), 'detach', 'vue dans l’historique : conservée');
+  assert.equal(playlistFate(v(['A'], ['2026-10-01']), 'A', true), 'delete', '… sauf si on supprime aussi l’historique');
+  assert.equal(playlistFate(v(['A', 'B'], ['2026-10-01']), 'A', true), 'detach', 'dans une autre playlist : jamais supprimée');
+  assert.equal(playlistFate(v(['B']), 'A'), 'skip');
+  assert.equal(playlistFate({ id: 'yt:y' }, 'A'), 'skip');
+});

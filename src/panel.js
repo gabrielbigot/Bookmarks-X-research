@@ -1,4 +1,4 @@
-import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog, planPlaylistDeletion, deletePlaylistData } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
 import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, eventDays } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
@@ -901,7 +901,12 @@ async function renderYtPlaylists() {
     n.className = 'hint'; n.textContent = `(${p.n} vidéo${p.n > 1 ? 's' : ''}${p.listed && p.listed > p.n ? ` sur ${p.listed}` : ''})`;
     sp.append(n);
     l.append(cb, sp);
-    return l;
+    const row = document.createElement('div');
+    row.className = 'ytpl-row';
+    const del = Object.assign(document.createElement('button'), { type: 'button', className: 'ghost ytpl-del', textContent: '🗑', title: 'Supprimer toutes les données de cette playlist' });
+    del.dataset.del = p.id; del.dataset.title = p.title;
+    row.append(l, del);
+    return row;
   }));
   if (!cat.length) box.textContent = 'Aucune playlist connue : lance « ▶ Playlists YouTube ».';
 }
@@ -917,6 +922,25 @@ $('ytpl-list').addEventListener('change', async (e) => {
   const ex = new Set(settings.ytExcluded);
   if (cb.checked) ex.delete(cb.dataset.id); else ex.add(cb.dataset.id);
   await setYtExcluded([...ex]);
+});
+// Supprime les vidéos d'une playlist (et tout ce qui s'y rattache), puis la décoche pour qu'elle ne soit pas relue.
+$('ytpl-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button[data-del]');
+  if (!b) return;
+  const pid = b.dataset.del, title = b.dataset.title || pid;
+  const alsoWatched = confirm(`« ${title} » — les vidéos de cette playlist que tu as déjà REGARDÉES (historique) : les supprimer aussi ?\n\nOK : oui, les supprimer aussi.\nAnnuler : non, les garder (elles perdent seulement cette playlist).`);
+  const plan = await planPlaylistDeletion(pid, alsoWatched);
+  if (!plan.total) { $('progress').textContent = `« ${title} » : aucune vidéo en base.`; return; }
+  const msg = `« ${title} » : ${plan.toDelete.toLocaleString('fr-FR')} vidéo(s) seront SUPPRIMÉES avec leurs vecteurs et transcriptions.\n${(plan.total - plan.toDelete).toLocaleString('fr-FR')} vidéo(s) sont conservées (${plan.otherKept} aussi dans une autre playlist, ${plan.watchedKept} vues dans l'historique) : elles perdent seulement cette playlist.\nLa playlist sera ensuite décochée pour ne plus être synchronisée.\n\nCette action est définitive. Continuer ?`;
+  if (!confirm(msg)) return;
+  b.disabled = true;
+  try {
+    const r = await deletePlaylistData(pid, { alsoWatched, onProgress: (d, n) => { $('progress').textContent = `Suppression de « ${title} » : ${d.toLocaleString('fr-FR')} / ${n.toLocaleString('fr-FR')}…`; } });
+    const ex = new Set(settings.ytExcluded); ex.add(pid);
+    await setYtExcluded([...ex]);
+    await load(true); run();
+    $('progress').textContent = `« ${title} » : ${r.deleted.toLocaleString('fr-FR')} vidéo(s) supprimée(s), ${r.detached.toLocaleString('fr-FR')} conservée(s). La playlist est décochée (plus synchronisée).`;
+  } catch (err) { $('progress').textContent = '⚠ Suppression interrompue : ' + err.message; } finally { b.disabled = false; renderYtPlaylists(); }
 });
 $('ytpl-all').onclick = () => setYtExcluded([]);
 $('ytpl-none').onclick = async () => setYtExcluded((await playlistCatalog()).map((p) => p.id));

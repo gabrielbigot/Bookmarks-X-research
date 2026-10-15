@@ -276,3 +276,15 @@ export function videoOff(t, excluded) {
   if (!pls.length || (t.watched || []).length) return false;
   return pls.every((p) => excluded.has(p.id));
 }
+
+// Suppression des données d'une playlist : que devient chaque vidéo ?
+//  'delete' : n'appartient qu'à cette playlist (et n'a pas été vue, sauf si alsoWatched) -> supprimée avec ses vecteurs, transcriptions…
+//  'detach' : appartient aussi à une autre playlist, ou a été vue -> conservée, mais perd seulement l'appartenance à cette playlist
+//  'skip'   : pas concernée
+export function playlistFate(t, pid, alsoWatched = false) {
+  const pls = t.playlists || [];
+  if (!pls.some((p) => p.id === pid)) return 'skip';
+  const others = pls.filter((p) => p.id !== pid);
+  if (!others.length && (!(t.watched || []).length || alsoWatched)) return 'delete';
+  return 'detach';
+}
