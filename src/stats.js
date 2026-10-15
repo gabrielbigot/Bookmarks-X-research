@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
-import { detsOf, evalWidget, evalMulti, seriesDefs, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf, OFFICIAL_DESC, OFFICIAL_MIN, judgeText, suggestPrimary, handleKey } from './lib/widgets.js';
+import { detsOf, evalWidget, evalMulti, seriesDefs, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf, OFFICIAL_DESC, OFFICIAL_MIN, condKey, condOf, judgeText, suggestPrimary, handleKey } from './lib/widgets.js';
 import { jevJudge, estimateJudgeCost, fmtDollars } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
@@ -18,6 +18,14 @@ const RKEY = 'xbs.stats.range';
 let all = [], videos = [], everything = [], range = 90, src = 'x', widgets = [], detectors = [], verdicts = {};
 let primaryList = [], official = { v: OFFICIAL_DESC, m: {} }; // sources primaires déclarées ; verdicts « annonce officielle » de Jev (% oui)
 const primarySet = () => new Set(primaryList.map(handleKey));
+let conds = {}; // conditions libres posées à Jev : { clé: { desc, m: { id: % oui } } }
+const condMaps = () => ({ ...Object.fromEntries(Object.entries(conds).map(([k, c]) => [k, c.m])), [condKey(OFFICIAL_DESC)]: official.m });
+const saveCond = async (desc) => {
+  if (desc === OFFICIAL_DESC) return saveOfficial();
+  const db = (await getMeta('jevConds')) || {}, k = condKey(desc);
+  conds[k] = { desc, m: { ...(db[k]?.m || {}), ...(conds[k]?.m || {}) } };
+  await setMeta('jevConds', { ...db, [k]: conds[k] });
+};
 const saveOfficial = async () => {
   const db = await getMeta('officialVerdicts');
   if (db?.v === official.v) official = { v: official.v, m: { ...db.m, ...official.m } };
@@ -143,7 +151,7 @@ const sizeOf = (w) => w.size || (w.kind === 'number' || w.kind === 'ratio' ? 1 :
 const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
 const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues', word: 'Mots marquants' };
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
-const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.primaryOnly ? 'primary:oui' : '', w.officialOnly ? 'official:oui' : '', w.dedupe?.on ? `dedupe:${w.dedupe.sim ?? 0.92},${w.dedupe.days ?? 7}` : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.primaryOnly ? 'primary:oui' : '', w.officialOnly ? 'official:oui' : (w.jevDesc || '').trim() ? 'jev:' + condKey(w.jevDesc) : '', w.dedupe?.on ? `dedupe:${w.dedupe.sim ?? 0.92},${w.dedupe.days ?? 7}` : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 // Ce qui est compté = éléments dont le jour (enregistrement / visionnage / ajout) tombe dans la période : le clic ouvre la même chose.
 const duringRange = () => { if (!range) return ''; const to = dayKey(Date.now()), from = dayKey(Date.now() - (range - 1) * 86_400_000); return `during:${from}..${to}`; };
 const withPeriod = (q) => [q, duringRange()].filter(Boolean).join(' ');
@@ -216,7 +224,7 @@ async function renderMine(app) {
   const sv = savedInfo(all, Date.now());
   const needed = new Set(widgets.flatMap((w) => [...detsOf(w), ...(w.more || []).flatMap((m) => m.dets || [])]));
   const { sets, missing } = await detectorSetsFor(needed);
-  const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets, primary: primarySet(), official: official.m };
+  const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets, primary: primarySet(), official: official.m, conds: condMaps() };
   if (widgets.some((w) => w.dedupe?.on)) ctx.vecs = (await loadVectors()).vecs; // regroupement par le sens
   if (!allBoards().some((b) => b.id === board)) board = 'main';
   let html = `<div class="boards">${allBoards().map((b) => `<button type="button" class="bt${b.id === board ? ' on' : ''}" data-b="${esc(b.id)}">${esc(b.name)}</button>`).join('')}<button type="button" class="bt add" id="b-add">+ Tableau</button>${board !== 'main' ? '<button type="button" class="bt" id="b-ren">Renommer</button><button type="button" class="bt" id="b-del">Supprimer</button>' : '<button type="button" class="bt" id="b-ren">Renommer</button>'}</div>`;
@@ -424,7 +432,9 @@ async function editWidget(i, init) {
     <div class="jv dd"><label class="chk"><input type="checkbox" name="noq"${w.noQuotes ? ' checked' : ''}> Ignorer les tweets qui citent un autre tweet</label>
       <label class="chk"><input type="checkbox" name="dd"${w.dedupe?.on ? ' checked' : ''}> Compter des sujets distincts <span class="hint">(plusieurs tweets sur le même sujet = un seul)</span></label>
       <label class="chk"><input type="checkbox" name="po"${w.primaryOnly ? ' checked' : ''}> Ne compter que mes <b>sources primaires</b> <span class="hint">(comptes déclarés dans « Sources primaires » : ${primaryList.length})</span></label>
-      <label class="chk"><input type="checkbox" name="oo"${w.officialOnly ? ' checked' : ''}> Ne compter que les <b>annonces officielles</b> <span class="hint">(jugées par Jev : l’entreprise elle-même, pas un commentaire)</span></label>
+      <label>Condition posée à <b>Jev</b> <span class="hint">facultatif — ne compte que ce que Jev juge « oui » (≥ 50 %), après les autres filtres. Décris la condition comme une question à laquelle on répond par oui ou non.</span>
+        <textarea name="jd" rows="3" placeholder="ex. : Le tweet annonce une levée de fonds de plus d'un million de dollars">${esc(w.jevDesc || (w.officialOnly ? OFFICIAL_DESC : ''))}</textarea></label>
+      <div class="row2"><button type="button" class="gbtn" id="jd-off" title="Préréglage : l’entreprise elle-même annonce sa sortie">Préréglage : annonce officielle</button></div>
       <div id="offbox"><button type="button" class="gbtn" id="off-go">Faire juger par Jev</button> <button type="button" class="gbtn" id="off-stop" hidden>Arrêter</button> <span class="muted" id="offmsg"></span></div>
       <div id="ddbox"${w.dedupe?.on ? '' : ' hidden'}><span class="hint">Regroupés si : même tweet cité, même page citée, ou sens quasi identique à moins de quelques jours. Un sujet est daté de son premier enregistrement.</span>
         <label>Ressemblance minimale ≥ <b id="dsv"></b> <input type="range" name="dsim" min="0.8" max="0.98" step="0.01" value="${w.dedupe?.sim ?? 0.92}"></label>
@@ -435,7 +445,7 @@ async function editWidget(i, init) {
     <div class="pv" id="pv">…</div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="ed-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
-  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), slabel: (fd.get('slabel') || '').trim(), more: more.map((m) => ({ ...m })), viz: fd.get('kind') === 'top' ? (fd.get('tviz') === 'donut' ? 'donut' : '') : fd.get('viz') || '', cumul: fd.get('cumul') === 'on', ma: fd.get('ma') === 'on', pct: fd.get('pct') === 'on', prev: fd.get('prev') === 'on', split: fd.get('split') || '', goal: Number(fd.get('goal')) || 0, size: fd.get('size') || '', noQuotes: fd.get('noq') === 'on', primaryOnly: fd.get('po') === 'on', officialOnly: fd.get('oo') === 'on', dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), slabel: (fd.get('slabel') || '').trim(), more: more.map((m) => ({ ...m })), viz: fd.get('kind') === 'top' ? (fd.get('tviz') === 'donut' ? 'donut' : '') : fd.get('viz') || '', cumul: fd.get('cumul') === 'on', ma: fd.get('ma') === 'on', pct: fd.get('pct') === 'on', prev: fd.get('prev') === 'on', split: fd.get('split') || '', goal: Number(fd.get('goal')) || 0, size: fd.get('size') || '', noQuotes: fd.get('noq') === 'on', primaryOnly: fd.get('po') === 'on', ...(() => { const t = (fd.get('jd') || '').trim(); return t === OFFICIAL_DESC ? { officialOnly: true, jevDesc: '' } : { officialOnly: false, jevDesc: t }; })(), dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
   const drawRows = () => {
     $('msrows').innerHTML = more.map((m, k) => `<div class="msrow" data-k="${k}"><label>Nom<input data-f="label" value="${esc(m.label || '')}" placeholder="Série ${k + 2}"></label><label>Requête<input data-f="q" value="${esc(m.q || '')}" placeholder="vide = tout"></label>
       <button type="button" class="gbtn" data-rm="${k}" title="Retirer cette série">✕</button>
@@ -470,7 +480,7 @@ async function editWidget(i, init) {
     const { sets } = await detectorSetsFor(new Set([...draft.dets, ...more.flatMap((m) => m.dets || [])]));
     const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
     if (my !== seq) return;
-    const pctx = { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs, primary: primarySet(), official: official.m };
+    const pctx = { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs, primary: primarySet(), official: official.m, conds: condMaps() };
     const r = evalWidget(everything, { ...draft, kind: 'number' }, pctx);
     let ser = '';
     if ((draft.kind === 'series' || draft.kind === 'ratio') && (more.length || draft.split)) {
@@ -490,7 +500,7 @@ async function editWidget(i, init) {
   const offTargets = async (draft) => { // tweets à faire juger : tous les candidats si « annonces officielles », sinon seulement les membres de groupes
     const { sets } = await detectorSetsFor(new Set(draft.dets));
     const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
-    const r = evalWidget(everything, { ...draft, kind: 'number', officialOnly: false }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: null, detSets: sets, vecs, primary: primarySet(), official: official.m });
+    const r = evalWidget(everything, { ...draft, kind: 'number', officialOnly: false }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: null, detSets: sets, vecs, primary: primarySet(), official: official.m, conds: condMaps() });
     const seen = new Map();
     for (const u of r.matched) if (draft.officialOnly || u.members.length > 1) for (const t of u.members) if (!isVideoItem(t) && !(t.id in official.m)) seen.set(t.id, t);
     return [...seen.values()];
@@ -499,23 +509,27 @@ async function editWidget(i, init) {
     const settings = await getSettings(), draft = read();
     if (!decisionReady(settings)) return offMsg('Configure d’abord Jev (clé, modèle) dans ⚙ du panneau de recherche.');
     if (official.v !== OFFICIAL_DESC) official = { v: OFFICIAL_DESC, m: {} };
+    const cond = condOf(draft) || OFFICIAL_DESC; // sans condition : Jev départage la source primaire de chaque groupe
     const items = (await offTargets(draft)).map(judgeText);
-    if (!items.length) return offMsg(draft.officialOnly ? 'Rien à juger : tout est déjà jugé.' : 'Rien à juger : aucun groupe de tweets similaires non jugés (active « sujets distincts » pour que Jev départage les groupes).');
-    const est = estimateJudgeCost(OFFICIAL_DESC, items.map((x) => x.text), settings.decision.priceInPerM);
-    if (!confirm(`Envoyer le texte de ${items.length} tweet(s) à ${settings.decision.url} (modèle ${settings.decision.model}) ?\nJev dira si chacun est l’annonce de l’entreprise elle-même.\nCoût estimé : ${fmtDollars(est.dollars)} (≈ ${Math.round(est.tokens / 1000)} k tokens d’entrée ; la sortie est gratuite). Chaque tweet est jugé une seule fois.`)) return;
+    if (!items.length) return offMsg(condOf(draft) ? 'Rien à juger : tout est déjà jugé.' : 'Rien à juger : aucun groupe de tweets similaires non jugés (active « sujets distincts » pour que Jev départage les groupes).');
+    const est = estimateJudgeCost(cond, items.map((x) => x.text), settings.decision.priceInPerM);
+    if (!confirm(`Envoyer le texte de ${items.length} tweet(s) à ${settings.decision.url} (modèle ${settings.decision.model}) ?\nJev répondra à : « ${cond.slice(0, 160)}${cond.length > 160 ? '…' : ''} »\nCoût estimé : ${fmtDollars(est.dollars)} (≈ ${Math.round(est.tokens / 1000)} k tokens d’entrée ; la sortie est gratuite). Chaque tweet est jugé une seule fois.`)) return;
     offAbort = new AbortController();
     $('off-go').disabled = true; $('off-stop').hidden = false;
     let done = 0;
     try {
       offMsg(`Jugement en cours… 0/${items.length}`);
-      const r = await jevJudge(settings.decision, OFFICIAL_DESC, items, { signal: offAbort.signal, onBatch: async (b) => {
-        for (const [id, p] of b) official.m[id] = p;
-        done += b.size; offMsg(`Jugement en cours… ${done}/${items.length}`); await saveOfficial();
+      const k = condKey(cond);
+      const store = cond === OFFICIAL_DESC ? official : (conds[k] ??= { desc: cond, m: {} });
+      const r = await jevJudge(settings.decision, cond, items, { signal: offAbort.signal, onBatch: async (b) => {
+        for (const [id, p] of b) store.m[id] = p;
+        done += b.size; offMsg(`Jugement en cours… ${done}/${items.length}`); await saveCond(cond);
       } });
       offMsg(r.error ? `Interrompu (${done}/${items.length}) : ${r.error}` : `Terminé : ${done} tweet(s) jugé(s).`);
     } catch (e) { offMsg('⚠ ' + e.message); } finally { offAbort = null; $('off-go').disabled = false; $('off-stop').hidden = true; preview(); }
   };
   $('off-go').onclick = offJudge;
+  $('jd-off').onclick = () => { f.querySelector('textarea[name="jd"]').value = OFFICIAL_DESC; preview(); };
   $('off-stop').onclick = () => offAbort?.abort();
   $('ed-newdet').onclick = () => { d.close('cancel'); editDetector(null, { ...LAUNCH_DETECTOR, name: '', desc: '', examples: [] }, w); };
   d.onclose = async () => {
@@ -866,7 +880,8 @@ async function refreshData() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const [t0, ov, vds, last] = await Promise.all([getAllTweets(), getMeta('officialVerdicts'), getMeta('detVerdicts'), getMeta('autoJevLast')]);
+    const [t0, ov, vds, last, cds] = await Promise.all([getAllTweets(), getMeta('officialVerdicts'), getMeta('detVerdicts'), getMeta('autoJevLast'), getMeta('jevConds')]);
+    if (cds) conds = cds;
     if (ov?.v === OFFICIAL_DESC) official = ov;
     if (vds) verdicts = vds;
     autoJevLast = last || null;
@@ -906,4 +921,4 @@ try {
 drawSources();
 drawRanges();
 getMeta('autoJevLast').then((v) => { autoJevLast = v || null; }).catch(() => {});
-Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts'), getMeta('dashBoards'), getMeta('dashMainName')]).then(([t0, w, dts, vds, ps, ov, bds, mn]) => { boards = bds || []; if (mn) MAIN.name = mn; verdicts = vds || {}; primaryList = ps || []; official = ov?.v === OFFICIAL_DESC ? ov : { v: OFFICIAL_DESC, m: {} }; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
+Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts'), getMeta('dashBoards'), getMeta('dashMainName'), getMeta('jevConds')]).then(([t0, w, dts, vds, ps, ov, bds, mn, cds]) => { conds = cds || {}; boards = bds || []; if (mn) MAIN.name = mn; verdicts = vds || {}; primaryList = ps || []; official = ov?.v === OFFICIAL_DESC ? ov : { v: OFFICIAL_DESC, m: {} }; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X

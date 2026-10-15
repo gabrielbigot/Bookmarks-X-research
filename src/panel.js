@@ -147,6 +147,7 @@ async function loadPrimaryCtx() {
 async function resolveIs(filters) {
   await loadPrimaryCtx();
   if (filters.primary !== undefined) filters.primarySet = primaryCtx.primary;
+  if (filters.jev) { const c = (await getMeta('jevConds')) || {}; filters.jevIds = new Set(Object.entries(c[filters.jev]?.m || {}).filter(([, p]) => p >= OFFICIAL_MIN).map(([id]) => id)); }
   if (filters.official !== undefined) filters.officialIds = new Set(Object.entries(primaryCtx.official).filter(([, p]) => p >= OFFICIAL_MIN).map(([id]) => id));
   if (filters.during) { // même notion de date que les stats (enregistrement, visionnage ou ajout)
     const { from, to } = filters.during;
@@ -1194,8 +1195,8 @@ async function buildBackup(pass) {
   const tweets = await getAllTweets();
   const extra = { saved };
   const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [], verdicts: (await getMeta('detVerdicts')) || {},
-    boards: (await getMeta('dashBoards')) || [], mainName: (await getMeta('dashMainName')) || '', primary: (await getMeta('primarySources')) || [], official: (await getMeta('officialVerdicts')) || null };
-  if (dash.widgets.length || dash.detectors.length || dash.boards.length || dash.primary.length || dash.official) extra.dash = dash;
+    boards: (await getMeta('dashBoards')) || [], mainName: (await getMeta('dashMainName')) || '', primary: (await getMeta('primarySources')) || [], official: (await getMeta('officialVerdicts')) || null, conds: (await getMeta('jevConds')) || {} };
+  if (dash.widgets.length || dash.detectors.length || dash.boards.length || dash.primary.length || dash.official || Object.keys(dash.conds).length) extra.dash = dash;
   const trs = await getAllTranscriptRows();
   if (trs.length) extra.transcripts = trs.map((r) => ({ id: r.id, chunks: r.chunks, at: r.at, lang: r.lang }));
   let nVec = 0;
@@ -1231,6 +1232,11 @@ async function restoreBackup(bytes, pass) {
     if (dash.boards?.length) await setMeta('dashBoards', merge(await getMeta('dashBoards'), dash.boards));
     if (dash.mainName && !(await getMeta('dashMainName'))) await setMeta('dashMainName', dash.mainName);
     if (dash.primary?.length) await setMeta('primarySources', [...new Set([...((await getMeta('primarySources')) || []), ...dash.primary])]);
+    if (dash.conds && Object.keys(dash.conds).length) { // conditions Jev personnalisées : verdicts déjà payés jamais écrasés
+      const cur = (await getMeta('jevConds')) || {};
+      for (const [k, c] of Object.entries(dash.conds)) if (c && typeof c.desc === 'string' && c.m && typeof c.m === 'object') cur[k] = { desc: c.desc, m: { ...c.m, ...(cur[k]?.m || {}) } };
+      await setMeta('jevConds', cur);
+    }
     if (dash.official) { // verdicts « annonce officielle » déjà payés : jamais écrasés
       const co = await getMeta('officialVerdicts');
       if (!co || co.v !== dash.official.v) { if (!co) await setMeta('officialVerdicts', dash.official); }

@@ -168,6 +168,9 @@ export function linkKeys(t) {
 }
 export const OFFICIAL_DESC = 'Tweet publié par l’entreprise, l’équipe ou le créateur qui sort lui-même le produit ou le modèle, pour l’annoncer officiellement (et non un commentaire, une réaction, un test, un résumé ou un relais par un tiers)';
 export const OFFICIAL_MIN = 50; // % « oui » de Jev à partir duquel un tweet compte comme annonce officielle
+// Condition libre posée à Jev (« jevDesc ») : clé stable pour ranger ses verdicts ; l'annonce officielle reste un préréglage.
+export const condKey = (desc) => { const t = normalizeText(String(desc || '').trim()); let h = 5381; for (let i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0; return 'c' + h.toString(36); };
+export const condOf = (w) => (w.jevDesc || '').trim() || (w.officialOnly ? OFFICIAL_DESC : '');
 export const judgeText = (t) => ({ id: t.id, text: `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}${t.quoted ? ' | cite : ' + decodeEntities(t.quoted.text) : ''}` });
 export const handleKey = (h) => String(h || '').replace(/^@/, '').toLowerCase();
 export function mentions(t, handle) {
@@ -263,12 +266,13 @@ export function evalWidget(items, w, ctx) {
   const inPrev = (d) => R && d >= prevFrom && d < fromKey;
 
   // 1) éléments qui correspondent
+  const cond = condOf(w), condMap = cond ? (ctx.conds?.[condKey(cond)] ?? (cond === OFFICIAL_DESC ? ctx.official : null)) : null;
   const cand = [];
   for (const t of items) {
     if (!inDets(t.id)) continue;
     if (w.noQuotes && !isVideoItem(t) && t.quoted) continue; // « ignorer les tweets qui citent un autre tweet »
     if (w.primaryOnly && !isVideoItem(t) && !(ctx.primary || new Set()).has(handleKey(t.handle))) continue; // sources primaires déclarées
-    if (w.officialOnly && !isVideoItem(t) && (ctx.official?.[t.id] ?? -1) < OFFICIAL_MIN) continue; // annonces officielles selon Jev
+    if (cond && !isVideoItem(t) && ((condMap || {})[t.id] ?? -1) < OFFICIAL_MIN) continue; // condition posée à Jev (ex. annonce officielle) : verdicts déjà rendus
     if (!matchItem(t, cq)) continue;
     cand.push({ t, days: eventDays(t, ctx.sv) });
   }

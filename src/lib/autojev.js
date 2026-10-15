@@ -9,7 +9,7 @@ import { decodeEntities } from './text.js';
 import { isVideoItem } from './youtube.js';
 import { jevJudge, estimateJudgeCost } from './jev.js';
 import { decisionReady } from './settings.js';
-import { detsOf, detectorScores, detectorSet, learnedLabels, LEARN_SIM, ambiguousIds, verdictKey, compileQuery, matchItem, judgeText, handleKey, OFFICIAL_DESC } from './widgets.js';
+import { detsOf, condOf, condKey, detectorScores, detectorSet, learnedLabels, LEARN_SIM, ambiguousIds, verdictKey, compileQuery, matchItem, judgeText, handleKey, OFFICIAL_DESC } from './widgets.js';
 
 // même texte envoyé à Jev que dans l'éditeur de détecteur
 export const detJudgeText = (t) => ({ id: t.id, text: isVideoItem(t) ? `${t.text} — ${t.name}${t.desc ? ' — ' + t.desc : ''}` : `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}${t.quoted ? ' | cite : ' + decodeEntities(t.quoted.text) : ''}` });
@@ -47,11 +47,18 @@ export async function runAutoJev(settings, { io = db, onProgress, signal, now = 
     for (const [id, p] of batch) all[det.id].v[id] = p;
     await io.setMeta('detVerdicts', all);
   };
-  const saveOff = async (batch) => {
-    const cur = await io.getMeta('officialVerdicts');
-    const store = cur?.v === OFFICIAL_DESC ? cur : { v: OFFICIAL_DESC, m: {} };
-    for (const [id, p] of batch) store.m[id] = p;
-    await io.setMeta('officialVerdicts', store);
+  const saveCond = async (desc, batch) => {
+    if (desc === OFFICIAL_DESC) {
+      const cur = await io.getMeta('officialVerdicts');
+      const store = cur?.v === OFFICIAL_DESC ? cur : { v: OFFICIAL_DESC, m: {} };
+      for (const [id, p] of batch) store.m[id] = p;
+      await io.setMeta('officialVerdicts', store);
+    } else {
+      const all = (await io.getMeta('jevConds')) || {}, k = condKey(desc);
+      if (!all[k]) all[k] = { desc, m: {} };
+      for (const [id, p] of batch) all[k].m[id] = p;
+      await io.setMeta('jevConds', all);
+    }
   };
   const run = async (desc, items, save) => {
     if (!items.length || remaining <= 0.0002 || signal?.aborted) return;
@@ -93,11 +100,10 @@ export async function runAutoJev(settings, { io = db, onProgress, signal, now = 
         if (remaining <= 0.0002) break;
       }
     }
-    // 2) stats « annonces officielles »
-    const offWidgets = widgets.filter((w) => w.officialOnly && (w.kind === 'number' || w.kind === 'series' || w.kind === 'top' || w.kind === 'heat' || w.kind === 'trend'));
-    if (offWidgets.length && remaining > 0.0002) {
-      const [vecs, chunks, allV, primary, offCur] = [await io.getAllVectors(mid), await io.getAllChunkVecs(mid), (await io.getMeta('detVerdicts')) || {}, new Set(((await io.getMeta('primarySources')) || []).map(handleKey)), await io.getMeta('officialVerdicts')];
-      const judged = offCur?.v === OFFICIAL_DESC ? offCur.m : {};
+    // 2) stats avec une condition posée à Jev (annonce officielle ou condition libre) : les éléments qui passent leurs autres filtres
+    const condWidgets = widgets.filter((w) => condOf(w) && ['number', 'series', 'top', 'heat', 'trend'].includes(w.kind));
+    if (condWidgets.length && remaining > 0.0002) {
+      const [vecs, chunks, allV, primary, offCur, condsAll] = [await io.getAllVectors(mid), await io.getAllChunkVecs(mid), (await io.getMeta('detVerdicts')) || {}, new Set(((await io.getMeta('primarySources')) || []).map(handleKey)), await io.getMeta('officialVerdicts'), (await io.getMeta('jevConds')) || {}];
       const detSet = new Map();
       const setOf = (id) => {
         if (detSet.has(id)) return detSet.get(id);
@@ -111,17 +117,30 @@ export async function runAutoJev(settings, { io = db, onProgress, signal, now = 
         }
         detSet.set(id, st); return st;
       };
-      const tests = offWidgets.map((w) => {
+      const byDesc = new Map();
+      for (const w of condWidgets) {
         const dets = detsOf(w), cq = compileQuery(w.q, w.source), sets = dets.map(setOf);
-        return (t) => !isVideoItem(t) && !t.off && !(w.noQuotes && t.quoted) && (!w.primaryOnly || primary.has(handleKey(t.handle)))
+        const test = (t) => !isVideoItem(t) && !t.off && !(w.noQuotes && t.quoted) && (!w.primaryOnly || primary.has(handleKey(t.handle)))
           && (!sets.length || (w.detMode === 'or' ? sets.some((s) => s.has(t.id)) : sets.every((s) => s.has(t.id)))) && matchItem(t, cq);
+        const d = condOf(w);
+        if (!byDesc.has(d)) byDesc.set(d, []);
+        byDesc.get(d).push(test);
+      }
+      const judgedOf = (d) => (d === OFFICIAL_DESC ? (offCur?.v === OFFICIAL_DESC ? offCur.m : {}) : condsAll[condKey(d)]?.m || {});
+      const cands = new Map([...byDesc.keys()].map((d) => [d, new Map()]));
+      await io.eachTweet((t) => {
+        for (const [d, tests] of byDesc) {
+          if (t.id in judgedOf(d) || cands.get(d).has(t.id)) continue;
+          if (tests.some((f) => f(t))) cands.get(d).set(t.id, { id: t.id, text: judgeText(t).text, at: t.createdAt || '' });
+        }
       });
-      const cand = new Map();
-      await io.eachTweet((t) => { if (!(t.id in judged) && !cand.has(t.id) && tests.some((f) => f(t))) cand.set(t.id, { id: t.id, text: judgeText(t).text, at: t.createdAt || '' }); });
-      const items = [...cand.values()].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 4000);
-      const before = result.judged;
-      await run(OFFICIAL_DESC, items, saveOff);
-      result.official += result.judged - before;
+      for (const [d, m] of cands) {
+        if (remaining <= 0.0002) break;
+        const items = [...m.values()].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 4000);
+        const before = result.judged;
+        await run(d, items, (b) => saveCond(d, b));
+        result.official += result.judged - before;
+      }
     }
   } catch (e) { result.error = String(e?.message || e); }
   result.spentToday = spend.dollars;

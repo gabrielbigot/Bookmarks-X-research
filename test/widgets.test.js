@@ -407,3 +407,26 @@ test('Jev automatique : mêmes réglages que les détecteurs et les stats, plafo
   assert.ok(r3.capReached, 'le plafond du jour bloque les dépenses');
   assert.equal(calls, 4);
 });
+
+import { condKey, condOf } from '../src/lib/widgets.js';
+test('condition libre posée à Jev : filtre la stat, jugée automatiquement, rangée par clé', async () => {
+  const xs = [tw('1', 'we raised 5M', 1), tw('2', 'nice weather', 1)];
+  const w = { kind: 'number', q: '', jevDesc: ' Le tweet annonce une levée de fonds ' };
+  assert.equal(condOf(w), 'Le tweet annonce une levée de fonds');
+  const ctx = { sv: savedInfo(xs, NOW), now: NOW, rangeDays: null, conds: { [condKey(w.jevDesc)]: { 1: 90, 2: 10 } } };
+  assert.equal(evalWidget(xs, w, ctx).n, 1);
+  assert.equal(evalWidget(xs, w, { ...ctx, conds: {} }).n, 0, 'sans verdict, rien n’est compté');
+  assert.equal(condKey('  LE tweet annonce une levée de fonds'), condKey('le tweet annonce une levée de fonds'));
+  // automatique
+  const mid = modelOf('default').id;
+  const meta = new Map([['dashWidgets', [w]], ['dashDetectors', []]]);
+  const io = { getMeta: async (k) => meta.get(k), setMeta: async (k, v) => { meta.set(k, v); }, getAllVectors: async () => new Map(), getAllChunkVecs: async () => new Map(), getTweets: async () => [], eachTweet: async (fn) => xs.forEach(fn) };
+  const asked = [];
+  globalThis.fetch = async (url, init) => { asked.push(JSON.parse(init.body).questions.match.instructions); return { ok: true, json: async () => ({ answers: { match: { choice: 'oui', confidence: 0.8, probabilities: { oui: 0.8, non: 0.2 } } } }) }; };
+  const settings = { embedModel: 'default', autoJev: { on: true, dailyCap: 1 }, decision: { url: 'u', model: 'm', apiKey: 'k', priceInPerM: 0.042 } };
+  const r = await runAutoJev(settings, { io, now: NOW });
+  assert.equal(r.official, 2);
+  assert.ok(asked.every((q) => q.includes('levée de fonds')), 'la question posée est celle de la stat');
+  assert.equal(Object.keys(meta.get('jevConds')[condKey(w.jevDesc)].m).length, 2);
+  void mid;
+});

@@ -1007,7 +1007,7 @@ await stats.fill('#dlg textarea[name="h"]', '@openai\n@anthropicai');
 await stats.click('#dlg button[value="ok"]');
 await waitFor(async () => /Sources primaires \(2\)/.test(await stats.locator('#p-manage').innerText()), 'bouton « Sources primaires (2) »', 8000);
 await stats.locator('.card.mine:has-text("Sujets") [data-act="edit"]').click();
-assert.ok(await stats.locator('#dlg input[name="po"]').count() === 1 && await stats.locator('#dlg input[name="oo"]').count() === 1 && await stats.locator('#off-go').count() === 1, 'options sources primaires / annonces officielles');
+assert.ok(await stats.locator('#dlg input[name="po"]').count() === 1 && await stats.locator('#dlg textarea[name="jd"]').count() === 1 && await stats.locator('#off-go').count() === 1, 'options sources primaires / annonces officielles');
 await stats.click('#dlg button[value="cancel"]');
 // ---- nouvelles formes : modèles (comparaison, empilé, anneau, chaleur, tendances, ratio), export CSV, tableaux de bord
 const TPLS = ['X vs YouTube', 'Activité par source', 'Langues', 'Quand les tweets sont publiés', 'Sujets qui montent (mots)', 'Part des tweets avec un lien'];

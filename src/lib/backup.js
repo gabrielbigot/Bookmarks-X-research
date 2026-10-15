@@ -84,6 +84,7 @@ export async function decodeFull(bytes, passphrase) {
       boards: Array.isArray(data.dash.boards) ? data.dash.boards.filter((b) => b && typeof b.id === 'string' && typeof b.name === 'string') : [],
       mainName: typeof data.dash.mainName === 'string' ? data.dash.mainName.slice(0, 40) : '',
       primary: Array.isArray(data.dash.primary) ? data.dash.primary.filter((h) => typeof h === 'string') : [],
+      conds: data.dash.conds && typeof data.dash.conds === 'object' ? data.dash.conds : {},
       official: data.dash.official && typeof data.dash.official === 'object' && data.dash.official.m && typeof data.dash.official.m === 'object' ? { v: String(data.dash.official.v || ''), m: data.dash.official.m } : null } : null,
     vectors: data.vectors?.data && Array.isArray(data.vectors.ids) ? data.vectors : null,
   };
