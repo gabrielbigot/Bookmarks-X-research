@@ -122,11 +122,12 @@ export function suggestThreshold(scores, { frac = 0.02, min = 20 } = {}) {
   return { threshold, count: v.filter((x) => x >= threshold).length };
 }
 // Pour régler le seuil : les moins sûrs retenus et les plus proches écartés (hors validations manuelles).
-export function detectorMargin(scores, det, n = 8) {
+export function detectorMargin(scores, det, n = 8, verdicts = {}) {
   const fixed = new Set([...(det.pos || []), ...(det.neg || [])]);
+  const kept = detectorSet(scores, det, verdicts); // décision FINALE (seuil, zone ambiguë, verdicts de Jev)
   const rows = [...scores].filter(([id]) => !fixed.has(id));
-  const above = rows.filter(([, s]) => s >= det.threshold).sort((a, b) => a[1] - b[1]).slice(0, n);
-  const below = rows.filter(([, s]) => s < det.threshold).sort((a, b) => b[1] - a[1]).slice(0, n);
+  const above = rows.filter(([id]) => kept.has(id)).sort((a, b) => a[1] - b[1]).slice(0, n);
+  const below = rows.filter(([id]) => !kept.has(id)).sort((a, b) => b[1] - a[1]).slice(0, n);
   return { above, below };
 }
 

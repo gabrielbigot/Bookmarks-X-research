@@ -189,3 +189,12 @@ test('estimation du coût Jev : tokens d’entrée × prix (sortie gratuite)', (
   assert.equal(fmtDollars(0.004), '< 0,01 $');
   assert.equal(fmtDollars(1.234), '1,23 $');
 });
+
+test('listes de réglage : reflètent la décision finale (verdicts de Jev compris)', () => {
+  const sc = new Map([['a', 0.9], ['m1', 0.52], ['m2', 0.48], ['lo', 0.1]]);
+  const det = { threshold: 0.5, confirm: { on: true, band: 0.1 }, pos: [], neg: [] };
+  const v = { m1: 5, m2: 95 }; // Jev écarte m1 (score au-dessus du seuil) et retient m2 (en dessous)
+  const m = detectorMargin(sc, det, 8, v);
+  assert.deepEqual(m.above.map(([id]) => id), ['m2', 'a'], 'retenus : m2 (confirmé par Jev) et a, pas m1');
+  assert.deepEqual(m.below.map(([id]) => id), ['m1', 'lo'], 'écartés : m1 (refusé par Jev) puis lo');
+});

@@ -279,7 +279,7 @@ async function editDetector(k, init, backTo) {
         <div id="jvmsg" class="muted"></div></div></div>
     <div id="dsug" class="sug" hidden></div>
     <div id="dstat" class="muted">Analyse…</div>
-    <div class="cols"><div><h4>Retenus (les moins sûrs)</h4><ul class="ex" id="ex-above"></ul></div><div><h4>Écartés (les plus proches)</h4><ul class="ex" id="ex-below"></ul></div></div>
+    <div class="cols"><div><h4>Retenus (les moins sûrs)</h4><p class="hint">Ce que le détecteur garde, du moins certain au plus certain. ✗ = « non, ça n’en est pas ».</p><ul class="ex" id="ex-above"></ul></div><div><h4>Écartés (les plus proches)</h4><p class="hint">Ce que le détecteur laisse de côté, du plus proche au plus éloigné. ✓ = « si, ça en est un ».</p><ul class="ex" id="ex-below"></ul></div></div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="d-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
   const idm = byId();
@@ -312,7 +312,7 @@ async function editDetector(k, init, backTo) {
       $('jvstat').textContent = `${fmtInt(pend)} cas ambigu(s) à juger${pend ? ` (≈ ${fmtDollars(est.dollars)} pour tous, estimation)` : ''} · ${fmtInt(judged)} déjà jugé(s) par Jev (jamais redemandés)`;
     }
     $('dstat').textContent = `${fmtInt(set.size)} élément(s) retenus au total (sur ${fmtInt(current.size)} avec un vecteur) · ${dd.pos.length} validé(s), ${dd.neg.length} écarté(s) à la main`;
-    const { above, below } = detectorMargin(current, dd, 8);
+    const { above, below } = detectorMargin(current, dd, 8, vd);
     const li = (id, s, tag) => { const t = idm.get(id); const v = vd[id]; return `<li><span class="sc">${s.toFixed(2)}</span>${v !== undefined ? ` <span class="jvt ${v >= 50 ? 'y' : 'n'}" title="Verdict de Jev">Jev ${v >= 50 ? 'oui' : 'non'} ${v} %</span>` : ''} ${esc(t ? textOf(t) : id)} <span class="vb"><button type="button" data-v="ok" data-id="${esc(id)}" title="Oui, c’en est un">✓</button><button type="button" data-v="no" data-id="${esc(id)}" title="Non">✗</button></span></li>`; };
     $('ex-above').innerHTML = above.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
     $('ex-below').innerHTML = below.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
