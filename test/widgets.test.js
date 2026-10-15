@@ -218,3 +218,38 @@ test('apprentissage : les éléments très semblables à un ✓ ou un ✗ suiven
   // les choix explicites l'emportent
   assert.equal(detectorSet(sc, { ...det, neg: ['no', 'near-yes'] }, {}, l).has('near-yes'), false);
 });
+
+import { cleanText } from '../src/lib/jev.js';
+test('Jev : texte nettoyé (surrogats isolés), contenu refusé ignoré sans arrêter le lot, accès refusé = arrêt', async () => {
+  // une coupe au milieu d'un emoji laisserait un surrogat isolé : l'API refuse ("invalid Unicode text")
+  const cut = ('a'.repeat(899) + '😀').slice(0, 900);
+  assert.match(cut, /[\ud800-\udbff]$/);
+  const clean = cleanText(cut, 900);
+  assert.doesNotMatch(clean, /[\ud800-\udfff]/);
+  assert.equal(cleanText('ok 😀 fin\u0000x\u0007', 900), 'ok 😀 fin x ');
+  assert.equal(cleanText(undefined), '');
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    seen.push(body.state.contenu);
+    if (body.state.contenu.includes('REFUSE')) return { ok: false, status: 400, text: async () => '{"error":"invalid Unicode text"}' };
+    return { ok: true, json: async () => ({ answers: { match: { choice: 'oui', confidence: 0.9, probabilities: { oui: 0.9, non: 0.1 } } } }) };
+  };
+  const items = [{ id: 'a', text: 'bon' }, { id: 'b', text: 'REFUSE ' + cut }, { id: 'c', text: 'bon aussi' }];
+  const got = [];
+  const r = await jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'desc', items, { concurrency: 1, every: 1, onBatch: async (b) => got.push(...b) });
+  assert.equal(r.done.get('a'), 90);
+  assert.equal(r.done.get('b'), -1, 'texte refusé : verdict -1, jamais redemandé');
+  assert.equal(r.done.get('c'), 90, 'le lot continue après un texte refusé');
+  assert.equal(r.skipped, 1);
+  assert.equal(r.error, '');
+  assert.ok(seen.every((t) => !/[\ud800-\udfff]/.test(t.replace(/[\ud800-\udbff][\udc00-\udfff]/g, ''))), 'aucun surrogat isolé envoyé');
+  // -1 : le seuil décide (comme sans verdict) ; et ce n'est plus un « cas à juger »
+  const sc = new Map([['x', 0.52], ['y', 0.47]]);
+  const det = { threshold: 0.5, confirm: { on: true, band: 0.1 } };
+  assert.deepEqual([...detectorSet(sc, det, { x: -1, y: -1 })], ['x']);
+  assert.deepEqual(ambiguousIds(sc, det, { x: -1, y: -1 }), []);
+  // accès refusé : arrêt
+  globalThis.fetch = async () => ({ ok: false, status: 402, text: async () => 'crédit insuffisant' });
+  await assert.rejects(() => jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'd', items, { concurrency: 1 }), /HTTP 402/);
+});

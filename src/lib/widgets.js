@@ -93,7 +93,7 @@ export function detectorSet(scores, det, verdicts = {}, learned = null) {
   for (const [id, s] of scores) {
     if (!on) { if (s >= det.threshold) set.add(id); continue; }
     if (s >= det.threshold + band) set.add(id);
-    else if (s >= det.threshold - band) { const v = verdicts[id]; if (v === undefined ? s >= det.threshold : v >= 50) set.add(id); }
+    else if (s >= det.threshold - band) { const v = verdicts[id]; if (v === undefined || v < 0 ? s >= det.threshold : v >= 50) set.add(id); } // v < 0 : texte refusé par l'API, le seuil décide
   }
   // apprentissage : les éléments très semblables à un de tes ✓ (ou ✗) suivent ton choix, avant les choix explicites
   if (learned && det.learn?.on !== false) for (const [id, l] of learned) { if (l > 0) set.add(id); else set.delete(id); }

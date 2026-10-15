@@ -121,28 +121,45 @@ const MATCH = (description) => ({
 
 // items : [{ id, text }] -> Map id -> probabilité « oui » en pour cent (0..100). Appels en parallèle limités ;
 // onBatch(Map) est rappelé régulièrement (pour enregistrer au fil de l'eau) ; la première erreur d'accès interrompt tout.
+// Texte sûr pour l'API : pas de moitié d'emoji (la coupe à N caractères peut séparer une paire de surrogats), pas de caractères de contrôle.
+export function cleanText(s, max = 900) {
+  let t = String(s ?? '');
+  if (t.length > max) t = t.slice(0, max);
+  t = t.replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, '\ufffd'); // surrogats isolés
+  return t.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffe\uffff]/g, ' ');
+}
+const codeOf = (e) => Number(/HTTP (\d{3})/.exec(String(e?.message))?.[1]) || 0;
+
+// Politique d'erreurs : un contenu refusé (400, 413, 422) est ignoré (verdict -1, jamais redemandé) et le lot continue ;
+// limite de débit / erreur serveur : 2 nouvelles tentatives ; clé, quota ou accès refusés (401, 402, 403) : arrêt immédiat.
 export async function jevJudge(cfg, description, items, { concurrency = 4, signal, onBatch, every = 20 } = {}) {
   const out = new Map(), fresh = new Map();
-  const q = MATCH(description);
-  let next = 0, failed = null;
+  const q = MATCH(cleanText(description, 600));
+  let next = 0, failed = null, skipped = 0;
+  const record = async (id, p) => { out.set(id, p); fresh.set(id, p); if (fresh.size >= every) { const b = new Map(fresh); fresh.clear(); await onBatch?.(b); } };
   const worker = async () => {
     while (next < items.length && !failed && !signal?.aborted) {
       const it = items[next++];
-      try {
-        const a = await decide(cfg, { contenu: it.text.slice(0, 900) }, q, { signal });
-        const p = Math.round(probOf(a.match, 'oui') * 100);
-        out.set(it.id, p); fresh.set(it.id, p);
-        if (fresh.size >= every) { const b = new Map(fresh); fresh.clear(); await onBatch?.(b); }
-      } catch (e) {
-        if (signal?.aborted) return;
-        failed = failed || e;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const a = await decide(cfg, { contenu: cleanText(it.text, 900) }, q, { signal });
+          await record(it.id, Math.round(probOf(a.match, 'oui') * 100));
+          break;
+        } catch (e) {
+          if (signal?.aborted) return;
+          const c = codeOf(e);
+          if ([400, 413, 422].includes(c)) { skipped++; await record(it.id, -1); break; } // contenu refusé : on passe au suivant
+          if ((c === 429 || c >= 500 || c === 0) && attempt < 2) { await new Promise((r) => setTimeout(r, 800 * (attempt + 1))); continue; }
+          failed = failed || e; // accès refusé, quota, ou panne persistante : on arrête
+          break;
+        }
       }
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
   if (fresh.size) await onBatch?.(new Map(fresh));
   if (failed && !out.size) throw failed; // rien n'a abouti : erreur d'accès (clé, quota…)
-  return { done: out, error: failed ? String(failed.message || failed) : '' };
+  return { done: out, skipped, error: failed ? String(failed.message || failed) : '' };
 }
 
 // Estimation du coût d'une série de jugements : tokens d'entrée ≈ caractères / 3,5 (+ consignes) ; la sortie de Jev est gratuite chez OpenRouter.

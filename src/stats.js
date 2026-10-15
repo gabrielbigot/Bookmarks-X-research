@@ -319,7 +319,7 @@ async function editDetector(k, init, backTo) {
     $('bdv').textContent = dd.confirm.band.toFixed(2);
     $('jvbox').hidden = !dd.confirm.on;
     if (dd.confirm.on) {
-      const pend = ambiguousIds(current, dd, vd).length, judged = Object.keys(vd).length;
+      const pend = ambiguousIds(current, dd, vd).length, judged = Object.values(vd).filter((x) => x >= 0).length;
       const pids = ambiguousIds(current, dd, vd);
       const est = estimateJudgeCost(dd.desc, pids.map((id) => idm.get(id)).filter(Boolean).map((t) => jtext(t).text), costPrice);
       $('jvstat').textContent = `${fmtInt(pend)} cas ambigu(s) à juger${pend ? ` (≈ ${fmtDollars(est.dollars)} pour tous, estimation)` : ''} · ${fmtInt(judged)} déjà jugé(s) par Jev (jamais redemandés)`;
@@ -378,7 +378,8 @@ async function editDetector(k, init, backTo) {
         done += b.size; msg(`Jugement en cours… ${done}/${items.length}`);
         await saveVerdicts(); lists();
       } });
-      msg(r.error ? `Terminé partiellement (${done}/${items.length}) : ${r.error}` : `Terminé : ${done} élément(s) jugé(s).`);
+      const sk = r.skipped ? ` (dont ${r.skipped} texte(s) refusé(s) par l’API, ignorés et non redemandés)` : '';
+      msg(r.error ? `Interrompu (${done}/${items.length}) : ${r.error}` : `Terminé : ${done} élément(s) jugé(s)${sk}.`);
     } catch (e) { msg('⚠ ' + e.message); } finally {
       abort = null; $('jv-go').disabled = false; $('jv-stop').hidden = true; scoreCache.size; lists();
     }
