@@ -83,7 +83,8 @@ test('détecteur : score = meilleur exemple (ou passage), seuil, ✓/✗, marge'
 
 test('opérateur is: et ensemble résolu', () => {
   const f = parseQuery('is:lancement foo').filters;
-  assert.equal(f.is, 'lancement');
+  assert.deepEqual(f.is, ['lancement']);
+  assert.deepEqual(parseQuery('is:a is:b,c').filters.is, ['a', 'b,c']);
   assert.equal(passesFilters(items[0], f), true, 'sans ensemble résolu, is: est ignoré');
   assert.equal(passesFilters(items[0], { isIds: new Set(['1']) }), true);
   assert.equal(passesFilters(items[1], { isIds: new Set(['1']) }), false);
@@ -127,4 +128,27 @@ test('jevJudge : question « choice », pourcentages, enregistrement par lots, e
   assert.deepEqual(Object.keys(calls[0].questions.match.criteria), ['oui', 'non']);
   globalThis.fetch = async () => ({ ok: false, status: 401, text: async () => 'clé invalide' });
   await assert.rejects(() => jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'd', items), /HTTP 401/);
+});
+
+import { splitOr, detsOf } from '../src/lib/widgets.js';
+test('requêtes : « a | b » (OU) et plusieurs détecteurs (ET / OU)', () => {
+  assert.deepEqual(splitOr('robot | humanoid | cobot'), { plain: '', groups: [['robot', 'humanoid', 'cobot']] });
+  assert.deepEqual(splitOr('launch robot|humanoid from:@ana'), { plain: 'launch from:@ana', groups: [['robot', 'humanoid']] });
+  assert.deepEqual(splitOr('from:@a | from:@b'), { plain: 'from:@a from:@b', groups: [] }, 'les opérateurs ne se combinent pas par OU');
+  assert.deepEqual(splitOr('a |'), { plain: 'a', groups: [] });
+  const m = (q, t) => matchItem(t, compileQuery(q));
+  const rb = tw('r1', 'Our humanoid robot is launching today', 0), cb = tw('r2', 'New cobot arm available', 0), other = tw('r3', 'New recipe for crêpes', 0);
+  assert.equal(m('robot | cobot', rb), true);
+  assert.equal(m('robot | cobot', cb), true);
+  assert.equal(m('robot | cobot', other), false);
+  assert.equal(m('launching robot | cobot', rb), true, 'launching ET (robot OU cobot)');
+  assert.equal(m('launching robot | cobot', cb), false);
+  // plusieurs détecteurs
+  const all = [...items, rb, cb, other];
+  const ctx = (mode) => ({ sv, now: NOW, rangeDays: null, detSets: new Map([['L', new Set(['r1', 'r2', 'r3'])], ['R', new Set(['r1', 'r2'])]]) });
+  assert.equal(evalWidget(all, { kind: 'number', q: '', dets: ['L', 'R'], detMode: 'and' }, ctx()).n, 2, 'Lancements ET Robotique');
+  assert.equal(evalWidget(all, { kind: 'number', q: '', dets: ['L', 'R'], detMode: 'or' }, ctx()).n, 3, 'Lancements OU Robotique');
+  assert.equal(evalWidget(all, { kind: 'number', q: 'cobot', dets: ['L', 'R'], detMode: 'and' }, ctx()).n, 1, 'avec une requête en plus');
+  assert.deepEqual(detsOf({ det: 'X' }), ['X'], 'ancien format (un seul détecteur)');
+  assert.equal(evalWidget(all, { kind: 'number', q: '', det: 'R' }, ctx()).n, 2, 'ancien format toujours compté');
 });

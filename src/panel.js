@@ -123,23 +123,33 @@ function fromIntent(it) {
   };
 }
 
-// is:nom : détecteur personnel (créé dans 📊 › Mes stats). Ensemble calculé à la demande, mis en cache.
+// is:nom : détecteur personnel (créé dans 📊 › Mes stats). is:a is:b = les deux ; is:a,b = l'un ou l'autre. Ensembles mis en cache.
 const detCache = new Map();
-async function resolveIs(filters) {
-  if (!filters.is) return;
-  const dets = (await getMeta('dashDetectors')) || [];
-  const det = dets.find((d) => slugOf(d.name) === filters.is);
-  if (!det) { filters.isIds = new Set(); return; } // détecteur inconnu : aucun résultat
-  const mid = modelOf(settings.embedModel).id;
+async function detectorIdsFor(det, mid) {
   const vds = (await getMeta('detVerdicts')) || {};
   const vd = vds[det.id]?.key === verdictKey(det) ? vds[det.id].v : {};
   const key = `${det.id}|${mid}|${det.protoKey}|${det.threshold}|${det.pos?.length}|${det.neg?.length}|${det.confirm?.on}|${det.confirm?.band}|${Object.keys(vd).length}`;
   if (!detCache.has(key)) {
     const protos = (det.protos?.[mid] || []).map((a) => Float32Array.from(a));
-    if (!protos.length) { filters.isIds = new Set(); return; }
+    if (!protos.length) return new Set();
     detCache.set(key, detectorSet(detectorScores(await getAllVectors(mid), await getAllChunkVecs(mid), protos), det, vd));
   }
-  filters.isIds = detCache.get(key);
+  return detCache.get(key);
+}
+async function resolveIs(filters) {
+  if (!filters.is?.length) return;
+  const dets = (await getMeta('dashDetectors')) || [];
+  const mid = modelOf(settings.embedModel).id;
+  let result = null;
+  for (const spec of filters.is) {
+    const union = new Set();
+    for (const slug of spec.split(',').filter(Boolean)) {
+      const det = dets.find((d) => slugOf(d.name) === slug);
+      if (det) for (const id of await detectorIdsFor(det, mid)) union.add(id); // détecteur inconnu : ne retient rien
+    }
+    result = result ? new Set([...result].filter((id) => union.has(id))) : union;
+  }
+  filters.isIds = result;
 }
 
 async function run(opts = {}) {

@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo } from './lib/time.js';
-import { evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
+import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
 import { jevJudge } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
@@ -118,7 +118,8 @@ async function embedTexts(texts) {
 const KINDS = { number: 'Nombre', series: 'Courbe', top: 'Classement' };
 const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
 const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
-const wQuery = (w) => [w.q, w.det ? 'is:' + slugOf(detectors.find((d) => d.id === w.det)?.name) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
+const wQuery = (w) => [w.q, detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 const rangeLabel = () => (range ? RANGES.find(([v]) => v === range)[1] : 'tout');
 const delta = (n, prev) => (prev == null ? '' : prev === 0 ? (n ? 'nouveau' : '=') : `${n >= prev ? '▲' : '▼'} ${Math.abs(Math.round(((n - prev) / prev) * 100))} % vs période précédente`);
 
@@ -132,7 +133,7 @@ const LAUNCH_DETECTOR = { name: 'Lancements', desc: 'Annonce d’un lancement : 
 
 async function renderMine(app) {
   const sv = savedInfo(all, Date.now());
-  const needed = new Set(widgets.map((w) => w.det).filter(Boolean));
+  const needed = new Set(widgets.flatMap(detsOf));
   const { sets, missing } = await detectorSetsFor(needed);
   const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets };
   let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button></div>`;
@@ -186,24 +187,28 @@ function dialog() {
   return d;
 }
 async function editWidget(i, init) {
-  const w = i === null ? { id: uid(), title: '', kind: 'number', q: '', det: '', source: 'all', by: 'author', ...init } : { ...widgets[i] };
+  const w = i === null ? { id: uid(), title: '', kind: 'number', q: '', dets: [], detMode: 'and', source: 'all', by: 'author', ...init } : { ...widgets[i] };
+  w.dets = detsOf(w); delete w.det;
   const d = dialog();
   const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
   d.innerHTML = `<form method="dialog" class="ed"><h3>${i === null ? 'Nouvelle stat' : 'Modifier la stat'}</h3>
     <label>Nom<input name="title" value="${esc(w.title)}" placeholder="Ex. : Lancements"></label>
     <div class="row"><label>Forme<select name="kind">${opt(KINDS, w.kind)}</select></label><label>Source<select name="source">${opt(SOURCES, w.source || 'all')}</select></label>
       <label class="byl">Regrouper par<select name="by">${opt(BYS, w.by || 'author')}</select></label></div>
-    <label>Requête <span class="hint">mots (tous requis), <code>from:@x</code>, <code>has:link</code>, <code>lang:fr</code>, <code>playlist:"…"</code>, <code>viewed:no</code>…</span><input name="q" value="${esc(w.q)}" placeholder="vide = tout"></label>
-    <label>Détecteur (sens) <span class="hint">facultatif, se combine avec la requête</span><span class="row2"><select name="det"><option value="">(aucun)</option>${detectors.map((x) => `<option value="${x.id}"${x.id === w.det ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select><button type="button" class="gbtn" id="ed-newdet">+ Nouveau détecteur</button></span></label>
+    <label>Requête <span class="hint">mots (tous requis), <code>a | b</code> = l’un ou l’autre, <code>from:@x</code>, <code>has:link</code>, <code>lang:fr</code>, <code>playlist:"…"</code>, <code>viewed:no</code>…</span><input name="q" value="${esc(w.q)}" placeholder="vide = tout"></label>
+    <div class="dsel"><span class="lab">Détecteurs (sens) <span class="hint">facultatif — se combinent avec la requête</span></span>
+      <div class="dlist">${detectors.map((x) => `<label class="chk"><input type="checkbox" name="dets" value="${x.id}"${w.dets.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('') || '<span class="muted">Aucun détecteur pour l’instant.</span>'}</div>
+      <div class="row2"><label class="inl" id="dm">Combiner <select name="detMode"><option value="and"${w.detMode !== 'or' ? ' selected' : ''}>ET : tous les détecteurs cochés</option><option value="or"${w.detMode === 'or' ? ' selected' : ''}>OU : au moins un</option></select></label><button type="button" class="gbtn" id="ed-newdet">+ Nouveau détecteur</button></div></div>
     <div class="pv" id="pv">…</div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="ed-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
-  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), det: fd.get('det') }; };
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode') }; };
   let timer = 0, seq = 0;
   const preview = async () => {
     const draft = read(), my = ++seq;
     f.querySelector('.byl').style.display = draft.kind === 'top' ? '' : 'none';
-    const { sets } = await detectorSetsFor(new Set([draft.det].filter(Boolean)));
+    f.querySelector('#dm').style.display = draft.dets.length > 1 ? '' : 'none';
+    const { sets } = await detectorSetsFor(new Set(draft.dets));
     if (my !== seq) return;
     const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets });
     const idm = byId();
@@ -215,7 +220,7 @@ async function editWidget(i, init) {
   d.onclose = async () => {
     if (d.returnValue !== 'ok') return;
     const nw = read();
-    if (!nw.title) nw.title = nw.q || (nw.det ? detectors.find((x) => x.id === nw.det)?.name : '') || 'Ma stat';
+    if (!nw.title) nw.title = nw.q || (nw.dets.length ? nw.dets.map((id) => detectors.find((x) => x.id === id)?.name).filter(Boolean).join(nw.detMode === 'or' ? ' ou ' : ' + ') : '') || 'Ma stat';
     if (i === null) widgets.push(nw); else widgets[i] = nw;
     await saveWidgets(); render();
   };
@@ -236,7 +241,7 @@ function manageDetectors() {
     const k = +b.dataset.x;
     if (!confirm(`Supprimer le détecteur « ${detectors[k].name} » ? Les stats qui l’utilisent seront vidées.`)) return;
     const id = detectors[k].id; detectors.splice(k, 1);
-    widgets.forEach((w) => { if (w.det === id) w.det = ''; });
+    widgets.forEach((w) => { w.dets = detsOf(w).filter((x) => x !== id); delete w.det; });
     await Promise.all([saveDetectors(), saveWidgets()]); d.close('cancel'); render();
   }));
   $('dn').onclick = () => { d.close('cancel'); editDetector(null); };
@@ -355,7 +360,7 @@ async function editDetector(k, init, backTo) {
         scoreCache.clear();
         if (k === null) detectors.push(dd); else detectors[k] = dd;
         await saveDetectors();
-        if (backTo) { backTo.det = dd.id; widgets.length; return editWidget(null, backTo); }
+        if (backTo) { backTo.dets = [...(backTo.dets || []), dd.id]; return editWidget(null, backTo); }
       }
     }
     render();

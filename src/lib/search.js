@@ -45,7 +45,7 @@ export function parseQuery(q) {
     else if (k === 'lang') filters.lang = v.toLowerCase();
     else if (k === 'source') filters.source = /^(yt|youtube|video|videos|vidéo|vidéos)$/i.test(v) ? 'youtube' : /^(x|twitter|tweet|tweets)$/i.test(v) ? 'x' : undefined;
     else if (k === 'playlist') filters.playlist = v.toLowerCase();
-    else if (k === 'is') filters.is = v.toLowerCase(); // détecteur personnel (is:lancement) : résolu par l'appelant en filters.isIds
+    else if (k === 'is') (filters.is ??= []).push(v.toLowerCase()); // détecteur(s) : plusieurs is: = ET ; is:a,b = OU ; résolu par l'appelant en filters.isIds
     else if (k === 'viewed' || k === 'vu') filters.viewed = /^(yes|oui|true|1|y|o)$/i.test(v) ? true : /^(no|non|false|0|n)$/i.test(v) ? false : undefined;
     else if (k === 'watched') {
       const [a, b] = v.split('..');

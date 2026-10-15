@@ -11,11 +11,32 @@ const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const slugOf = (name) => normalizeText(name || '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'detecteur';
 
 // ---- requêtes : opérateurs + mots (tous les mots doivent apparaître, début de mot, sans accents ni casse) ----
+// « a | b | c » : l'un OU l'autre (liant plus fort que l'espace : « lancement robot | humanoid » = lancement ET (robot OU humanoid)).
+// Seuls des mots simples se combinent ainsi (pas d'opérateur `clé:valeur` dans une chaîne de « | »).
+export function splitOr(q) {
+  const pieces = (q || '').replace(/([^\s|:])\|(?=[^\s|:])/g, '$1 | ').split(/\s+/).filter(Boolean); // « a|b » = « a | b »
+  const plain = [], groups = [];
+  for (let i = 0; i < pieces.length; i++) {
+    if (pieces[i] === '|') continue;
+    const chain = [pieces[i]];
+    if (!pieces[i].includes(':')) {
+      while (pieces[i + 1] === '|' && pieces[i + 2] !== undefined && pieces[i + 2] !== '|' && !pieces[i + 2].includes(':')) { chain.push(pieces[i + 2]); i += 2; }
+    }
+    if (chain.length > 1) groups.push(chain); else plain.push(chain[0]);
+  }
+  return { plain: plain.join(' '), groups };
+}
 export function compileQuery(q, source = 'all') {
-  const { text, filters } = parseQuery(q || '');
+  const { plain, groups } = splitOr(q);
+  const { text, filters } = parseQuery(plain);
   if (source === 'x' || source === 'youtube') filters.source = source;
   const words = tokenize(text).filter((t) => !isStopword(t));
-  return { filters, res: words.map((w) => new RegExp('(?:^|[^a-z0-9])' + escRe(w))), empty: !words.length && !Object.keys(filters).length };
+  const res = words.map((w) => new RegExp('(?:^|[^a-z0-9])' + escRe(w)));
+  for (const g of groups) {
+    const alts = g.flatMap((x) => tokenize(x)).filter(Boolean);
+    if (alts.length) res.push(new RegExp('(?:^|[^a-z0-9])(?:' + alts.map(escRe).join('|') + ')'));
+  }
+  return { filters, res, empty: !res.length && !Object.keys(filters).length };
 }
 const normCache = new WeakMap();
 const normOf = (t) => {
@@ -100,7 +121,10 @@ export function detectorMargin(scores, det, n = 8) {
 export function evalWidget(items, w, ctx) {
   const now = ctx.now ?? Date.now();
   const cq = compileQuery(w.q, w.source);
-  const detSet = w.det ? ctx.detSets?.get(w.det) : null;
+  // détecteurs : plusieurs possibles, combinés par ET (tous) ou OU (au moins un) ; w.det = ancien format (un seul)
+  const dets = w.dets?.length ? w.dets : w.det ? [w.det] : [];
+  const sets = dets.map((id) => ctx.detSets?.get(id) || new Set());
+  const inDets = (id) => !sets.length || (w.detMode === 'or' ? sets.some((st) => st.has(id)) : sets.every((st) => st.has(id)));
   const todayKey = dayKey(now);
   const R = ctx.rangeDays;
   const fromKey = R ? dayKey(now - (R - 1) * DAY) : null;
@@ -110,7 +134,7 @@ export function evalWidget(items, w, ctx) {
   const perDay = new Map(), matched = [];
   let n = 0, prev = 0, noDate = 0;
   for (const t of items) {
-    if (w.det && !detSet?.has(t.id)) continue;
+    if (!inDets(t.id)) continue;
     if (!matchItem(t, cq)) continue;
     const days = eventDays(t, ctx.sv);
     if (!days.length) { noDate++; if (!R) { n++; matched.push({ t, day: '' }); } continue; }
@@ -141,3 +165,5 @@ export function evalWidget(items, w, ctx) {
 
 export const textOf = (t) => decodeEntities(isVideoItem(t) ? t.text : t.text || '').replace(/\s+/g, ' ').slice(0, 160);
 export { eachDay };
+
+export const detsOf = (w) => (w.dets?.length ? w.dets : w.det ? [w.det] : []);
