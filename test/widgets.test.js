@@ -253,3 +253,53 @@ test('Jev : texte nettoyé (surrogats isolés), contenu refusé ignoré sans arr
   globalThis.fetch = async () => ({ ok: false, status: 402, text: async () => 'crédit insuffisant' });
   await assert.rejects(() => jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'd', items, { concurrency: 1 }), /HTTP 402/);
 });
+
+import { clusterCandidates, linkKeys } from '../src/lib/widgets.js';
+test('regroupement : même tweet cité, même page, sens quasi identique dans la fenêtre ; sujet daté de son premier enregistrement', () => {
+  const day = (n) => new Date(NOW - n * DAY).toISOString().slice(0, 10);
+  const mk = (id, daysAgo, extra = {}) => ({ t: { ...tw(id, 'x' + id, daysAgo), ...extra }, days: [day(daysAgo)] });
+  const u = (...v) => { const n = Math.hypot(...v); return Float32Array.from(v.map((x) => x / n)); };
+  const cand = [
+    mk('a', 10), mk('b', 9, { quoted: { id: 'a', links: [] } }),            // b cite a (présent dans la liste)
+    mk('c', 8, { quoted: { id: 'Z' } }), mk('d', 7, { quoted: { id: 'Z' } }), // c et d citent le même tweet absent
+    mk('e', 6, { links: ['https://www.blog.io/launch?utm=1'] }), mk('f', 5, { links: ['https://blog.io/launch/'] }), // même page
+    mk('g', 4, { links: ['https://blog.io/'] }), mk('h', 3, { links: ['https://blog.io/'] }), // simple page d'accueil : pas un signal
+    mk('i', 2), mk('j', 1),                                                   // sens quasi identique, proches dans le temps
+    mk('k', 30), mk('l', 1),                                                  // même sens mais 29 jours d'écart : séparés
+  ];
+  // un vecteur « canonique » par tweet (12 dimensions, une par tweet) : par défaut tous différents
+  const oh = (n, extra = {}) => { const v = new Float32Array(12); v[n] = 1; for (const [k, x] of Object.entries(extra)) v[k] = x; const nn = Math.hypot(...v); return v.map((x) => x / nn); };
+  const vecs = new Map(cand.map(({ t }, n) => [t.id, oh(n)]));
+  vecs.set('j', oh(8, { 9: 0.05 }));          // i (indice 8) et j (indice 9) : sens quasi identique
+  vecs.set('j', oh(8, { 9: 0.1 }));
+  vecs.set('l', oh(10));                      // k (indice 10) et l : identiques mais 29 jours d'écart
+  const names = (g) => g.map((idx) => idx.map((i) => cand[i].t.id).join('')).sort();
+  const r = clusterCandidates(cand, { sim: 0.95, days: 7, vecs });
+  assert.deepEqual(names(r.groups).filter((x) => x.length > 1), ['ab', 'cd', 'ef', 'ij'], names(r.groups).join(','));
+  assert.equal(names(r.groups).includes('g') && names(r.groups).includes('h'), true, 'deux pages d’accueil ne regroupent pas');
+  assert.equal(names(r.groups).includes('k') && names(r.groups).includes('l'), true, 'même sens mais 29 jours d’écart : deux sujets');
+  assert.deepEqual([...linkKeys({ links: ['https://x.com/a/status/1', 'https://t.co/zz', 'https://www.Blog.io/p/?a=1'], quoted: { links: ['https://news.org/story'] } })].sort(), ['blog.io/p', 'news.org/story']);
+  // sans vecteurs : seulement les signaux de citation et de lien
+  assert.deepEqual(names(clusterCandidates(cand, { vecs: null }).groups).filter((x) => x.length > 1), ['ab', 'cd', 'ef']);
+
+  // décompte : un sujet = une unité, daté de son premier enregistrement
+  const base = items.filter((t) => t.id.startsWith('f'));
+  const all = [...base, ...cand.map((c) => c.t)];
+  const sv2 = savedInfo(all, NOW);
+  const w = { kind: 'number', q: '' };
+  const plain = evalWidget(cand.map((c) => c.t), w, { sv: null, now: NOW, rangeDays: null });
+  assert.equal(plain.n, 12);
+  // sv null : la date vient de createdAt → on force des dates simples en passant par des vidéos ? ici on teste via eventDays réel
+  const g = evalWidget(cand.map((c) => c.t), { ...w, dedupe: { on: true, sim: 0.95, days: 7 } }, { sv: null, now: NOW, rangeDays: null, vecs });
+  assert.equal(g.n, 8, '12 tweets → 8 sujets : ' + g.matched.map((m) => m.members.map((x) => x.id).join('')).join(','));
+  assert.equal(g.tweets, 12);
+  assert.equal(g.grouped, true);
+  assert.ok(g.matched.some((m) => m.members.length === 2));
+  // ignorer les citations
+  const nq = evalWidget(cand.map((c) => c.t), { ...w, noQuotes: true }, { sv: null, now: NOW, rangeDays: null });
+  assert.equal(nq.n, 9, 'b, c et d citent un autre tweet : écartés (12 − 3)');
+  // opérateur de recherche équivalent
+  assert.equal(passesFilters(cand[1].t, parseQuery('quoted:no').filters), false);
+  assert.equal(passesFilters(cand[0].t, parseQuery('quoted:no').filters), true);
+  assert.equal(passesFilters(cand[1].t, parseQuery('cite:oui').filters), true);
+});

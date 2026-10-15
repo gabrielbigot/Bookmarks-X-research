@@ -127,12 +127,13 @@ const KINDS = { number: 'Nombre', series: 'Courbe', top: 'Classement' };
 const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
 const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
-const wQuery = (w) => [w.q, detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 // Ce qui est compté = éléments dont le jour (enregistrement / visionnage / ajout) tombe dans la période : le clic ouvre la même chose.
 const duringRange = () => { if (!range) return ''; const to = dayKey(Date.now()), from = dayKey(Date.now() - (range - 1) * 86_400_000); return `during:${from}..${to}`; };
 const withPeriod = (q) => [q, duringRange()].filter(Boolean).join(' ');
 const duringBucket = (k, g) => `during:${g === 'month' ? k + '-01..' + lastOfMonth(k) : g === 'week' ? k + '..' + shiftDay(k, 6) : k}`;
 const rangeLabel = () => (range ? RANGES.find(([v]) => v === range)[1] : 'tout');
+const groupedNote = (r) => (r.grouped ? `${fmtInt(r.n)} sujet${r.n > 1 ? 's' : ''} distinct${r.n > 1 ? 's' : ''} · ${fmtInt(r.tweets)} tweet${r.tweets > 1 ? 's' : ''}${r.limited ? ' · regroupement par le sens désactivé (trop d’éléments)' : ''}` : '');
 const delta = (n, prev) => (prev == null || (n === 0 && prev === 0) ? '' : prev === 0 ? (n ? 'nouveau' : '=') : `${n >= prev ? '▲' : '▼'} ${Math.abs(Math.round(((n - prev) / prev) * 100))} % vs période précédente`);
 
 const TEMPLATES = [
@@ -148,6 +149,7 @@ async function renderMine(app) {
   const needed = new Set(widgets.flatMap(detsOf));
   const { sets, missing } = await detectorSetsFor(needed);
   const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets };
+  if (widgets.some((w) => w.dedupe?.on)) ctx.vecs = (await loadVectors()).vecs; // regroupement par le sens
   let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button></div>`;
   if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
   const emptyDets = [...needed].filter((id) => sets.has(id) && sets.get(id).size === 0 && !missing.includes(detectors.find((d) => d.id === id)?.name)).map((id) => detectors.find((d) => d.id === id)?.name).filter(Boolean);
@@ -164,14 +166,14 @@ async function renderMine(app) {
         <div class="wact"><button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${i < widgets.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div></header>`;
       const headT = head.replace('</header>', '<button class="tbl-btn" type="button" aria-pressed="false" title="Afficher les valeurs en tableau">Tableau</button></header>');
       if (w.kind === 'number') {
-        html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
+        html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${groupedNote(r) ? `<p class="sub">${esc(groupedNote(r))}</p>` : ''}${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
       } else {
         const chart = w.kind === 'series'
           ? timeSeries(r.series.points, { gran: r.series.gran, label: 'éléments', onPick: (pt) => openQ(`${q} ${duringBucket(pt.k, r.series.gran)}`.trim()) })
           : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) });
         const id = 'c' + cards.length;
         cards.push({ id, chart });
-        html += `<section class="card mine wide" id="${id}">${headT}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
+        html += `<section class="card mine wide" id="${id}">${headT}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(groupedNote(r) || delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
       }
     });
     html += '</div>';
@@ -211,26 +213,34 @@ async function editWidget(i, init) {
     <div class="row"><label>Forme<select name="kind">${opt(KINDS, w.kind)}</select></label><label>Source<select name="source">${opt(SOURCES, w.source || 'all')}</select></label>
       <label class="byl">Regrouper par<select name="by">${opt(BYS, w.by || 'author')}</select></label></div>
     <label>Requête <span class="hint">mots (tous requis), <code>a | b</code> = l’un ou l’autre, <code>from:@x</code>, <code>has:link</code>, <code>lang:fr</code>, <code>playlist:"…"</code>, <code>viewed:no</code>…</span><input name="q" value="${esc(w.q)}" placeholder="vide = tout"></label>
+    <div class="jv dd"><label class="chk"><input type="checkbox" name="noq"${w.noQuotes ? ' checked' : ''}> Ignorer les tweets qui citent un autre tweet</label>
+      <label class="chk"><input type="checkbox" name="dd"${w.dedupe?.on ? ' checked' : ''}> Compter des sujets distincts <span class="hint">(plusieurs tweets sur le même sujet = un seul)</span></label>
+      <div id="ddbox"${w.dedupe?.on ? '' : ' hidden'}><span class="hint">Regroupés si : même tweet cité, même page citée, ou sens quasi identique à moins de quelques jours. Un sujet est daté de son premier enregistrement.</span>
+        <label>Ressemblance minimale ≥ <b id="dsv"></b> <input type="range" name="dsim" min="0.8" max="0.98" step="0.01" value="${w.dedupe?.sim ?? 0.92}"></label>
+        <label>Fenêtre : <b id="ddv"></b> jour(s) <input type="range" name="dday" min="1" max="30" step="1" value="${w.dedupe?.days ?? 7}"></label></div></div>
     <div class="dsel"><span class="lab">Détecteurs (sens) <span class="hint">facultatif — se combinent avec la requête</span></span>
       <div class="dlist">${detectors.map((x) => `<label class="chk"><input type="checkbox" name="dets" value="${x.id}"${w.dets.includes(x.id) ? ' checked' : ''}> ${esc(x.name)}</label>`).join('') || '<span class="muted">Aucun détecteur pour l’instant.</span>'}</div>
       <div class="row2"><label class="inl" id="dm">Combiner <select name="detMode"><option value="and"${w.detMode !== 'or' ? ' selected' : ''}>ET : tous les détecteurs cochés</option><option value="or"${w.detMode === 'or' ? ' selected' : ''}>OU : au moins un</option></select></label><button type="button" class="gbtn" id="ed-newdet">+ Nouveau détecteur</button></div></div>
     <div class="pv" id="pv">…</div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="ed-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
-  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode') }; };
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), noQuotes: fd.get('noq') === 'on', dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
   let timer = 0, seq = 0;
   const preview = async () => {
     const draft = read(), my = ++seq;
     f.querySelector('.byl').style.display = draft.kind === 'top' ? '' : 'none';
     f.querySelector('#dm').style.display = draft.dets.length > 1 ? '' : 'none';
+    $('ddbox').hidden = !draft.dedupe.on;
+    $('dsv').textContent = draft.dedupe.sim.toFixed(2); $('ddv').textContent = draft.dedupe.days;
     const { sets } = await detectorSetsFor(new Set(draft.dets));
+    const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
     if (my !== seq) return;
-    const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets });
+    const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs });
     const idm = byId();
     const sizes = draft.dets.map((id) => [detectors.find((x) => x.id === id)?.name || id, sets.get(id)?.size ?? 0]);
     const empty = sizes.filter(([, n]) => n === 0).map(([nm]) => nm);
     const warn = empty.length ? `<p class="warn">⚠ ${esc(empty.join(', '))} ne retien${empty.length > 1 ? 'nent' : 't'} <b>aucun élément</b> : le seuil est trop haut (ou les exemples n’ont pas été analysés). Ouvre « Détecteurs » › Modifier : une suggestion de seuil y est proposée.</p>` : sizes.length ? `<p class="muted">${sizes.map(([nm, n]) => `${esc(nm)} : ${fmtInt(n)} retenus au total`).join(' · ')}</p>` : '';
-    $('pv').innerHTML = `${warn}<b>${fmtInt(r.n)}</b> élément(s) sur la période (${esc(rangeLabel())})${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}</li>`).join('')}</ol>`;
+    $('pv').innerHTML = `${warn}<b>${fmtInt(r.n)}</b> ${r.grouped ? 'sujet(s) distinct(s)' : 'élément(s)'} sur la période (${esc(rangeLabel())})${r.grouped ? ` · ${fmtInt(r.tweets)} tweets regroupés${r.limited ? ' (regroupement par le sens désactivé : trop d’éléments)' : ''}` : ''}${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day, members }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}${members.length > 1 ? ` <span class="jvt y" title="${esc(members.map((m) => '@' + m.handle).join(', '))}">+ ${members.length - 1} similaire${members.length > 2 ? 's' : ''}</span>` : ''}</li>`).join('')}</ol>`;
   };
   f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
   f.addEventListener('change', preview);

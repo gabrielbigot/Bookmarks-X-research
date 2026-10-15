@@ -151,8 +151,64 @@ export function detectorMargin(scores, det, n = 8, verdicts = {}, learned = null
   return { above, below };
 }
 
+// ---- regroupement : plusieurs tweets sur le même sujet = un seul ----
+const EXT_SKIP = /^(x\.com|twitter\.com|t\.co|pic\.twitter\.com|mobile\.twitter\.com)$/;
+// pages citées (hors X, hors simple page d'accueil), sans paramètres de suivi
+export function linkKeys(t) {
+  const out = new Set();
+  for (const l of [...(t.links || []), ...(t.quoted?.links || [])]) {
+    try {
+      const u = new URL(l);
+      const h = u.hostname.replace(/^www\./, '').toLowerCase();
+      const path = u.pathname.replace(/\/$/, '');
+      if (!EXT_SKIP.test(h) && path) out.add(h + path);
+    } catch { /* lien illisible */ }
+  }
+  return out;
+}
+const dayMs = (d) => Date.parse(d + 'T12:00:00Z');
+
+// Union de candidats ([{ t, days }]) par : même tweet cité (ou citation d'un tweet déjà présent), même page citée,
+// vecteurs quasi identiques (≥ sim) à moins de `days` jours. Retourne { groups: [[indices]], limited }.
+export function clusterCandidates(cand, { sim = 0.92, days = 7, vecs = null, maxVec = 4000 } = {}) {
+  const parent = cand.map((_, i) => i);
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[Math.max(a, b)] = Math.min(a, b); };
+  const byKey = new Map();
+  const link = (key, i) => { if (byKey.has(key)) union(byKey.get(key), i); else byKey.set(key, i); };
+  const idIdx = new Map(cand.map((c, i) => [c.t.id, i]));
+  cand.forEach((c, i) => {
+    const q = c.t.quoted?.id;
+    if (q) { link('q:' + q, i); if (idIdx.has(q)) union(idIdx.get(q), i); } // même tweet cité, ou l'original est lui-même dans la liste
+    for (const k of linkKeys(c.t)) link('l:' + k, i);
+  });
+  let limited = false;
+  if (vecs && sim) {
+    const dated = cand.map((c, i) => ({ i, ms: c.days.length ? dayMs([...c.days].sort()[0]) : null, v: vecs.get(c.t.id) })).filter((x) => x.ms != null && x.v);
+    if (dated.length > maxVec) limited = true;
+    else {
+      dated.sort((a, b) => a.ms - b.ms);
+      const win = days * DAY;
+      for (let a = 0; a < dated.length; a++) {
+        for (let b = a + 1; b < dated.length && dated[b].ms - dated[a].ms <= win; b++) {
+          if (find(dated[a].i) === find(dated[b].i)) continue;
+          const u = dated[a].v, v = dated[b].v;
+          if (u.length !== v.length) continue;
+          let d = 0;
+          for (let k = 0; k < u.length; k++) d += u[k] * v[k];
+          if (d >= sim) union(dated[a].i, dated[b].i);
+        }
+      }
+    }
+  }
+  const groups = new Map();
+  cand.forEach((_, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(i); });
+  return { groups: [...groups.values()], limited };
+}
+
 // ---- évaluation d'une stat ----
-// w : { kind: 'number'|'series'|'top', q, det, source, by, ... } ; ctx : { sv, now, rangeDays, detSets: Map(id -> Set) }
+// w : { kind: 'number'|'series'|'top', q, dets, detMode, source, by, noQuotes, dedupe: { on, sim, days } }
+// ctx : { sv, now, rangeDays, detSets: Map(id -> Set), vecs: Map(id -> Float32Array) (regroupement par le sens) }
 export function evalWidget(items, w, ctx) {
   const now = ctx.now ?? Date.now();
   const cq = compileQuery(w.q, w.source);
@@ -166,25 +222,46 @@ export function evalWidget(items, w, ctx) {
   const prevFrom = R ? dayKey(now - (2 * R - 1) * DAY) : null;
   const inRange = (d) => (!fromKey || d >= fromKey) && d <= todayKey;
   const inPrev = (d) => R && d >= prevFrom && d < fromKey;
-  const perDay = new Map(), matched = [];
-  let n = 0, prev = 0, noDate = 0;
+
+  // 1) éléments qui correspondent
+  const cand = [];
   for (const t of items) {
     if (!inDets(t.id)) continue;
+    if (w.noQuotes && !isVideoItem(t) && t.quoted) continue; // « ignorer les tweets qui citent un autre tweet »
     if (!matchItem(t, cq)) continue;
-    const days = eventDays(t, ctx.sv);
-    if (!days.length) { noDate++; if (!R) { n++; matched.push({ t, day: '' }); } continue; }
+    cand.push({ t, days: eventDays(t, ctx.sv) });
+  }
+  // 2) unités comptées : un tweet, ou un groupe de tweets sur le même sujet (daté de son PREMIER enregistrement :
+  //    un sujet n'est jamais compté deux fois d'une période à l'autre)
+  const dd = w.dedupe?.on ? w.dedupe : null;
+  let units, limited = false;
+  if (dd) {
+    const cl = clusterCandidates(cand, { sim: dd.sim ?? 0.92, days: dd.days ?? 7, vecs: ctx.vecs });
+    limited = cl.limited;
+    units = cl.groups.map((idx) => {
+      const members = idx.map((k) => cand[k]);
+      const all = members.flatMap((m) => m.days).sort();
+      const rep = members.slice().sort((a, b) => ((a.days.slice().sort()[0] || '9') < (b.days.slice().sort()[0] || '9') ? -1 : 1))[0];
+      return { rep: rep.t, days: all.length ? [all[0]] : [], members: members.map((m) => m.t) };
+    });
+  } else units = cand.map((c) => ({ rep: c.t, days: c.days, members: [c.t] }));
+
+  const perDay = new Map(), matched = [];
+  let n = 0, prev = 0, noDate = 0, tweets = 0;
+  for (const u of units) {
+    if (!u.days.length) { noDate++; if (!R) { n++; tweets += u.members.length; matched.push({ t: u.rep, day: '', members: u.members }); } continue; }
     let hit = null, p = false;
-    for (const d of days) {
+    for (const d of u.days) {
       if (inRange(d)) { count(perDay, d); if (!hit || d > hit) hit = d; }
       if (inPrev(d)) p = true;
     }
-    if (hit) { n++; matched.push({ t, day: hit }); }
+    if (hit) { n++; tweets += u.members.length; matched.push({ t: u.rep, day: hit, members: u.members }); }
     if (p) prev++;
   }
   matched.sort((a, b) => (a.day < b.day ? 1 : -1));
   const keys = [...perDay.keys()].sort();
   const startKey = fromKey || keys[0] || todayKey;
-  const out = { n, prev: R ? prev : null, noDate, matched, startKey, endKey: todayKey };
+  const out = { n, prev: R ? prev : null, noDate, matched, startKey, endKey: todayKey, tweets, grouped: !!dd, limited };
   if (w.kind === 'series') out.series = seriesFrom(perDay, startKey, todayKey);
   if (w.kind === 'top') {
     const groups = new Map(), names = new Map();

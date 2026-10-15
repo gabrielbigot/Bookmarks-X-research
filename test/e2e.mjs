@@ -960,6 +960,24 @@ assert.ok(await stats.locator('#ex-above .jvt:has-text("comme ton ✓")').count(
 await stats.uncheck('#dlg input[name="ln"]');
 await stats.waitForFunction(() => /76 élément\(s\) retenus au total/.test(document.getElementById('dstat')?.textContent || ''), null, { timeout: 10000 });
 await stats.click('#dlg button[value="cancel"]');
+
+// ---- sujets distincts : 3 familles de vecteurs dans les données simulées, mais les familles « mid » et « e1 » partagent des pages citées (blog1.example.com/pN) : elles fusionnent -> 2 sujets
+await stats.click('#w-add');
+await stats.fill('#dlg input[name="title"]', 'Sujets');
+await stats.fill('#dlg input[name="q"]', 'agents');
+await stats.check('#dlg input[name="dd"]');
+await stats.locator('#dlg input[name="dsim"]').evaluate((e) => { e.value = '0.98'; e.dispatchEvent(new Event('input', { bubbles: true })); });
+await stats.locator('#dlg input[name="dday"]').evaluate((e) => { e.value = '30'; e.dispatchEvent(new Event('input', { bubbles: true })); });
+try { await stats.waitForFunction(() => /2 sujet\(s\) distinct\(s\)/.test(document.getElementById('pv')?.textContent || '') && /300 tweets regroupés/.test(document.getElementById('pv')?.textContent || ''), null, { timeout: 15000 }); } catch (e) { console.log('PV:', await stats.locator('#pv').innerText(), await stats.evaluate(() => localStorage.getItem('xbs.stats.range'))); throw e; }
+assert.ok(await stats.locator('#pv .jvt:has-text("similaire")').count() > 0, 'les groupes montrent « + N similaires »');
+await stats.click('#dlg #ed-ok');
+await waitFor(async () => /2 sujets distincts · 300 tweets/.test(await stats.locator('.card.mine:has-text("Sujets")').innerText()), 'carte « 2 sujets distincts · 300 tweets »', 10000);
+assert.equal(Number((await stats.locator('.card.mine:has-text("Sujets") .bignum').innerText()).replace(/\D/g, '')), 2);
+// l'option « ignorer les citations » existe et se retrouve dans la requête ouverte
+await stats.locator('.card.mine:has-text("Sujets") [data-act="edit"]').click();
+await stats.check('#dlg input[name="noq"]');
+await stats.click('#dlg #ed-ok');
+await waitFor(async () => /quoted:no/.test(await stats.locator('.card.mine:has-text("Sujets") .sub').first().innerText()), 'requête avec quoted:no', 8000);
 await stats.evaluate(() => localStorage.removeItem('xbs.stats.src'));
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
 
