@@ -126,7 +126,7 @@ async function embedTexts(texts) {
   return out;
 }
 
-const KINDS = { number: 'Nombre', series: 'Courbe / comparaison', top: 'Classement', ratio: 'Ratio (A ÷ B)', heat: 'Carte de chaleur (jour × heure)', trend: 'Tendances (ce qui monte)' };
+const KINDS = { compare: 'Comparaison de stats', number: 'Nombre', series: 'Courbe / comparaison', top: 'Classement', ratio: 'Ratio (A ÷ B)', heat: 'Carte de chaleur (jour × heure)', trend: 'Tendances (ce qui monte)' };
 const VIZ = { bars: 'Barres', stacked: 'Barres empilées', lines: 'Courbes', area: 'Aires' };
 const TVIZ = { bars: 'Barres', donut: 'Anneau' };
 const SIZES = { '': 'Taille automatique', 1: 'Petite', 2: 'Moyenne', 3: 'Grande', all: 'Pleine largeur' };
@@ -211,7 +211,7 @@ async function renderMine(app) {
   if (widgets.some((w) => w.dedupe?.on)) ctx.vecs = (await loadVectors()).vecs; // regroupement par le sens
   if (!allBoards().some((b) => b.id === board)) board = 'main';
   let html = `<div class="boards">${allBoards().map((b) => `<button type="button" class="bt${b.id === board ? ' on' : ''}" data-b="${esc(b.id)}">${esc(b.name)}</button>`).join('')}<button type="button" class="bt add" id="b-add">+ Tableau</button>${board !== 'main' ? '<button type="button" class="bt" id="b-ren">Renommer</button><button type="button" class="bt" id="b-del">Supprimer</button>' : '<button type="button" class="bt" id="b-ren">Renommer</button>'}</div>`;
-  html += `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><select id="tpl-sel" class="gbtn" title="Ajouter une stat toute prête"><option value="">+ Modèle…</option>${TEMPLATES.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('')}</select><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button><button type="button" class="gbtn" id="p-manage">Sources primaires (${primaryList.length})</button></div>`;
+  html += `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="pbtn alt" id="w-cmp" title="Superposer plusieurs de tes stats sur un même graphique">⇄ Comparer des stats</button><select id="tpl-sel" class="gbtn" title="Ajouter une stat toute prête"><option value="">+ Modèle…</option>${TEMPLATES.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('')}</select><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button><button type="button" class="gbtn" id="p-manage">Sources primaires (${primaryList.length})</button></div>`;
   if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
   const emptyDets = [...needed].filter((id) => sets.has(id) && sets.get(id).size === 0 && !missing.includes(detectors.find((d) => d.id === id)?.name)).map((id) => detectors.find((d) => d.id === id)?.name).filter(Boolean);
   if (emptyDets.length) html += `<p class="note">⚠ Détecteur(s) <b>${esc(emptyDets.join(', '))}</b> : aucun élément retenu. Le seuil est probablement trop haut : ouvre « Détecteurs » › Modifier, une suggestion de seuil y est proposée.</p>`;
@@ -226,7 +226,7 @@ async function renderMine(app) {
       const nb = mine.findIndex(([, j]) => j === i);
       const goal = Number(w.goal) || 0;
       const act = (chart) => `<div class="wact"><button type="button" class="grab" data-act="grab" data-i="${i}" title="Glisser pour déplacer">⠿</button>${chart ? `<button type="button" data-act="csv" data-i="${i}" title="Exporter les valeurs (CSV)">CSV</button><button type="button" data-act="png" data-i="${i}" title="Exporter l’image (PNG)">PNG</button>` : ''}<button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${nb ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${nb < mine.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div>`;
-      const head = (chart, extra = '') => `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind] || w.kind)} · ${esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}${extra}</p></div>${act(chart)}</header>`;
+      const head = (chart, extra = '') => `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind] || w.kind)}${w.kind === 'compare' ? '' : ' · ' + esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}${extra}</p></div>${act(chart)}</header>`;
       const headT = (extra) => head(true, extra).replace('</header>', '<button class="tbl-btn" type="button" aria-pressed="false" title="Afficher les valeurs en tableau">Tableau</button></header>');
       const goalBar = (v) => (goal > 0 ? `<div class="goal${v >= goal ? ' done' : ''}" title="objectif ${goal}"><i style="width:${Math.min(100, (v / goal) * 100)}%"></i></div><p class="sub">objectif ${fmtInt(goal)} · ${Math.round((v / goal) * 100)} %${v >= goal ? ' ✓ atteint' : ''}</p>` : '');
       const cls = `card mine sz-${sizeOf(w)}`;
@@ -241,10 +241,12 @@ async function renderMine(app) {
         const pc = b.n ? (a.n / b.n) * 100 : null, pp = b.prev ? (a.prev / b.prev) * 100 : null;
         const f1 = (v) => (v == null ? '–' : v.toFixed(v < 10 ? 1 : 0).replace('.', ','));
         html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(wQuery(defs[0].def)))}" title="Ouvrir le numérateur dans la recherche">${f1(pc)} %</button><span class="dl">${pc != null && pp != null ? esc(`${pc >= pp ? '▲' : '▼'} ${Math.abs(pc - pp).toFixed(1).replace('.', ',')} pt vs période précédente`) : ''}</span></div>${goalBar(pc || 0)}<p class="sub">${esc(defs[0].label)} : ${fmtInt(a.n)} · ${esc(defs[1].label)} : ${fmtInt(b.n)}</p></div></section>`;
-      } else if (w.kind === 'series') {
-        const multi = evalMulti(everything, w, ctx);
+      } else if (w.kind === 'series' || w.kind === 'compare') {
+        const cmp = w.kind === 'compare';
+        const multi = evalMulti(everything, cmp ? { ...w, refDefs: refDefsOf(w) } : w, ctx);
+        if (cmp && multi.series.length < 2) { html += `<section class="${cls}" data-i="${i}"><div>${head(false)}<p class="note">Les stats comparées ont été supprimées : ouvre ✎ pour en choisir d’autres.</p></div></section>`; return; }
         const r0 = multi.series[0];
-        const legacy = !w.viz && !(w.more || []).length && !w.split && !w.cumul && !w.pct && !w.prev && !goal;
+        const legacy = !cmp && !w.viz && !(w.more || []).length && !w.split && !w.cumul && !w.pct && !w.prev && !goal;
         const chart = legacy
           ? timeSeries(seriesFromVals(multi), { gran: multi.gran, label: 'éléments', onPick: (pt) => openQ(`${q} ${duringBucket(pt.k, multi.gran)}`.trim()) })
           : multiSeries(multi, { viz: w.viz || (multi.series.length > 1 ? 'lines' : 'bars'), cumul: !!w.cumul, ma: !!w.ma, pct: !!w.pct, prev: !!w.prev, goal, label: 'éléments', onPick: (si, k, g) => openQ(`${seriesQuery(w, si, multi)} ${duringBucket(k, g)}`.trim()) });
@@ -275,6 +277,7 @@ async function renderMine(app) {
   app.innerHTML = html;
   app.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openQ(b.dataset.open)));
   $('w-add').onclick = () => editWidget(null);
+  $('w-cmp').onclick = () => editCompare(null);
   $('d-manage').onclick = () => manageDetectors();
   $('p-manage').onclick = () => manageSources();
   app.querySelectorAll('[data-b]').forEach((b) => (b.onclick = () => { board = b.dataset.b; try { localStorage.setItem('xbs.stats.board', board); } catch {} render(); }));
@@ -327,7 +330,7 @@ async function renderMine(app) {
     if (a === 'grab') { b.addEventListener('pointerdown', () => { const c = b.closest('.card'); c.draggable = true; }); return; }
     b.onclick = async () => {
       const sameBoard = (j) => boardOf(widgets[j]) === boardOf(widgets[i]);
-      if (a === 'edit') return editWidget(i);
+      if (a === 'edit') return widgets[i].kind === 'compare' ? editCompare(i) : editWidget(i);
       if (a === 'csv' || a === 'png') { const c = cards.find((x) => x.id === b.closest('.card').id); if (!c) return; return a === 'csv' ? exportCsv(c.chart, c.title) : exportPng(document.getElementById(c.id), c.title); }
       if (a === 'dup') widgets.splice(i + 1, 0, { ...structuredClone(widgets[i]), id: uid(), title: widgets[i].title + ' (copie)' });
       if (a === 'up') { let j = i - 1; while (j >= 0 && !sameBoard(j)) j--; if (j >= 0) [widgets[j], widgets[i]] = [widgets[i], widgets[j]]; }
@@ -341,6 +344,40 @@ async function renderMine(app) {
 function seriesFromVals(multi) {
   const v = multi.series[0].vals;
   return multi.keys.map((k, i) => ({ k, n: v[i], ma: v.slice(Math.max(0, i - 6), i + 1).reduce((a, b) => a + b, 0) / Math.min(7, i + 1) }));
+}
+
+// ---------- comparaison de stats existantes ----------
+const comparable = () => widgets.filter((x) => x.kind === 'number' || x.kind === 'series');
+const refDefsOf = (w) => (w.refs || []).map((id) => widgets.find((x) => x.id === id)).filter((x) => x && (x.kind === 'number' || x.kind === 'series'))
+  .map((x) => ({ def: { ...x, more: undefined, split: undefined, slabel: undefined, kind: 'number' }, label: x.title || 'Sans titre' }));
+function editCompare(i) {
+  const w = i === null ? { id: uid(), board, kind: 'compare', title: '', refs: [], viz: 'lines' } : { ...widgets[i] };
+  const d = dialog();
+  const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
+  const list = comparable();
+  d.innerHTML = `<form method="dialog" class="ed"><h3>${i === null ? 'Comparer des stats' : 'Modifier la comparaison'}</h3>
+    <label>Nom<input name="title" value="${esc(w.title)}" placeholder="Ex. : Robotique vs IA"></label>
+    <div class="dsel"><span class="lab">Stats à comparer <span class="hint">coche-en au moins deux ; le graphique suit leurs réglages (requête, détecteurs, regroupement…)</span></span>
+      <div class="dlist">${list.map((x) => `<label class="chk"><input type="checkbox" name="refs" value="${x.id}"${(w.refs || []).includes(x.id) ? ' checked' : ''}> ${esc(x.title || 'Sans titre')} <span class="hint">${esc(KINDS[x.kind])}${x.kind === 'series' && (x.more || []).length ? ' · seule la première série est reprise' : ''}</span></label>`).join('') || '<span class="muted">Aucune stat « Nombre » ou « Courbe » pour l’instant.</span>'}</div></div>
+    <div class="vopts"><label>Affichage <select name="viz">${opt(VIZ, w.viz || 'lines')}</select></label>
+      <label class="chk"><input type="checkbox" name="cumul"${w.cumul ? ' checked' : ''}> Cumul</label>
+      <label class="chk"><input type="checkbox" name="ma"${w.ma ? ' checked' : ''}> Lissage 7 j</label>
+      <label class="chk"><input type="checkbox" name="pct"${w.pct ? ' checked' : ''}> Parts en %</label>
+      <label class="chk"><input type="checkbox" name="prev"${w.prev ? ' checked' : ''}> Période précédente en pointillés</label>
+      <label>Taille <select name="size">${opt(SIZES, w.size || '')}</select></label></div>
+    <p class="warn" id="cmp-warn" hidden>Choisis au moins deux stats.</p>
+    <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="cmp-ok">Créer le graphique</button></menu></form>`;
+  const f = d.querySelector('form');
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), refs: fd.getAll('refs'), viz: fd.get('viz'), cumul: fd.get('cumul') === 'on', ma: fd.get('ma') === 'on', pct: fd.get('pct') === 'on', prev: fd.get('prev') === 'on', size: fd.get('size') || '' }; };
+  $('cmp-ok').addEventListener('click', (ev) => { if (read().refs.length < 2) { ev.preventDefault(); $('cmp-warn').hidden = false; } });
+  d.onclose = async () => {
+    if (d.returnValue !== 'ok') return;
+    const nw = read();
+    if (!nw.title) nw.title = nw.refs.map((id) => widgets.find((x) => x.id === id)?.title).filter(Boolean).join(' vs ') || 'Comparaison';
+    if (i === null) widgets.push(nw); else widgets[i] = nw;
+    await saveWidgets(); render();
+  };
+  d.showModal();
 }
 
 // ---------- éditeur d'une stat ----------
@@ -357,7 +394,7 @@ async function editWidget(i, init) {
   const opt = (map, cur) => Object.entries(map).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${esc(v)}</option>`).join('');
   d.innerHTML = `<form method="dialog" class="ed"><h3>${i === null ? 'Nouvelle stat' : 'Modifier la stat'}</h3>
     <label>Nom<input name="title" value="${esc(w.title)}" placeholder="Ex. : Lancements"></label>
-    <div class="row"><label>Forme<select name="kind">${opt(KINDS, w.kind)}</select></label><label>Source<select name="source">${opt(SOURCES, w.source || 'all')}</select></label>
+    <div class="row"><label>Forme<select name="kind">${opt(Object.fromEntries(Object.entries(KINDS).filter(([k]) => k !== 'compare')), w.kind)}</select></label><label>Source<select name="source">${opt(SOURCES, w.source || 'all')}</select></label>
       <label class="byl">Regrouper par<select name="by">${opt(BYS, w.by || 'author')}</select></label></div>
     <div id="optbox" class="jv dd">
       <div class="vopts" id="vseries"><label>Affichage <select name="viz">${opt(VIZ, w.viz || '')}</select></label>

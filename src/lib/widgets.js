@@ -358,7 +358,7 @@ export function seriesDefs(w) {
 export function evalMulti(items, w, ctx) {
   const now = ctx.now ?? Date.now();
   const R = ctx.rangeDays, todayKey = dayKey(now);
-  const defs = seriesDefs(w);
+  const defs = w.refDefs || seriesDefs(w); // refDefs : comparaison de stats existantes (fournie par l'appelant)
   let S;
   if (w.split && !(w.more || []).length) {
     const r = evalWidget(items, { ...defs[0].def, split: w.split, kind: 'number' }, ctx);

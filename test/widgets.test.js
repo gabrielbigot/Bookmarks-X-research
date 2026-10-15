@@ -364,3 +364,12 @@ test('comparaison de séries, découpage, période précédente, chaleur, tendan
   assert.equal(evalWidget(xs, { kind: 'trend', by: 'word', q: '' }, { ...ctx, rangeDays: null }).trendOk, false);
   assert.deepEqual(groupKeys('word', xs[0]).sort(), ['humanoid', 'launch', 'robot']);
 });
+
+test('comparaison de stats existantes : refDefs fournit les séries', () => {
+  const mk = (id, text, daysAgo) => ({ ...tw(id, text, daysAgo), createdAt: new Date(NOW - daysAgo * DAY).toISOString() });
+  const xs = [mk('a', 'robot arm', 1), mk('b', 'robot leg', 2), mk('c', 'llm model', 2)];
+  const refDefs = [{ def: { kind: 'number', q: 'robot' }, label: 'Robots' }, { def: { kind: 'number', q: 'llm' }, label: 'IA' }];
+  const m = evalMulti(xs, { kind: 'compare', refDefs }, { sv: savedInfo(xs, NOW), now: NOW, rangeDays: 7 });
+  assert.deepEqual(m.series.map((s) => [s.label, s.n]), [['Robots', 2], ['IA', 1]]);
+  assert.equal(m.keys.length, 7);
+});

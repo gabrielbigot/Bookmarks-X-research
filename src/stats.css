@@ -181,3 +181,4 @@ dialog::backdrop{background:#0008}
 .msrow .dl2{grid-column:1/-1;font-size:13px}
 .vopts{display:flex;flex-wrap:wrap;gap:6px 16px;margin:6px 0}
 .exp{margin-left:4px}
+.pbtn.alt{background:transparent;color:var(--acc);border:1.5px solid var(--acc)}

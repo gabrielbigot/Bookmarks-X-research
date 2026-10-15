@@ -1030,6 +1030,13 @@ await stats.selectOption('#tpl-sel', { label: 'Langues' });
 await waitFor(async () => (await stats.locator('.card.mine').count()) === 1, 'stat ajoutée au nouveau tableau', 8000);
 await stats.click('.boards .bt[data-b="main"]');
 await waitFor(async () => (await stats.locator('.card.mine:has-text("X vs YouTube")').count()) === 1, 'retour au tableau Général', 8000);
+// comparaison de stats existantes : on coche deux stats, le graphique se génère
+await stats.click('#w-cmp');
+await stats.locator('#dlg input[name="refs"]').nth(0).check();
+await stats.locator('#dlg input[name="refs"]').nth(1).check();
+await stats.fill('#dlg input[name="title"]', 'Ma comparaison');
+await stats.click('#dlg #cmp-ok');
+await waitFor(async () => (await stats.locator('.card.mine:has-text("Ma comparaison") svg.chart').count()) === 1 && (await stats.locator('.card.mine:has-text("Ma comparaison") .legend li').count()) >= 2, 'graphique de comparaison de deux stats', 10000);
 // mise à jour automatique : un message « nouvelles données » recharge l'affichage sans toucher à rien
 await stats.evaluate(() => { document.querySelector('.mine-bar').dataset.m = '1'; });
 await panel.evaluate(() => chrome.runtime.sendMessage({ type: 'tweetsAdded', added: 1 }));
