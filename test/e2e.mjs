@@ -1030,6 +1030,12 @@ await stats.selectOption('#tpl-sel', { label: 'Langues' });
 await waitFor(async () => (await stats.locator('.card.mine').count()) === 1, 'stat ajoutée au nouveau tableau', 8000);
 await stats.click('.boards .bt[data-b="main"]');
 await waitFor(async () => (await stats.locator('.card.mine:has-text("X vs YouTube")').count()) === 1, 'retour au tableau Général', 8000);
+// condition libre posée à Jev : le décompte « à juger » apparaît dès qu'on la saisit (nouvelle condition = rien n'est encore jugé)
+await stats.locator('.card.mine:has-text("Sujets") [data-act="edit"]').first().click();
+await stats.fill('#dlg textarea[name="jd"]', 'Le tweet annonce une nouveauté sur les agents');
+await waitFor(async () => /(\d[\d\s\u202f]*) tweet\(s\) candidat\(s\), (\d[\d\s\u202f]*) à juger, 0 déjà jugé/.test(await stats.locator('#offmsg').innerText()), 'décompte des tweets à juger pour la condition', 10000);
+assert.ok(!/^Pour cette condition : 0 tweet/.test(await stats.locator('#offmsg').innerText()), 'des candidats existent');
+await stats.click('#dlg button[value="cancel"]');
 // comparaison de stats existantes : on coche deux stats, le graphique se génère
 await stats.click('#w-cmp');
 await stats.locator('#dlg input[name="refs"]').nth(0).check();

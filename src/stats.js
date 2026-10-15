@@ -491,27 +491,37 @@ async function editWidget(i, init) {
     const sizes = draft.dets.map((id) => [detectors.find((x) => x.id === id)?.name || id, sets.get(id)?.size ?? 0]);
     const empty = sizes.filter(([, n]) => n === 0).map(([nm]) => nm);
     const warn = empty.length ? `<p class="warn">⚠ ${esc(empty.join(', '))} ne retien${empty.length > 1 ? 'nent' : 't'} <b>aucun élément</b> : le seuil est trop haut (ou les exemples n’ont pas été analysés). Ouvre « Détecteurs » › Modifier : une suggestion de seuil y est proposée.</p>` : sizes.length ? `<p class="muted">${sizes.map(([nm, n]) => `${esc(nm)} : ${fmtInt(n)} retenus au total`).join(' · ')}</p>` : '';
+    if (!offAbort) {
+      const cond = condOf(draft);
+      if (cond) { const { targets, candidates } = await offTargets(draft); if (my === seq) offMsg(`Pour cette condition : ${fmtInt(candidates)} tweet(s) candidat(s), ${fmtInt(targets.length)} à juger, ${fmtInt(candidates - targets.length)} déjà jugé(s).`); }
+      else offMsg('');
+    }
+    if (my !== seq) return;
     $('pv').innerHTML = `${warn}${ser}<b>${fmtInt(r.n)}</b> ${r.grouped ? 'sujet(s) distinct(s)' : 'élément(s)'} sur la période (${esc(rangeLabel())})${r.grouped ? ` · ${fmtInt(r.tweets)} tweets regroupés${r.limited ? ' (regroupement par le sens désactivé : trop d’éléments)' : ''}` : ''}${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day, members }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}${members.length > 1 ? ` <span class="jvt y" title="${esc(members.map((m) => '@' + m.handle).join(', '))}">+ ${members.length - 1} similaire${members.length > 2 ? 's' : ''}</span>` : ''}</li>`).join('')}</ol>`;
   };
   f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
   f.addEventListener('change', preview);
   let offAbort = null;
   const offMsg = (t) => { $('offmsg').textContent = t; };
-  const offTargets = async (draft) => { // tweets à faire juger : tous les candidats si « annonces officielles », sinon seulement les membres de groupes
-    const { sets } = await detectorSetsFor(new Set(draft.dets));
+  // tweets à faire juger pour la condition du brouillon : tous les candidats (autres filtres passés, pas encore jugés pour CETTE condition) ;
+  // sans condition, seulement les membres de groupes de sujets similaires (Jev départage la source primaire)
+  const offTargets = async (draft) => {
+    const { sets } = await detectorSetsFor(new Set([...draft.dets, ...more.flatMap((m) => m.dets || [])]));
     const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
-    const r = evalWidget(everything, { ...draft, kind: 'number', officialOnly: false }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: null, detSets: sets, vecs, primary: primarySet(), official: official.m, conds: condMaps() });
-    const seen = new Map();
-    for (const u of r.matched) if (draft.officialOnly || u.members.length > 1) for (const t of u.members) if (!isVideoItem(t) && !(t.id in official.m)) seen.set(t.id, t);
-    return [...seen.values()];
+    const cond = condOf(draft), already = cond ? (cond === OFFICIAL_DESC ? official.m : conds[condKey(cond)]?.m || {}) : official.m;
+    const r = evalWidget(everything, { ...draft, kind: 'number', officialOnly: false, jevDesc: '' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: null, detSets: sets, vecs, primary: primarySet(), official: official.m, conds: condMaps() });
+    const seen = new Map(), cands = new Set();
+    for (const u of r.matched) for (const t of u.members) if (!isVideoItem(t)) { cands.add(t.id); if ((cond || u.members.length > 1) && !(t.id in already)) seen.set(t.id, t); }
+    return { targets: [...seen.values()], candidates: cands.size };
   };
   const offJudge = async () => {
     const settings = await getSettings(), draft = read();
     if (!decisionReady(settings)) return offMsg('Configure d’abord Jev (clé, modèle) dans ⚙ du panneau de recherche.');
     if (official.v !== OFFICIAL_DESC) official = { v: OFFICIAL_DESC, m: {} };
     const cond = condOf(draft) || OFFICIAL_DESC; // sans condition : Jev départage la source primaire de chaque groupe
-    const items = (await offTargets(draft)).map(judgeText);
-    if (!items.length) return offMsg(condOf(draft) ? 'Rien à juger : tout est déjà jugé.' : 'Rien à juger : aucun groupe de tweets similaires non jugés (active « sujets distincts » pour que Jev départage les groupes).');
+    const { targets, candidates } = await offTargets(draft);
+    const items = targets.map(judgeText);
+    if (!items.length) return offMsg(condOf(draft) ? (candidates ? `Rien à juger : les ${fmtInt(candidates)} tweets candidats ont déjà un verdict pour cette condition.` : 'Aucun tweet ne passe les autres filtres de la stat (requête, détecteurs, citations ignorées, sources primaires) : rien à envoyer à Jev.') : 'Rien à juger : aucun groupe de tweets similaires non jugés (active « sujets distincts » pour que Jev départage les groupes).');
     const est = estimateJudgeCost(cond, items.map((x) => x.text), settings.decision.priceInPerM);
     if (!confirm(`Envoyer le texte de ${items.length} tweet(s) à ${settings.decision.url} (modèle ${settings.decision.model}) ?\nJev répondra à : « ${cond.slice(0, 160)}${cond.length > 160 ? '…' : ''} »\nCoût estimé : ${fmtDollars(est.dollars)} (≈ ${Math.round(est.tokens / 1000)} k tokens d’entrée ; la sortie est gratuite). Chaque tweet est jugé une seule fois.`)) return;
     offAbort = new AbortController();
