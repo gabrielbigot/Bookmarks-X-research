@@ -57,13 +57,34 @@ export function detectorScores(vecMap, chunkMap, protos) {
   }
   return out;
 }
+// Les verdicts de Jev dépendent de la description : si elle change, ils ne valent plus.
+export const verdictKey = (det) => (det.desc || '').trim().toLowerCase();
+export const CONFIRM_BAND = 0.08;
+const bandOf = (det) => det.confirm?.band ?? CONFIRM_BAND;
+
 // Éléments retenus : score ≥ seuil, plus ceux que tu as validés (✓), moins ceux que tu as écartés (✗).
-export function detectorSet(scores, det) {
+// Avec la confirmation (det.confirm.on) : au-dessus de seuil + marge = retenu ; en dessous de seuil − marge = écarté ;
+// dans la marge (cas ambigu) = verdict de Jev (≥ 50 % : retenu) ; sans verdict encore, le seuil seul décide.
+// verdicts : { id: pourcentage « oui » }
+export function detectorSet(scores, det, verdicts = {}) {
   const set = new Set();
-  for (const [id, s] of scores) if (s >= det.threshold) set.add(id);
+  const on = !!det.confirm?.on, band = bandOf(det);
+  for (const [id, s] of scores) {
+    if (!on) { if (s >= det.threshold) set.add(id); continue; }
+    if (s >= det.threshold + band) set.add(id);
+    else if (s >= det.threshold - band) { const v = verdicts[id]; if (v === undefined ? s >= det.threshold : v >= 50) set.add(id); }
+  }
   for (const id of det.pos || []) set.add(id);
   for (const id of det.neg || []) set.delete(id);
   return set;
+}
+// Cas ambigus pas encore jugés, les plus incertains d'abord (hors validations manuelles).
+export function ambiguousIds(scores, det, verdicts = {}) {
+  const fixed = new Set([...(det.pos || []), ...(det.neg || [])]);
+  const band = bandOf(det);
+  const rows = [];
+  for (const [id, s] of scores) if (!fixed.has(id) && verdicts[id] === undefined && Math.abs(s - det.threshold) <= band) rows.push([id, Math.abs(s - det.threshold)]);
+  return rows.sort((a, b) => a[1] - b[1]).map(([id]) => id);
 }
 // Pour régler le seuil : les moins sûrs retenus et les plus proches écartés (hors validations manuelles).
 export function detectorMargin(scores, det, n = 8) {

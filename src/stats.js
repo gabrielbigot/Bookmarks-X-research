@@ -2,7 +2,10 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo } from './lib/time.js';
-import { evalWidget, detectorScores, detectorSet, detectorMargin, textOf, slugOf } from './lib/widgets.js';
+import { evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
+import { jevJudge } from './lib/jev.js';
+import { decodeEntities } from './lib/text.js';
+import { decisionReady } from './lib/settings.js';
 import { computeStats, TYPE_LABELS } from './lib/stats.js';
 import { bindThemeButton } from './lib/theme.js';
 import { isVideoItem } from './lib/youtube.js';
@@ -12,7 +15,7 @@ import { timeSeries, cumulative, columns, hbars, stacked, calendar, sparkline, e
 const $ = (id) => document.getElementById(id);
 const RANGES = [[1, '1 j'], [7, '7 j'], [30, '30 j'], [90, '90 j'], [365, '1 an'], [null, 'Tout']];
 const RKEY = 'xbs.stats.range';
-let all = [], videos = [], everything = [], range = 90, src = 'x', widgets = [], detectors = [];
+let all = [], videos = [], everything = [], range = 90, src = 'x', widgets = [], detectors = [], verdicts = {};
 try { const v = localStorage.getItem('xbs.stats.src'); src = v === 'yt' || v === 'mine' ? v : 'x'; } catch {}
 try { const v = localStorage.getItem(RKEY); if (v !== null) range = v === 'all' ? null : Number(v); } catch {}
 
@@ -69,6 +72,9 @@ const lastOfMonth = (ym) => { const [y, m] = ym.split('-').map(Number); return `
 // =====================================================================================================================
 const saveWidgets = () => setMeta('dashWidgets', widgets);
 const saveDetectors = () => setMeta('dashDetectors', detectors);
+const saveVerdicts = () => setMeta('detVerdicts', verdicts);
+// verdicts de Jev valables pour ce détecteur (la description a pu changer depuis)
+const verdictsOf = (det) => (verdicts[det.id]?.key === verdictKey(det) ? verdicts[det.id].v : {});
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
 const byId = () => new Map(everything.map((t) => [t.id, t]));
 
@@ -95,7 +101,7 @@ async function detectorSetsFor(ids) {
     const det = detectors.find((d) => d.id === id);
     if (!det) continue;
     const sc = await scoresOf(det);
-    if (!sc) { missing.push(det.name); out.set(id, new Set()); } else out.set(id, detectorSet(sc, det));
+    if (!sc) { missing.push(det.name); out.set(id, new Set()); } else out.set(id, detectorSet(sc, det, verdictsOf(det)));
   }
   return { sets: out, missing };
 }
@@ -248,13 +254,18 @@ async function editDetector(k, init, backTo) {
     <label>Description <span class="hint">une phrase : ce que tu cherches</span><input name="desc" value="${esc(det.desc)}"></label>
     <label>Exemples <span class="hint">un par ligne, dans n’importe quelle langue (plus il y en a de variés, mieux c’est)</span><textarea name="examples" rows="5">${esc(det.examples.join('\n'))}</textarea></label>
     <label>Seuil de ressemblance <b id="thv"></b> <span class="hint">plus bas = plus de résultats, moins sûrs</span><input type="range" name="th" min="0.2" max="0.9" step="0.01" value="${det.threshold}"></label>
+    <div class="jv"><label class="chk"><input type="checkbox" name="cf"${det.confirm?.on ? ' checked' : ''}> Faire confirmer les cas ambigus par Jev <span class="hint">(facultatif : un modèle de décision tranche les éléments proches du seuil)</span></label>
+      <div id="jvbox" ${det.confirm?.on ? '' : 'hidden'}><label>Zone ambiguë ± <b id="bdv"></b> autour du seuil <input type="range" name="bd" min="0.03" max="0.2" step="0.01" value="${det.confirm?.band ?? CONFIRM_BAND}"></label>
+        <div id="jvstat" class="muted"></div>
+        <div class="row2"><label class="inl">Appels au plus <input type="number" name="mx" min="1" max="5000" value="50" style="width:90px"></label><button type="button" class="gbtn" id="jv-go">Juger maintenant</button><button type="button" class="gbtn" id="jv-stop" hidden>Arrêter</button></div>
+        <div id="jvmsg" class="muted"></div></div></div>
     <div id="dstat" class="muted">Analyse…</div>
     <div class="cols"><div><h4>Retenus (les moins sûrs)</h4><ul class="ex" id="ex-above"></ul></div><div><h4>Écartés (les plus proches)</h4><ul class="ex" id="ex-below"></ul></div></div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="d-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
   const idm = byId();
   const texts = () => { const fd = new FormData(f); return [fd.get('desc').trim(), ...fd.get('examples').split('\n').map((x) => x.trim())].filter(Boolean); };
-  const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')) }; };
+  const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')), confirm: { on: fd.get('cf') === 'on', band: Number(fd.get('bd')) } }; };
   let current = null, seq = 0, embedTimer = 0, protoErr = '';
   const { mid } = await loadVectors();
   const protoKeyOf = (arr) => arr.join('␞');
@@ -262,10 +273,17 @@ async function editDetector(k, init, backTo) {
     const dd = draft();
     $('thv').textContent = dd.threshold.toFixed(2);
     if (!current) return;
-    const set = detectorSet(current, dd);
+    const vd = verdictsOf(dd);
+    const set = detectorSet(current, dd, vd);
+    $('bdv').textContent = dd.confirm.band.toFixed(2);
+    $('jvbox').hidden = !dd.confirm.on;
+    if (dd.confirm.on) {
+      const pend = ambiguousIds(current, dd, vd).length, judged = Object.keys(vd).length;
+      $('jvstat').textContent = `${fmtInt(pend)} cas ambigu(s) à juger · ${fmtInt(judged)} déjà jugé(s) par Jev (jamais redemandés)`;
+    }
     $('dstat').textContent = `${fmtInt(set.size)} élément(s) retenus au total (sur ${fmtInt(current.size)} avec un vecteur) · ${dd.pos.length} validé(s), ${dd.neg.length} écarté(s) à la main`;
     const { above, below } = detectorMargin(current, dd, 8);
-    const li = (id, s, tag) => { const t = idm.get(id); return `<li><span class="sc">${s.toFixed(2)}</span> ${esc(t ? textOf(t) : id)} <span class="vb"><button type="button" data-v="ok" data-id="${esc(id)}" title="Oui, c’en est un">✓</button><button type="button" data-v="no" data-id="${esc(id)}" title="Non">✗</button></span></li>`; };
+    const li = (id, s, tag) => { const t = idm.get(id); const v = vd[id]; return `<li><span class="sc">${s.toFixed(2)}</span>${v !== undefined ? ` <span class="jvt ${v >= 50 ? 'y' : 'n'}" title="Verdict de Jev">Jev ${v >= 50 ? 'oui' : 'non'} ${v} %</span>` : ''} ${esc(t ? textOf(t) : id)} <span class="vb"><button type="button" data-v="ok" data-id="${esc(id)}" title="Oui, c’en est un">✓</button><button type="button" data-v="no" data-id="${esc(id)}" title="Non">✗</button></span></li>`; };
     $('ex-above').innerHTML = above.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
     $('ex-below').innerHTML = below.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
   };
@@ -285,7 +303,41 @@ async function editDetector(k, init, backTo) {
       lists();
     } catch (e) { protoErr = e.message; $('dstat').textContent = '⚠ ' + e.message; }
   };
-  f.addEventListener('input', (ev) => { if (ev.target.name === 'th') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
+  f.addEventListener('input', (ev) => { if (ev.target.name === 'th' || ev.target.name === 'bd' || ev.target.name === 'cf') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
+  let abort = null;
+  const judge = async () => {
+    const dd = draft(), settings = await getSettings();
+    const msg = (t) => { $('jvmsg').textContent = t; };
+    if (!decisionReady(settings)) return msg('Configure d’abord Jev (clé, modèle) dans ⚙ du panneau de recherche.');
+    if (!current) return msg('Les exemples n’ont pas encore été analysés.');
+    if (!dd.desc) return msg('Ajoute une description : c’est elle qui est posée à Jev.');
+    const vd = verdictsOf(dd);
+    const max = Math.max(1, Number(new FormData(f).get('mx')) || 50);
+    const ids = ambiguousIds(current, dd, vd).slice(0, max);
+    // vie privée : pas d'historique de visionnage envoyé à un service externe sauf autorisation
+    const sendable = (t) => settings.aiHistory || !isVideoItem(t) || !(t.watched || []).length || (t.playlists || []).length > 0;
+    const items = ids.map((id) => idm.get(id)).filter((t) => t && sendable(t)).map((t) => ({ id: t.id, text: isVideoItem(t) ? `${t.text} — ${t.name}${t.desc ? ' — ' + t.desc : ''}` : `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}${t.quoted ? ' | cite : ' + decodeEntities(t.quoted.text) : ''}` }));
+    if (!items.length) return msg('Rien à juger pour l’instant.');
+    if (!confirm(`Envoyer le texte de ${items.length} élément(s) à ${settings.decision.url} (modèle ${settings.decision.model}) pour confirmation ?\nChaque élément est jugé une seule fois ; les verdicts sont conservés.`)) return;
+    abort = new AbortController();
+    $('jv-go').disabled = true; $('jv-stop').hidden = false;
+    let done = 0;
+    try {
+      msg(`Jugement en cours… 0/${items.length}`);
+      const key = verdictKey(dd);
+      if (verdicts[det.id]?.key !== key) verdicts[det.id] = { key, v: {} };
+      const r = await jevJudge(settings.decision, dd.desc, items, { signal: abort.signal, onBatch: async (b) => {
+        for (const [id, p] of b) verdicts[det.id].v[id] = p;
+        done += b.size; msg(`Jugement en cours… ${done}/${items.length}`);
+        await saveVerdicts(); lists();
+      } });
+      msg(r.error ? `Terminé partiellement (${done}/${items.length}) : ${r.error}` : `Terminé : ${done} élément(s) jugé(s).`);
+    } catch (e) { msg('⚠ ' + e.message); } finally {
+      abort = null; $('jv-go').disabled = false; $('jv-stop').hidden = true; scoreCache.size; lists();
+    }
+  };
+  $('jv-go').onclick = judge;
+  $('jv-stop').onclick = () => abort?.abort();
   d.addEventListener('click', (ev) => {
     const b = ev.target.closest('button[data-v]');
     if (!b) return;
@@ -445,4 +497,4 @@ function finish(app) {
 
 drawSources();
 drawRanges();
-Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors')]).then(([t, w, dts]) => { everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
+Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts')]).then(([t, w, dts, vds]) => { verdicts = vds || {}; everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X

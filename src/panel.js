@@ -1,6 +1,6 @@
 import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
-import { detectorScores, detectorSet, slugOf } from './lib/widgets.js';
+import { detectorScores, detectorSet, slugOf, verdictKey } from './lib/widgets.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
@@ -131,11 +131,13 @@ async function resolveIs(filters) {
   const det = dets.find((d) => slugOf(d.name) === filters.is);
   if (!det) { filters.isIds = new Set(); return; } // détecteur inconnu : aucun résultat
   const mid = modelOf(settings.embedModel).id;
-  const key = `${det.id}|${mid}|${det.protoKey}|${det.threshold}|${det.pos?.length}|${det.neg?.length}`;
+  const vds = (await getMeta('detVerdicts')) || {};
+  const vd = vds[det.id]?.key === verdictKey(det) ? vds[det.id].v : {};
+  const key = `${det.id}|${mid}|${det.protoKey}|${det.threshold}|${det.pos?.length}|${det.neg?.length}|${det.confirm?.on}|${det.confirm?.band}|${Object.keys(vd).length}`;
   if (!detCache.has(key)) {
     const protos = (det.protos?.[mid] || []).map((a) => Float32Array.from(a));
     if (!protos.length) { filters.isIds = new Set(); return; }
-    detCache.set(key, detectorSet(detectorScores(await getAllVectors(mid), await getAllChunkVecs(mid), protos), det));
+    detCache.set(key, detectorSet(detectorScores(await getAllVectors(mid), await getAllChunkVecs(mid), protos), det, vd));
   }
   filters.isIds = detCache.get(key);
 }
@@ -1012,7 +1014,7 @@ const download = (bytes, name) => {
 async function buildBackup(pass) {
   const tweets = await getAllTweets();
   const extra = { saved };
-  const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [] };
+  const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [], verdicts: (await getMeta('detVerdicts')) || {} };
   if (dash.widgets.length || dash.detectors.length) extra.dash = dash;
   const trs = await getAllTranscriptRows();
   if (trs.length) extra.transcripts = trs.map((r) => ({ id: r.id, chunks: r.chunks, at: r.at, lang: r.lang }));
@@ -1042,6 +1044,9 @@ async function restoreBackup(bytes, pass) {
     const merge = (cur, inc) => { const m = new Map((cur || []).map((x) => [x.id, x])); for (const x of inc || []) if (x?.id && !m.has(x.id)) m.set(x.id, x); return [...m.values()]; };
     await setMeta('dashWidgets', merge(await getMeta('dashWidgets'), dash.widgets));
     await setMeta('dashDetectors', merge(await getMeta('dashDetectors'), dash.detectors));
+    const cur = (await getMeta('detVerdicts')) || {};
+    for (const [id, vd] of Object.entries(dash.verdicts || {})) cur[id] = cur[id]?.key === vd.key ? { key: vd.key, v: { ...vd.v, ...cur[id].v } } : cur[id] || vd; // les verdicts déjà payés ne sont jamais écrasés
+    await setMeta('detVerdicts', cur);
   }
   if (transcripts?.length) for (let i = 0; i < transcripts.length; i += 100) await putTranscriptRows(transcripts.slice(i, i + 100));
   const merged = [...new Set([...saved, ...sv])];

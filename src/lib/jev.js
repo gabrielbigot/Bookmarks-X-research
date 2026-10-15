@@ -109,3 +109,38 @@ export async function jevRerank(cfg, query, texts, { concurrency = 5 } = {}) {
   await Promise.all(Array.from({ length: Math.min(concurrency, texts.length) }, worker));
   return scores;
 }
+
+// ---- détecteurs : confirmation des cas ambigus ----
+const MATCH = (description) => ({
+  match: {
+    type: 'choice',
+    instructions: `Ce contenu correspond-il à la description suivante : « ${description} » ? Juge selon le sens et l'intention, pas seulement selon les mots présents.`,
+    criteria: { oui: 'Il correspond clairement à la description', non: 'Il ne correspond pas, ou seulement de loin' },
+  },
+});
+
+// items : [{ id, text }] -> Map id -> probabilité « oui » en pour cent (0..100). Appels en parallèle limités ;
+// onBatch(Map) est rappelé régulièrement (pour enregistrer au fil de l'eau) ; la première erreur d'accès interrompt tout.
+export async function jevJudge(cfg, description, items, { concurrency = 4, signal, onBatch, every = 20 } = {}) {
+  const out = new Map(), fresh = new Map();
+  const q = MATCH(description);
+  let next = 0, failed = null;
+  const worker = async () => {
+    while (next < items.length && !failed && !signal?.aborted) {
+      const it = items[next++];
+      try {
+        const a = await decide(cfg, { contenu: it.text.slice(0, 900) }, q, { signal });
+        const p = Math.round(probOf(a.match, 'oui') * 100);
+        out.set(it.id, p); fresh.set(it.id, p);
+        if (fresh.size >= every) { const b = new Map(fresh); fresh.clear(); await onBatch?.(b); }
+      } catch (e) {
+        if (signal?.aborted) return;
+        failed = failed || e;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  if (fresh.size) await onBatch?.(new Map(fresh));
+  if (failed && !out.size) throw failed; // rien n'a abouti : erreur d'accès (clé, quota…)
+  return { done: out, error: failed ? String(failed.message || failed) : '' };
+}

@@ -88,3 +88,43 @@ test('opérateur is: et ensemble résolu', () => {
   assert.equal(passesFilters(items[0], { isIds: new Set(['1']) }), true);
   assert.equal(passesFilters(items[1], { isIds: new Set(['1']) }), false);
 });
+
+import { ambiguousIds, verdictKey } from '../src/lib/widgets.js';
+import { jevJudge } from '../src/lib/jev.js';
+test('détecteur confirmé par Jev : marge, verdicts, cas ambigus', () => {
+  const sc = new Map([['hi', 0.9], ['m1', 0.58], ['m2', 0.52], ['m3', 0.47], ['lo', 0.2], ['m4', 0.43]]);
+  const det = { threshold: 0.5, confirm: { on: true, band: 0.1 }, desc: ' Lancement ', pos: [], neg: [] };
+  // sans verdict : le seuil seul décide dans la marge
+  assert.deepEqual([...detectorSet(sc, det)].sort(), ['hi', 'm1', 'm2']);
+  // avec verdicts : Jev tranche
+  const v = { m1: 10, m2: 80, m3: 95 };
+  assert.deepEqual([...detectorSet(sc, det, v)].sort(), ['hi', 'm2', 'm3']);
+  // sans confirmation, les verdicts sont ignorés
+  assert.deepEqual([...detectorSet(sc, { ...det, confirm: { on: false } }, v)].sort(), ['hi', 'm1', 'm2']);
+  // à juger : dans la marge, sans verdict, les plus incertains (proches du seuil) d'abord
+  assert.deepEqual(ambiguousIds(sc, det, v), ['m4']);
+  assert.deepEqual(ambiguousIds(sc, det, {}), ['m2', 'm3', 'm4', 'm1']);
+  assert.equal(verdictKey(det), 'lancement');
+});
+
+test('jevJudge : question « choice », pourcentages, enregistrement par lots, erreur d’accès', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push(body);
+    const yes = /oui-/.test(body.state.contenu);
+    return { ok: true, json: async () => ({ answers: { match: { choice: yes ? 'oui' : 'non', confidence: 0.9, probabilities: yes ? { oui: 0.9, non: 0.1 } : { oui: 0.2, non: 0.8 } } } }) };
+  };
+  const batches = [];
+  const items = Array.from({ length: 5 }, (_, i) => ({ id: 'i' + i, text: (i % 2 ? 'non-' : 'oui-') + i }));
+  const r = await jevJudge({ url: 'https://x/d', model: 'm', apiKey: 'k' }, 'Annonce d’un lancement', items, { concurrency: 2, every: 2, onBatch: async (b) => batches.push(b.size) });
+  assert.equal(r.done.get('i0'), 90);
+  assert.equal(r.done.get('i1'), 20);
+  assert.equal(r.done.size, 5);
+  assert.deepEqual(batches.reduce((a, b) => a + b, 0), 5, 'tous les verdicts passent par onBatch');
+  assert.equal(calls[0].questions.match.type, 'choice');
+  assert.match(calls[0].questions.match.instructions, /Annonce d’un lancement/);
+  assert.deepEqual(Object.keys(calls[0].questions.match.criteria), ['oui', 'non']);
+  globalThis.fetch = async () => ({ ok: false, status: 401, text: async () => 'clé invalide' });
+  await assert.rejects(() => jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'd', items), /HTTP 401/);
+});

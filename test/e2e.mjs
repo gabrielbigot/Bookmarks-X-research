@@ -162,6 +162,7 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         const crit = Object.keys(body.questions[key].criteria);
         let choice = crit.includes('none') ? 'none' : crit[0];
         if (key === 'sort') choice = 'newest';
+        if (key === 'match') { const n = Number(/numéro (\d+)/.exec(String(body.state?.contenu))?.[1]); choice = Math.floor(n / 6) % 2 === 0 ? 'oui' : 'non'; }
         if (key === 'pertinent') choice = String(body.state?.tweet).includes('persist') ? 'oui' : 'non';
         const probabilities = Object.fromEntries(crit.map((c) => [c, c === choice ? 0.92 : 0.08 / (crit.length - 1)]));
         answers[key] = { choice, confidence: 0.92, probabilities };
@@ -859,6 +860,50 @@ stats.on('dialog', (d) => d.accept());
 await stats.locator('.wact [data-act="del"]').nth(1).click();
 await stats.locator('.wact [data-act="del"]').first().click();
 await stats.waitForSelector('.tpl [data-tpl]');
+
+// ---- détecteur confirmé par Jev (vecteurs et exemples simulés : pas de modèle ici) ----
+await stats.evaluate(async () => {
+  const mid = 'onnx-community/embeddinggemma-300m-ONNX';
+  const e = (a, b) => { const v = new Float32Array(256); v[0] = a; v[1] = b; return v; };
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['vectors', 'meta'], 'readwrite');
+  for (let i = 0; i < 300; i++) tx.objectStore('vectors').put({ id: 's' + i, model: mid, vec: i % 6 === 0 ? e(1, 0) : i % 6 === 1 ? e(0.52, Math.sqrt(1 - 0.52 ** 2)) : e(0, 1) });
+  const det = { id: 'det1', name: 'Annonces', desc: 'Annonce', examples: ['Lancement'], threshold: 0.5, pos: [], neg: [], protoKey: 'Annonce\u241eLancement', protos: { [mid]: [Array.from(e(1, 0))] }, confirm: { on: true, band: 0.1 } };
+  tx.objectStore('meta').put({ key: 'dashDetectors', value: [det] });
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await stats.reload();
+await stats.waitForSelector('#d-manage');
+stats.removeAllListeners('dialog');
+stats.on('dialog', (d) => d.accept());
+jevLog.length = 0;
+await stats.click('#d-manage');
+await stats.click('#dlg [data-e="0"]');
+await stats.waitForFunction(() => /50 cas ambigu\(s\) à juger · 0 déjà jugé/.test(document.getElementById('jvstat')?.textContent || ''), null, { timeout: 15000 });
+await stats.fill('#dlg input[name="mx"]', '50');
+await stats.click('#jv-go');
+await stats.waitForFunction(() => /Terminé : 50 élément/.test(document.getElementById('jvmsg')?.textContent || ''), null, { timeout: 30000 });
+assert.match(await stats.locator('#jvstat').innerText(), /0 cas ambigu\(s\) à juger · 50 déjà jugé/);
+assert.equal(jevLog.length, 50, 'un appel Jev par cas ambigu (et pas un de plus) : ' + jevLog.length);
+assert.ok(jevLog.every((j) => j.auth === 'Bearer jev-key' && j.keys.join() === 'match'), 'question « match » uniquement');
+assert.match(await stats.locator('#dstat').innerText(), /75 élément\(s\) retenus au total/, '50 sûrs + 25 confirmés par Jev');
+assert.ok(await stats.locator('#ex-above .jvt').count() > 0, 'verdicts affichés dans la liste');
+await stats.click('#dlg #d-ok');
+// une stat reliée à ce détecteur : 75 éléments
+await stats.waitForSelector('#w-add');
+await stats.click('#w-add');
+await stats.fill('#dlg input[name="title"]', 'Annonces');
+await stats.selectOption('#dlg select[name="det"]', 'det1');
+await stats.waitForFunction(() => /75 élément\(s\)/.test(document.getElementById('pv')?.textContent || ''), null, { timeout: 8000 });
+await stats.click('#dlg #ed-ok');
+await waitFor(async () => Number((await stats.locator('.card.mine .bignum').first().innerText()).replace(/\D/g, '')) === 75, 'stat « Annonces » = 75', 8000);
+// rechargement : verdicts conservés, rien à redemander
+await stats.reload();
+await stats.waitForSelector('.card.mine .bignum');
+await stats.click('#d-manage');
+await stats.click('#dlg [data-e="0"]');
+await stats.waitForFunction(() => /0 cas ambigu\(s\) à juger · 50 déjà jugé/.test(document.getElementById('jvstat')?.textContent || ''), null, { timeout: 15000 });
+await stats.click('#dlg button[value="cancel"]');
 await stats.evaluate(() => localStorage.removeItem('xbs.stats.src'));
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
 
