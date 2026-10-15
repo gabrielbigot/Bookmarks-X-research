@@ -1,5 +1,5 @@
 // Jugement automatique par Jev des NOUVEAUX éléments, avec exactement les réglages de chaque détecteur et de chaque stat :
-//  - détecteurs utilisés par au moins une stat ET réglés « faire confirmer par Jev » : les cas ambigus (zone ± du détecteur) pas encore jugés ;
+//  - détecteurs utilisés par au moins une stat sans condition Jev ET réglés « faire confirmer par Jev » : les cas ambigus (zone ± du détecteur) pas encore jugés ;
 //  - stats « annonces officielles » : les tweets qui passent leurs filtres (requête, détecteurs, citations, sources primaires) pas encore jugés.
 // Plafond de dépenses par jour (estimation : la sortie de Jev est gratuite, l'entrée est facturée au million de tokens).
 import * as db from './db.js';
@@ -35,7 +35,8 @@ export async function runAutoJev(settings, { io = db, onProgress, signal, now = 
 
   const widgets = (await io.getMeta('dashWidgets')) || [];
   const detectors = (await io.getMeta('dashDetectors')) || [];
-  const used = usedDetectorIds(widgets);
+  // un détecteur n'est confirmé par Jev que s'il sert à au moins une stat SANS condition Jev : sinon la condition de la stat tranche déjà (pas de double emploi)
+  const used = usedDetectorIds(widgets.filter((w) => !condOf(w)));
   const mid = modelOf(settings.embedModel).id;
   const sendable = (t) => settings.aiHistory || !isVideoItem(t) || !(t.watched || []).length || (t.playlists || []).length > 0;
 

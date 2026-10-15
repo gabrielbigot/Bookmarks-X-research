@@ -430,3 +430,19 @@ test('condition libre posée à Jev : filtre la stat, jugée automatiquement, ra
   assert.equal(Object.keys(meta.get('jevConds')[condKey(w.jevDesc)].m).length, 2);
   void mid;
 });
+
+test('Jev automatique : pas de double emploi entre détecteur et condition de la stat', async () => {
+  const mid = modelOf('default').id;
+  const det = { id: 'd1', name: 'D', desc: 'sujet', threshold: 0.5, confirm: { on: true, band: 0.2 }, protos: { [mid]: [[1, 0, 0]] } };
+  const t1 = { id: '1', name: 'N', handle: 'h', text: 'tweet', createdAt: '2026-10-11', links: [], media: [], stats: {} };
+  const meta = new Map([['dashDetectors', [det]]]);
+  const io = { getMeta: async (k) => meta.get(k), setMeta: async (k, v) => { meta.set(k, v); }, getAllVectors: async () => new Map([['1', Float32Array.from([0.55, 0, 0])]]), getAllChunkVecs: async () => new Map(), getTweets: async () => [t1], eachTweet: async () => {} };
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return { ok: true, json: async () => ({ answers: { match: { choice: 'oui', confidence: 0.9, probabilities: { oui: 0.9, non: 0.1 } } } }) }; };
+  const settings = { embedModel: 'default', autoJev: { on: true, dailyCap: 1 }, decision: { url: 'u', model: 'm', apiKey: 'k', priceInPerM: 0.042 } };
+  meta.set('dashWidgets', [{ id: 'w', kind: 'number', dets: ['d1'], jevDesc: 'condition de la stat' }]);
+  assert.equal((await runAutoJev(settings, { io })).detectors, 0, 'la condition de la stat remplace la confirmation du détecteur');
+  assert.equal(calls, 0);
+  meta.set('dashWidgets', [{ id: 'w', kind: 'number', dets: ['d1'], jevDesc: 'condition de la stat' }, { id: 'w2', kind: 'number', dets: ['d1'] }]);
+  assert.equal((await runAutoJev(settings, { io })).detectors, 1, 'une autre stat sans condition garde la confirmation');
+});
