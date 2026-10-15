@@ -303,3 +303,32 @@ test('regroupement : même tweet cité, même page, sens quasi identique dans la
   assert.equal(passesFilters(cand[0].t, parseQuery('quoted:no').filters), true);
   assert.equal(passesFilters(cand[1].t, parseQuery('cite:oui').filters), true);
 });
+
+import { rankMembers, mentions, suggestPrimary } from '../src/lib/widgets.js';
+test('source primaire : commentaire qui nomme l’auteur relié à l’annonce, l’annonce passe en tête', () => {
+  const day = (n) => new Date(NOW - n * DAY).toISOString().slice(0, 10);
+  const o = (v) => { const n = Math.hypot(...v); return Float32Array.from(v.map((x) => x / n)); };
+  const official = { ...tw('o', 'we announced Jev 1.14 today', 1, { handle: 'typesafeai' }), stats: { likes: 100 } };
+  const comment = { ...tw('c', 'the @typesafeai team dropped a banger with jev image support', 1, { handle: 'dotpem' }), stats: { likes: 900 } };
+  const other = { ...tw('x', 'the @typesafeai cat is cute', 1, { handle: 'zed' }) };
+  const vecs = new Map([['o', o([1, 0.45, 0])], ['c', o([1, 0, 0])], ['x', o([0, 0, 1])]]); // o~c ≈ 0.91 : sous 0.92, au-dessus de 0.80
+  const cand = [official, comment, other].map((t) => ({ t, days: [day(1)] }));
+  const g = clusterCandidates(cand, { sim: 0.95, days: 7, vecs }).groups.map((x) => x.map((i) => cand[i].t.id).join('')).sort();
+  assert.deepEqual(g, ['oc', 'x'], 'le commentaire qui nomme l’auteur rejoint le groupe ; le hors-sujet reste seul');
+  assert.equal(clusterCandidates(cand, { sim: 0.95, days: 7, vecs, mentionSim: null }).groups.length, 3);
+  assert.ok(mentions(comment, '@TypeSafeAI') && !mentions(comment, 'type'));
+  // l'annonce passe avant le commentaire plus liké parce que l'autre la nomme ; une source déclarée ou jugée officielle prime
+  assert.equal(rankMembers([comment, official])[0].id, 'o');
+  assert.equal(rankMembers([comment, official], { primary: new Set(['dotpem']) })[0].id, 'c');
+  assert.equal(rankMembers([comment, official], { official: { c: 80, o: 10 } })[0].id, 'c');
+  const r = evalWidget([official, comment, other], { kind: 'number', q: '', dedupe: { on: true, sim: 0.95, days: 7 } }, { sv: null, now: NOW, rangeDays: null, vecs });
+  assert.equal(r.n, 2);
+  assert.equal(r.matched.find((m) => m.members.length > 1).t.id, 'o', 'le sujet est représenté par la source primaire');
+  assert.equal(evalWidget([official, comment, other], { kind: 'number', q: '', primaryOnly: true }, { sv: null, now: NOW, rangeDays: null, primary: new Set(['typesafeai']) }).n, 1);
+  assert.equal(evalWidget([official, comment, other], { kind: 'number', q: '', officialOnly: true }, { sv: null, now: NOW, rangeDays: null, official: { o: 90, c: 5 } }).n, 1);
+  assert.deepEqual(suggestPrimary([official, comment, other]).map((x) => x.handle), ['typesafeai']);
+  assert.equal(parseQuery('primary:oui official:non').filters.primary, true);
+  assert.equal(parseQuery('official:non').filters.official, false);
+  assert.equal(passesFilters(official, { primary: true, primarySet: new Set(['typesafeai']) }), true);
+  assert.equal(passesFilters(comment, { primary: true, primarySet: new Set(['typesafeai']) }), false);
+});

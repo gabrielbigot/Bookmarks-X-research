@@ -1,6 +1,6 @@
 import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog, planPlaylistDeletion, deletePlaylistData } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
-import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, eventDays, clusterCandidates } from './lib/widgets.js';
+import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, judgeText, eventDays, clusterCandidates, rankMembers, handleKey, OFFICIAL_DESC, OFFICIAL_MIN } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
@@ -8,7 +8,7 @@ import { interpret, findAuthors } from './lib/nlq.js';
 import { refresh, fullLoad } from './lib/store.js';
 import { getSettings, setSettings, llmReady, decisionReady } from './lib/settings.js';
 import { MODELS, modelOf } from './lib/models.js';
-import { jevIntent, jevRerank, decide, PERIOD_DAYS } from './lib/jev.js';
+import { jevIntent, jevRerank, jevJudge, estimateJudgeCost, fmtDollars, decide, PERIOD_DAYS } from './lib/jev.js';
 import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
 import { kmeans, labelClusters } from './lib/cluster.js';
 import { bindThemeButton } from './lib/theme.js';
@@ -139,7 +139,15 @@ async function detectorIdsFor(det, mid) {
   }
   return detCache.get(key);
 }
+let primaryCtx = { primary: new Set(), official: {} };
+async function loadPrimaryCtx() {
+  const [list, off] = await Promise.all([getMeta('primarySources'), getMeta('officialVerdicts')]);
+  primaryCtx = { primary: new Set((list || []).map(handleKey)), official: off?.v === OFFICIAL_DESC ? off.m || {} : {} };
+}
 async function resolveIs(filters) {
+  await loadPrimaryCtx();
+  if (filters.primary !== undefined) filters.primarySet = primaryCtx.primary;
+  if (filters.official !== undefined) filters.officialIds = new Set(Object.entries(primaryCtx.official).filter(([, p]) => p >= OFFICIAL_MIN).map(([id]) => id));
   if (filters.during) { // même notion de date que les stats (enregistrement, visionnage ou ajout)
     const { from, to } = filters.during;
     const sv = savedInfo(index.tweets.filter((t) => !isVideoItem(t)), Date.now());
@@ -536,8 +544,9 @@ function groupRows(rows, { sim, days }) {
   for (const [r] of rows) if (index.hasVec[r]) vecs.set(index.tweets[r].id, index.matrix.subarray(r * index.dim, (r + 1) * index.dim));
   const { groups } = clusterCandidates(cand, { sim, days, vecs });
   const out = groups.map((idx) => {
-    const members = idx.slice().sort((a, b) => (cand[b].t.stats?.likes || 0) - (cand[a].t.stats?.likes || 0) || a - b);
-    return { first: Math.min(...idx), rep: rows[members[0]], members: members.slice(1).map((k) => rows[k][0]) };
+    const ranked = rankMembers(idx.map((k) => cand[k].t), primaryCtx); // source primaire d'abord, puis le plus liké
+    const rowOf = new Map(idx.map((k) => [cand[k].t, rows[k]]));
+    return { first: Math.min(...idx), rep: rowOf.get(ranked[0]), members: ranked.slice(1).map((t) => rowOf.get(t)[0]) };
   }).sort((a, b) => a.first - b.first);
   return out.map((g) => [g.rep[0], g.rep[1], g.members]);
 }
@@ -608,6 +617,28 @@ function render() {
   const vr = viewRows();
   const n = last.rows.length;
   modeEl.textContent = last.label + (n ? (vr.length < n ? ` — ${vr.length} sujets (${n} tweets/vidéos regroupés)` : ` — ${n >= 200 ? '200+' : n} résultats`) : '');
+  if (vr.length < n && decisionReady(settings)) { // Jev départage la source primaire de chaque groupe (payant, à la demande)
+    const todo = vr.flatMap((g) => [g[0], ...(g[2] || [])]).map((r) => index.tweets[r]).filter((t) => t && !isVideoItem(t) && !(t.id in primaryCtx.official));
+    if (todo.length) {
+      const b = document.createElement('button');
+      b.className = 'ghost';
+      b.textContent = `Jev : repérer l’annonce officielle de chaque groupe (${todo.length})`;
+      b.onclick = async () => {
+        const items = todo.map(judgeText);
+        const est = estimateJudgeCost(OFFICIAL_DESC, items.map((x) => x.text), settings.decision.priceInPerM);
+        if (!confirm(`Envoyer le texte de ${items.length} tweet(s) à ${settings.decision.url} ?\nJev dira lesquels sont l’annonce de l’entreprise elle-même.\nCoût estimé : ${fmtDollars(est.dollars)} (sortie gratuite). Chaque tweet n’est jugé qu’une fois.`)) return;
+        b.disabled = true;
+        const cur = (await getMeta('officialVerdicts')) || {};
+        const store = cur.v === OFFICIAL_DESC ? cur : { v: OFFICIAL_DESC, m: {} };
+        let done = 0;
+        try {
+          await jevJudge(settings.decision, OFFICIAL_DESC, items, { onBatch: async (m) => { for (const [id, p] of m) store.m[id] = p; done += m.size; b.textContent = `Jugement… ${done}/${items.length}`; await setMeta('officialVerdicts', store); } });
+        } catch (e) { alert('Jev : ' + e.message); }
+        await loadPrimaryCtx(); last._g = null; render();
+      };
+      modeEl.append(' ', b);
+    }
+  }
   const au = last.meta?.authors;
   if (au?.length) {
     const b = document.createElement('button');

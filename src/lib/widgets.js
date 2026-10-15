@@ -166,11 +166,46 @@ export function linkKeys(t) {
   }
   return out;
 }
+export const OFFICIAL_DESC = 'Tweet publié par l’entreprise, l’équipe ou le créateur qui sort lui-même le produit ou le modèle, pour l’annoncer officiellement (et non un commentaire, une réaction, un test, un résumé ou un relais par un tiers)';
+export const OFFICIAL_MIN = 50; // % « oui » de Jev à partir duquel un tweet compte comme annonce officielle
+export const judgeText = (t) => ({ id: t.id, text: `${t.name} (@${t.handle}) : ${decodeEntities(t.text)}${t.quoted ? ' | cite : ' + decodeEntities(t.quoted.text) : ''}` });
+export const handleKey = (h) => String(h || '').replace(/^@/, '').toLowerCase();
+export function mentions(t, handle) {
+  const h = handleKey(handle);
+  return !!h && new RegExp('(^|[^\\w])@' + escRe(h) + '(?![\\w])', 'i').test(decodeEntities(t.text || ''));
+}
+// Source primaire d'un groupe : compte déclaré primaire > annonce officielle selon Jev > compte mentionné ou cité par les autres > le plus liké.
+// ctx : { primary: Set(handles), official: { id: pourcentage } }. Retourne les tweets triés, le meilleur d'abord.
+export function rankMembers(tweets, ctx = {}) {
+  const prim = ctx.primary || new Set(), off = ctx.official || {};
+  const score = (t) => {
+    const h = handleKey(t.handle);
+    const others = tweets.filter((o) => o !== t && !isVideoItem(o));
+    const cited = others.filter((o) => mentions(o, h) || handleKey(o.quoted?.handle) === h).length;
+    return [prim.has(h) ? 1 : 0, (off[t.id] ?? -1) >= OFFICIAL_MIN ? 1 : 0, cited, t.stats?.likes || 0];
+  };
+  const sc = new Map(tweets.map((t) => [t, score(t)]));
+  return tweets.slice().sort((a, b) => { const x = sc.get(a), y = sc.get(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; });
+}
+// Comptes les plus mentionnés/cités par les autres tweets enregistrés (candidats « source primaire »)
+export function suggestPrimary(tweets, n = 40) {
+  const own = new Map();
+  for (const t of tweets) if (!isVideoItem(t) && t.handle) own.set(handleKey(t.handle), (own.get(handleKey(t.handle)) || 0) + 1);
+  const cnt = new Map();
+  for (const t of tweets) {
+    if (isVideoItem(t)) continue;
+    const seen = new Set((decodeEntities(t.text || '').match(/@\w{1,15}/g) || []).map(handleKey));
+    if (t.quoted?.handle) seen.add(handleKey(t.quoted.handle));
+    seen.delete(handleKey(t.handle));
+    for (const h of seen) if (own.has(h)) cnt.set(h, (cnt.get(h) || 0) + 1);
+  }
+  return [...cnt.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([handle, mentionsN]) => ({ handle, n: mentionsN, tweets: own.get(handle) }));
+}
 const dayMs = (d) => Date.parse(d + 'T12:00:00Z');
 
 // Union de candidats ([{ t, days }]) par : même tweet cité (ou citation d'un tweet déjà présent), même page citée,
 // vecteurs quasi identiques (≥ sim) à moins de `days` jours. Retourne { groups: [[indices]], limited }.
-export function clusterCandidates(cand, { sim = 0.92, days = 7, vecs = null, maxVec = 4000 } = {}) {
+export function clusterCandidates(cand, { sim = 0.92, days = 7, vecs = null, maxVec = 4000, mentionSim = 0.8 } = {}) {
   const parent = cand.map((_, i) => i);
   const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
   const union = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[Math.max(a, b)] = Math.min(a, b); };
@@ -197,6 +232,10 @@ export function clusterCandidates(cand, { sim = 0.92, days = 7, vecs = null, max
           let d = 0;
           for (let k = 0; k < u.length; k++) d += u[k] * v[k];
           if (d >= sim) union(dated[a].i, dated[b].i);
+          else if (mentionSim && d >= mentionSim) { // commentaire d'un tiers qui nomme l'auteur de l'annonce, sur le même sujet
+            const ta = cand[dated[a].i].t, tb = cand[dated[b].i].t;
+            if (!isVideoItem(ta) && !isVideoItem(tb) && (mentions(ta, tb.handle) || mentions(tb, ta.handle))) union(dated[a].i, dated[b].i);
+          }
         }
       }
     }
@@ -228,6 +267,8 @@ export function evalWidget(items, w, ctx) {
   for (const t of items) {
     if (!inDets(t.id)) continue;
     if (w.noQuotes && !isVideoItem(t) && t.quoted) continue; // « ignorer les tweets qui citent un autre tweet »
+    if (w.primaryOnly && !isVideoItem(t) && !(ctx.primary || new Set()).has(handleKey(t.handle))) continue; // sources primaires déclarées
+    if (w.officialOnly && !isVideoItem(t) && (ctx.official?.[t.id] ?? -1) < OFFICIAL_MIN) continue; // annonces officielles selon Jev
     if (!matchItem(t, cq)) continue;
     cand.push({ t, days: eventDays(t, ctx.sv) });
   }
@@ -241,8 +282,8 @@ export function evalWidget(items, w, ctx) {
     units = cl.groups.map((idx) => {
       const members = idx.map((k) => cand[k]);
       const all = members.flatMap((m) => m.days).sort();
-      const rep = members.slice().sort((a, b) => ((a.days.slice().sort()[0] || '9') < (b.days.slice().sort()[0] || '9') ? -1 : 1))[0];
-      return { rep: rep.t, days: all.length ? [all[0]] : [], members: members.map((m) => m.t) };
+      const ranked = rankMembers(members.map((m) => m.t), ctx); // la source primaire représente le sujet
+      return { rep: ranked[0], days: all.length ? [all[0]] : [], members: ranked };
     });
   } else units = cand.map((c) => ({ rep: c.t, days: c.days, members: [c.t] }));
 

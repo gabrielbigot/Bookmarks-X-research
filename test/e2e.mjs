@@ -1001,6 +1001,14 @@ await stats.check('#dlg input[name="noq"]');
 await stats.click('#dlg #ed-ok');
 await waitFor(async () => /quoted:no/.test(await stats.locator('.card.mine:has-text("Sujets") .sub').first().innerText()), 'requête avec quoted:no', 8000);
 await stats.evaluate(() => localStorage.removeItem('xbs.stats.src'));
+// sources primaires : dialogue, suggestion, enregistrement ; l'option de stat existe
+await stats.click('#p-manage');
+await stats.fill('#dlg textarea[name="h"]', '@openai\n@anthropicai');
+await stats.click('#dlg button[value="ok"]');
+await waitFor(async () => /Sources primaires \(2\)/.test(await stats.locator('#p-manage').innerText()), 'bouton « Sources primaires (2) »', 8000);
+await stats.locator('.card.mine:has-text("Sujets") [data-act="edit"]').click();
+assert.ok(await stats.locator('#dlg input[name="po"]').count() === 1 && await stats.locator('#dlg input[name="oo"]').count() === 1 && await stats.locator('#off-go').count() === 1, 'options sources primaires / annonces officielles');
+await stats.click('#dlg button[value="cancel"]');
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
 
 // ---- recherche : regroupement des quasi-doublons (mêmes règles que les stats)

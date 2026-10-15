@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
-import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
+import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf, OFFICIAL_DESC, OFFICIAL_MIN, judgeText, suggestPrimary, handleKey } from './lib/widgets.js';
 import { jevJudge, estimateJudgeCost, fmtDollars } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
@@ -16,6 +16,9 @@ const $ = (id) => document.getElementById(id);
 const RANGES = [[1, '1 j'], [7, '7 j'], [30, '30 j'], [90, '90 j'], [365, '1 an'], [null, 'Tout']];
 const RKEY = 'xbs.stats.range';
 let all = [], videos = [], everything = [], range = 90, src = 'x', widgets = [], detectors = [], verdicts = {};
+let primaryList = [], official = { v: OFFICIAL_DESC, m: {} }; // sources primaires déclarées ; verdicts « annonce officielle » de Jev (% oui)
+const primarySet = () => new Set(primaryList.map(handleKey));
+const saveOfficial = () => setMeta('officialVerdicts', official);
 try { const v = localStorage.getItem('xbs.stats.src'); src = v === 'yt' || v === 'mine' ? v : 'x'; } catch {}
 try { const v = localStorage.getItem(RKEY); if (v !== null) range = v === 'all' ? null : Number(v); } catch {}
 
@@ -127,7 +130,7 @@ const KINDS = { number: 'Nombre', series: 'Courbe', top: 'Classement' };
 const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
 const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
-const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.dedupe?.on ? `dedupe:${w.dedupe.sim ?? 0.92},${w.dedupe.days ?? 7}` : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+const wQuery = (w) => [w.q, w.noQuotes ? 'quoted:no' : '', detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.primaryOnly ? 'primary:oui' : '', w.officialOnly ? 'official:oui' : '', w.dedupe?.on ? `dedupe:${w.dedupe.sim ?? 0.92},${w.dedupe.days ?? 7}` : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 // Ce qui est compté = éléments dont le jour (enregistrement / visionnage / ajout) tombe dans la période : le clic ouvre la même chose.
 const duringRange = () => { if (!range) return ''; const to = dayKey(Date.now()), from = dayKey(Date.now() - (range - 1) * 86_400_000); return `during:${from}..${to}`; };
 const withPeriod = (q) => [q, duringRange()].filter(Boolean).join(' ');
@@ -148,9 +151,9 @@ async function renderMine(app) {
   const sv = savedInfo(all, Date.now());
   const needed = new Set(widgets.flatMap(detsOf));
   const { sets, missing } = await detectorSetsFor(needed);
-  const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets };
+  const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets, primary: primarySet(), official: official.m };
   if (widgets.some((w) => w.dedupe?.on)) ctx.vecs = (await loadVectors()).vecs; // regroupement par le sens
-  let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button></div>`;
+  let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button><button type="button" class="gbtn" id="p-manage">Sources primaires (${primaryList.length})</button></div>`;
   if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
   const emptyDets = [...needed].filter((id) => sets.has(id) && sets.get(id).size === 0 && !missing.includes(detectors.find((d) => d.id === id)?.name)).map((id) => detectors.find((d) => d.id === id)?.name).filter(Boolean);
   if (emptyDets.length) html += `<p class="note">⚠ Détecteur(s) <b>${esc(emptyDets.join(', '))}</b> : aucun élément retenu. Le seuil est probablement trop haut : ouvre « Détecteurs » › Modifier, une suggestion de seuil y est proposée.</p>`;
@@ -182,6 +185,7 @@ async function renderMine(app) {
   app.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openQ(b.dataset.open)));
   $('w-add').onclick = () => editWidget(null);
   $('d-manage').onclick = () => manageDetectors();
+  $('p-manage').onclick = () => manageSources();
   app.querySelectorAll('[data-tpl]').forEach((b) => (b.onclick = async () => {
     if (b.dataset.tpl === 'launch') return editDetector(null, LAUNCH_DETECTOR);
     widgets.push({ id: uid(), ...TEMPLATES[+b.dataset.tpl] }); await saveWidgets(); render();
@@ -215,6 +219,9 @@ async function editWidget(i, init) {
     <label>Requête <span class="hint">mots (tous requis), <code>a | b</code> = l’un ou l’autre, <code>from:@x</code>, <code>has:link</code>, <code>lang:fr</code>, <code>playlist:"…"</code>, <code>viewed:no</code>…</span><input name="q" value="${esc(w.q)}" placeholder="vide = tout"></label>
     <div class="jv dd"><label class="chk"><input type="checkbox" name="noq"${w.noQuotes ? ' checked' : ''}> Ignorer les tweets qui citent un autre tweet</label>
       <label class="chk"><input type="checkbox" name="dd"${w.dedupe?.on ? ' checked' : ''}> Compter des sujets distincts <span class="hint">(plusieurs tweets sur le même sujet = un seul)</span></label>
+      <label class="chk"><input type="checkbox" name="po"${w.primaryOnly ? ' checked' : ''}> Ne compter que mes <b>sources primaires</b> <span class="hint">(comptes déclarés dans « Sources primaires » : ${primaryList.length})</span></label>
+      <label class="chk"><input type="checkbox" name="oo"${w.officialOnly ? ' checked' : ''}> Ne compter que les <b>annonces officielles</b> <span class="hint">(jugées par Jev : l’entreprise elle-même, pas un commentaire)</span></label>
+      <div id="offbox"><button type="button" class="gbtn" id="off-go">Faire juger par Jev</button> <button type="button" class="gbtn" id="off-stop" hidden>Arrêter</button> <span class="muted" id="offmsg"></span></div>
       <div id="ddbox"${w.dedupe?.on ? '' : ' hidden'}><span class="hint">Regroupés si : même tweet cité, même page citée, ou sens quasi identique à moins de quelques jours. Un sujet est daté de son premier enregistrement.</span>
         <label>Ressemblance minimale ≥ <b id="dsv"></b> <input type="range" name="dsim" min="0.8" max="0.98" step="0.01" value="${w.dedupe?.sim ?? 0.92}"></label>
         <label>Fenêtre : <b id="ddv"></b> jour(s) <input type="range" name="dday" min="1" max="30" step="1" value="${w.dedupe?.days ?? 7}"></label></div></div>
@@ -224,7 +231,7 @@ async function editWidget(i, init) {
     <div class="pv" id="pv">…</div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="ed-ok">Enregistrer</button></menu></form>`;
   const f = d.querySelector('form');
-  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), noQuotes: fd.get('noq') === 'on', dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
+  const read = () => { const fd = new FormData(f); return { ...w, title: fd.get('title').trim(), kind: fd.get('kind'), source: fd.get('source'), by: fd.get('by'), q: fd.get('q').trim(), dets: fd.getAll('dets'), detMode: fd.get('detMode'), noQuotes: fd.get('noq') === 'on', primaryOnly: fd.get('po') === 'on', officialOnly: fd.get('oo') === 'on', dedupe: { on: fd.get('dd') === 'on', sim: Number(fd.get('dsim')), days: Number(fd.get('dday')) } }; };
   let timer = 0, seq = 0;
   const preview = async () => {
     const draft = read(), my = ++seq;
@@ -235,7 +242,7 @@ async function editWidget(i, init) {
     const { sets } = await detectorSetsFor(new Set(draft.dets));
     const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
     if (my !== seq) return;
-    const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs });
+    const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets, vecs, primary: primarySet(), official: official.m });
     const idm = byId();
     const sizes = draft.dets.map((id) => [detectors.find((x) => x.id === id)?.name || id, sets.get(id)?.size ?? 0]);
     const empty = sizes.filter(([, n]) => n === 0).map(([nm]) => nm);
@@ -244,6 +251,38 @@ async function editWidget(i, init) {
   };
   f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
   f.addEventListener('change', preview);
+  let offAbort = null;
+  const offMsg = (t) => { $('offmsg').textContent = t; };
+  const offTargets = async (draft) => { // tweets à faire juger : tous les candidats si « annonces officielles », sinon seulement les membres de groupes
+    const { sets } = await detectorSetsFor(new Set(draft.dets));
+    const vecs = draft.dedupe.on ? (await loadVectors()).vecs : null;
+    const r = evalWidget(everything, { ...draft, kind: 'number', officialOnly: false }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: null, detSets: sets, vecs, primary: primarySet(), official: official.m });
+    const seen = new Map();
+    for (const u of r.matched) if (draft.officialOnly || u.members.length > 1) for (const t of u.members) if (!isVideoItem(t) && !(t.id in official.m)) seen.set(t.id, t);
+    return [...seen.values()];
+  };
+  const offJudge = async () => {
+    const settings = await getSettings(), draft = read();
+    if (!decisionReady(settings)) return offMsg('Configure d’abord Jev (clé, modèle) dans ⚙ du panneau de recherche.');
+    if (official.v !== OFFICIAL_DESC) official = { v: OFFICIAL_DESC, m: {} };
+    const items = (await offTargets(draft)).map(judgeText);
+    if (!items.length) return offMsg(draft.officialOnly ? 'Rien à juger : tout est déjà jugé.' : 'Rien à juger : aucun groupe de tweets similaires non jugés (active « sujets distincts » pour que Jev départage les groupes).');
+    const est = estimateJudgeCost(OFFICIAL_DESC, items.map((x) => x.text), settings.decision.priceInPerM);
+    if (!confirm(`Envoyer le texte de ${items.length} tweet(s) à ${settings.decision.url} (modèle ${settings.decision.model}) ?\nJev dira si chacun est l’annonce de l’entreprise elle-même.\nCoût estimé : ${fmtDollars(est.dollars)} (≈ ${Math.round(est.tokens / 1000)} k tokens d’entrée ; la sortie est gratuite). Chaque tweet est jugé une seule fois.`)) return;
+    offAbort = new AbortController();
+    $('off-go').disabled = true; $('off-stop').hidden = false;
+    let done = 0;
+    try {
+      offMsg(`Jugement en cours… 0/${items.length}`);
+      const r = await jevJudge(settings.decision, OFFICIAL_DESC, items, { signal: offAbort.signal, onBatch: async (b) => {
+        for (const [id, p] of b) official.m[id] = p;
+        done += b.size; offMsg(`Jugement en cours… ${done}/${items.length}`); await saveOfficial();
+      } });
+      offMsg(r.error ? `Interrompu (${done}/${items.length}) : ${r.error}` : `Terminé : ${done} tweet(s) jugé(s).`);
+    } catch (e) { offMsg('⚠ ' + e.message); } finally { offAbort = null; $('off-go').disabled = false; $('off-stop').hidden = true; preview(); }
+  };
+  $('off-go').onclick = offJudge;
+  $('off-stop').onclick = () => offAbort?.abort();
   $('ed-newdet').onclick = () => { d.close('cancel'); editDetector(null, { ...LAUNCH_DETECTOR, name: '', desc: '', examples: [] }, w); };
   d.onclose = async () => {
     if (d.returnValue !== 'ok') return;
@@ -254,6 +293,32 @@ async function editWidget(i, init) {
   };
   d.showModal();
   preview();
+}
+
+// ---------- sources primaires ----------
+// Comptes officiels (OpenAI, Anthropic…) : ils représentent un sujet avant les commentateurs, et une stat peut ne compter qu'eux.
+function manageSources() {
+  const d = dialog();
+  d.innerHTML = `<form method="dialog" class="ed"><h3>Sources primaires</h3>
+    <p class="hint">Un @compte par ligne. Quand plusieurs tweets parlent du même sujet, celui d’une source primaire est affiché en premier (recherche et stats), et une stat peut ne compter qu’elles.</p>
+    <textarea name="h" rows="10" placeholder="@openai&#10;@anthropicai">${esc(primaryList.map((h) => '@' + handleKey(h)).join('\n'))}</textarea>
+    <div class="row2"><button type="button" class="gbtn" id="ps-sug">Proposer d’après mes bookmarks</button><span class="muted" id="ps-msg"></span></div>
+    <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn">Enregistrer</button></menu></form>`;
+  const ta = d.querySelector('textarea');
+  const parse = () => [...new Set((ta.value.match(/@?[A-Za-z0-9_]{1,15}/g) || []).map(handleKey))];
+  $('ps-sug').onclick = () => {
+    const have = new Set(parse());
+    const sug = suggestPrimary(all, 40).filter((x) => !have.has(x.handle));
+    ta.value = [...parse().map((h) => '@' + h), ...sug.map((x) => '@' + x.handle)].join('\n');
+    $('ps-msg').textContent = sug.length ? `${sug.length} comptes ajoutés (les plus mentionnés par tes autres tweets) : supprime ceux qui ne sont pas des sources officielles.` : 'Aucune suggestion de plus.';
+  };
+  d.onclose = async () => {
+    if (d.returnValue !== 'ok') return;
+    primaryList = parse();
+    await setMeta('primarySources', primaryList);
+    render();
+  };
+  d.showModal();
 }
 
 // ---------- détecteurs ----------
@@ -558,4 +623,4 @@ function finish(app) {
 
 drawSources();
 drawRanges();
-Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts')]).then(([t0, w, dts, vds]) => { verdicts = vds || {}; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
+Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts')]).then(([t0, w, dts, vds, ps, ov]) => { verdicts = vds || {}; primaryList = ps || []; official = ov?.v === OFFICIAL_DESC ? ov : { v: OFFICIAL_DESC, m: {} }; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
