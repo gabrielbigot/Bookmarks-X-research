@@ -502,15 +502,15 @@ async function editWidget(i, init) {
     const warn = empty.length ? `<p class="warn">⚠ ${esc(empty.join(', '))} ne retien${empty.length > 1 ? 'nent' : 't'} <b>aucun élément</b> : le seuil est trop haut (ou les exemples n’ont pas été analysés). Ouvre « Détecteurs » › Modifier : une suggestion de seuil y est proposée.</p>` : sizes.length ? `<p class="muted">${sizes.map(([nm, n]) => `${esc(nm)} : ${fmtInt(n)} retenus au total`).join(' · ')}</p>` : '';
     if (!offAbort) {
       const cond = condOf(draft);
-      if (cond) { const { targets, candidates } = await offTargets(draft); if (my === seq) offMsg(`Pour cette condition : ${fmtInt(candidates)} tweet(s) candidat(s), ${fmtInt(targets.length)} à juger, ${fmtInt(candidates - targets.length)} déjà jugé(s).`); }
+      if (cond) { const { targets, candidates } = await offTargets(draft); if (my === seq) offMsg((offNote ? offNote + ' — ' : '') + `Pour cette condition : ${fmtInt(candidates)} tweet(s) candidat(s), ${fmtInt(targets.length)} à juger, ${fmtInt(candidates - targets.length)} déjà jugé(s).`); }
       else offMsg('');
     }
     if (my !== seq) return;
     $('pv').innerHTML = `${warn}${ser}<b>${fmtInt(r.n)}</b> ${r.grouped ? 'sujet(s) distinct(s)' : 'élément(s)'} sur la période (${esc(rangeLabel())})${r.grouped ? ` · ${fmtInt(r.tweets)} tweets regroupés${r.limited ? ' (regroupement par le sens désactivé : trop d’éléments)' : ''}` : ''}${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day, members }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}${members.length > 1 ? ` <span class="jvt y" title="${esc(members.map((m) => '@' + m.handle).join(', '))}">+ ${members.length - 1} similaire${members.length > 2 ? 's' : ''}</span>` : ''}</li>`).join('')}</ol>`;
   };
-  f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
+  f.addEventListener('input', (ev) => { if (ev.target.name === 'jd') offNote = ''; clearTimeout(timer); timer = setTimeout(preview, 250); });
   f.addEventListener('change', preview);
-  let offAbort = null;
+  let offAbort = null, offNote = ''; // offNote : bilan de la dernière passe (erreur comprise), conservé tant que la condition ne change pas
   const offMsg = (t) => { $('offmsg').textContent = t; };
   // tweets à faire juger pour la condition du brouillon : tous les candidats (autres filtres passés, pas encore jugés pour CETTE condition) ;
   // sans condition, seulement les membres de groupes de sujets similaires (Jev départage la source primaire)
@@ -544,8 +544,9 @@ async function editWidget(i, init) {
         for (const [id, p] of b) store.m[id] = p;
         done += b.size; offMsg(`Jugement en cours… ${done}/${items.length}`); await saveCond(cond);
       } });
-      offMsg(r.error ? `Interrompu (${done}/${items.length}) : ${r.error}` : `Terminé : ${done} tweet(s) jugé(s).`);
-    } catch (e) { offMsg('⚠ ' + e.message); } finally { offAbort = null; $('off-go').disabled = false; $('off-stop').hidden = true; preview(); }
+      offNote = r.error ? `⚠ Interrompu après ${done}/${items.length} : ${r.error}` : `Terminé : ${done} tweet(s) jugé(s).`;
+      offMsg(offNote);
+    } catch (e) { offNote = '⚠ ' + e.message; offMsg(offNote); } finally { offAbort = null; $('off-go').disabled = false; $('off-stop').hidden = true; preview(); }
   };
   $('off-go').onclick = offJudge;
   $('jd-off').onclick = () => { f.querySelector('textarea[name="jd"]').value = OFFICIAL_DESC; preview(); };

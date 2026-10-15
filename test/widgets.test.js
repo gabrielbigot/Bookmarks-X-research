@@ -446,3 +446,15 @@ test('Jev automatique : pas de double emploi entre détecteur et condition de la
   meta.set('dashWidgets', [{ id: 'w', kind: 'number', dets: ['d1'], jevDesc: 'condition de la stat' }, { id: 'w2', kind: 'number', dets: ['d1'] }]);
   assert.equal((await runAutoJev(settings, { io })).detectors, 1, 'une autre stat sans condition garde la confirmation');
 });
+
+test('Jev : limite de débit 429 -> on patiente et on réessaie au lieu d’arrêter toute la passe', async () => {
+  let n = 0;
+  globalThis.fetch = async () => (++n <= 4 ? { ok: false, status: 429, text: async () => 'rate limit' } : { ok: true, json: async () => ({ answers: { match: { choice: 'oui', confidence: 0.9, probabilities: { oui: 0.9, non: 0.1 } } } }) });
+  const r = await jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'd', [{ id: 'a', text: 'x' }], { concurrency: 1, retryMs: 1 });
+  assert.equal(r.error, '');
+  assert.equal(r.done.get('a'), 90);
+  n = -100;
+  globalThis.fetch = async () => ({ ok: false, status: 429, text: async () => 'rate limit' });
+  const r2 = await jevJudge({ url: 'u', model: 'm', apiKey: 'k' }, 'd', [{ id: 'a', text: 'x' }, { id: 'b', text: 'y' }], { concurrency: 1, retryMs: 1 }).catch((e) => ({ thrown: String(e.message) }));
+  assert.match(r2.thrown || r2.error, /429/);
+});

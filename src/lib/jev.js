@@ -132,7 +132,7 @@ const codeOf = (e) => Number(/HTTP (\d{3})/.exec(String(e?.message))?.[1]) || 0;
 
 // Politique d'erreurs : un contenu refusé (400, 413, 422) est ignoré (verdict -1, jamais redemandé) et le lot continue ;
 // limite de débit / erreur serveur : 2 nouvelles tentatives ; clé, quota ou accès refusés (401, 402, 403) : arrêt immédiat.
-export async function jevJudge(cfg, description, items, { concurrency = 4, signal, onBatch, every = 20 } = {}) {
+export async function jevJudge(cfg, description, items, { concurrency = 4, signal, onBatch, every = 20, retryMs = 1500 } = {}) {
   const out = new Map(), fresh = new Map();
   const q = MATCH(cleanText(description, 600));
   let next = 0, failed = null, skipped = 0;
@@ -149,7 +149,8 @@ export async function jevJudge(cfg, description, items, { concurrency = 4, signa
           if (signal?.aborted) return;
           const c = codeOf(e);
           if ([400, 413, 422].includes(c)) { skipped++; await record(it.id, -1); break; } // contenu refusé : on passe au suivant
-          if ((c === 429 || c >= 500 || c === 0) && attempt < 2) { await new Promise((r) => setTimeout(r, 800 * (attempt + 1))); continue; }
+          // limite de débit : on patiente de plus en plus (jusqu'à 6 essais) ; panne serveur / réseau : 2 essais
+          if ((c === 429 && attempt < 6) || ((c >= 500 || c === 0) && attempt < 2)) { await new Promise((r) => setTimeout(r, c === 429 ? Math.min(30_000, retryMs * 2 ** attempt) : (retryMs / 2) * (attempt + 1))); continue; }
           failed = failed || e; // accès refusé, quota, ou panne persistante : on arrête
           break;
         }
