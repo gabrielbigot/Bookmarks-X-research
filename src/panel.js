@@ -1,4 +1,4 @@
-import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
 import { detectorScores, detectorSet, slugOf, verdictKey } from './lib/widgets.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
@@ -865,6 +865,42 @@ if (embed) {
   window.addEventListener('message', (e) => { if (e.data?.xbs === 'focus') $('q').focus(); });
 }
 
+// ---------- playlists YouTube prises en compte ----------
+async function renderYtPlaylists() {
+  const box = $('ytpl-list');
+  const cat = await playlistCatalog();
+  const ex = new Set(settings.ytExcluded);
+  box.replaceChildren(...(cat.length ? cat : []).map((p) => {
+    const l = document.createElement('label');
+    l.className = 'chk';
+    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !ex.has(p.id) });
+    cb.dataset.id = p.id;
+    const sp = document.createElement('span');
+    sp.textContent = `${p.title} `;
+    const n = document.createElement('span');
+    n.className = 'hint'; n.textContent = `(${p.n} vidéo${p.n > 1 ? 's' : ''}${p.listed && p.listed > p.n ? ` sur ${p.listed}` : ''})`;
+    sp.append(n);
+    l.append(cb, sp);
+    return l;
+  }));
+  if (!cat.length) box.textContent = 'Aucune playlist connue : lance « ▶ Playlists YouTube ».';
+}
+async function setYtExcluded(ids) {
+  settings = await setSettings({ ytExcluded: ids });
+  const changed = await applyYtSelection(ids);
+  if (changed) { await load(true); run(); }
+  renderYtPlaylists();
+}
+$('ytpl-list').addEventListener('change', async (e) => {
+  const cb = e.target.closest('input[data-id]');
+  if (!cb) return;
+  const ex = new Set(settings.ytExcluded);
+  if (cb.checked) ex.delete(cb.dataset.id); else ex.add(cb.dataset.id);
+  await setYtExcluded([...ex]);
+});
+$('ytpl-all').onclick = () => setYtExcluded([]);
+$('ytpl-none').onclick = async () => setYtExcluded((await playlistCatalog()).map((p) => p.id));
+
 // ---------- réglages ----------
 const dlg = $('settings');
 async function openSettings() {
@@ -878,6 +914,7 @@ async function openSettings() {
   $('opt-images').checked = settings.imageSearch;
   $('opt-auto').checked = settings.autoSync;
   $('yt-days').value = String(settings.ytHistoryDays);
+  renderYtPlaylists();
   $('yt-trscope').value = settings.ytTranscripts;
   $('yt-trbatch').value = String(settings.ytTrBatch);
   $('yt-trspeed').value = settings.ytTrSpeed;
@@ -1040,6 +1077,7 @@ async function restoreBackup(bytes, pass) {
     for (let i = 0; i < entries.length; i += 2000) await putVectors(entries.slice(i, i + 2000), vectors.model);
     nVec = entries.length;
   }
+  await applyYtSelection(settings.ytExcluded); // les vidéos importées respectent les playlists décochées
   if (dash) {
     const merge = (cur, inc) => { const m = new Map((cur || []).map((x) => [x.id, x])); for (const x of inc || []) if (x?.id && !m.has(x.id)) m.set(x.id, x); return [...m.values()]; };
     await setMeta('dashWidgets', merge(await getMeta('dashWidgets'), dash.widgets));

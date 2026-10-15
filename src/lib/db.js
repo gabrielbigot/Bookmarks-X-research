@@ -3,7 +3,7 @@ const DB_NAME = 'xbs';
 const VERSION = 4;
 
 import { MODELS } from './models.js';
-import { mergeVideo, isVideoItem } from './youtube.js';
+import { mergeVideo, isVideoItem, videoOff } from './youtube.js';
 
 // Chaque modèle a son propre magasin de vecteurs : changer de modèle n'écrase jamais les vecteurs de l'autre.
 const VSTORES = ['vectors', 'vectors_gemma2'];
@@ -80,7 +80,8 @@ export async function pendingIds(model) {
     wrap(db.transaction(vstore(model)).objectStore(vstore(model)).getAllKeys()),
   ]);
   const have = new Set(v);
-  return t.filter((id) => !have.has(id));
+  const off = new Set(await scanTweets((x) => x.off)); // vidéos de playlists décochées : pas d'indexation
+  return t.filter((id) => !have.has(id) && !off.has(id));
 }
 
 export async function counts(model) {
@@ -192,7 +193,7 @@ export async function scanTweets(predicate) {
 }
 
 // Vidéos YouTube : fusion avec l'existant (appartenance aux playlists = union). Retourne le nombre de nouvelles vidéos.
-export async function putVideos(items) {
+export async function putVideos(items, excluded) {
   if (!items.length) return 0;
   const db = await openDb();
   const tx = db.transaction('tweets', 'readwrite');
@@ -201,14 +202,15 @@ export async function putVideos(items) {
   await Promise.all(items.map(async (it) => {
     const old = await wrap(store.get(it.id));
     if (!old) added++;
-    store.put({ ...mergeVideo(old, it), capturedAt: old?.capturedAt ?? Date.now() });
+    const m = mergeVideo(old, it);
+    store.put({ ...m, off: videoOff(m, excluded), capturedAt: old?.capturedAt ?? Date.now() });
   }));
   await done(tx);
   return added;
 }
 
 // Historique : retourne le nombre de NOUVEAUX couples (vidéo, jour) — sert à arrêter une synchro incrémentale.
-export async function putHistory(items) {
+export async function putHistory(items, excluded) {
   if (!items.length) return 0;
   const db = await openDb();
   const tx = db.transaction('tweets', 'readwrite');
@@ -217,7 +219,8 @@ export async function putHistory(items) {
   await Promise.all(items.map(async (it) => {
     const old = await wrap(store.get(it.id));
     if (it.watched?.length ? !(old?.watched || []).includes(it.watched[0]) : !old) fresh++;
-    store.put({ ...mergeVideo(old, it), capturedAt: old?.capturedAt ?? Date.now() });
+    const m = mergeVideo(old, it);
+    store.put({ ...m, off: videoOff(m, excluded), capturedAt: old?.capturedAt ?? Date.now() });
   }));
   await done(tx);
   return fresh;
@@ -286,7 +289,7 @@ export async function putTranscriptRows(rows) {
 
 // Vidéos à transcrire. scope : 'playlists' (dans au moins une playlist) | 'all' (+ historique).
 export async function pendingTranscriptIds(scope = 'playlists', limit = 400, now = Date.now()) {
-  const ids = await scanTweets((t) => isVideoItem(t) && !t.unavailable && (scope === 'all' || (t.playlists || []).length > 0)
+  const ids = await scanTweets((t) => isVideoItem(t) && !t.off && !t.unavailable && (scope === 'all' || (t.playlists || []).length > 0)
     && (!t.trState || (t.trState === 'none' && (t.trV !== TR_VERSION || now - (t.trAt || 0) > TR_RETRY))));
   return ids.slice(0, limit);
 }
@@ -311,7 +314,7 @@ export async function getChunkVecKeys(model) {
 // Vidéos avec transcription mais sans vecteurs de passages pour ce modèle.
 export async function pendingChunkIds(model) {
   const have = await getChunkVecKeys(model);
-  const trIds = await scanTweets((t) => t.trState === 'ok');
+  const trIds = await scanTweets((t) => t.trState === 'ok' && !t.off);
   return trIds.filter((id) => !have.has(id));
 }
 
@@ -338,4 +341,38 @@ export async function getChunkVecsFor(ids, model) {
   const st = db.transaction('chunkvecs').objectStore('chunkvecs');
   const rows = await Promise.all(ids.map((id) => wrap(st.get(id + '@' + model))));
   return new Map(rows.filter(Boolean).map((r) => [r.vid, { vecs: r.vecs, k: r.k }]));
+}
+
+// Recalcule le drapeau `off` de toutes les vidéos selon les playlists décochées. Retourne le nombre de vidéos modifiées.
+export async function applyYtSelection(excludedIds) {
+  const ex = new Set(excludedIds || []);
+  const db = await openDb();
+  let changed = 0;
+  const ids = await scanTweets((t) => isVideoItem(t) && !!t.off !== videoOff(t, ex));
+  for (let i = 0; i < ids.length; i += 500) {
+    const tx = db.transaction('tweets', 'readwrite');
+    const st = tx.objectStore('tweets');
+    await Promise.all(ids.slice(i, i + 500).map(async (id) => { const t = await wrap(st.get(id)); if (t) { st.put({ ...t, off: videoOff(t, ex) }); changed++; } }));
+    await done(tx);
+  }
+  return changed;
+}
+
+// Playlists connues : { id, title, n } (n = vidéos en base), complétées par les playlists découvertes (méta) et WL / LL.
+export async function playlistCatalog() {
+  const db = await openDb();
+  const map = new Map([['WL', { id: 'WL', title: 'À regarder plus tard', n: 0 }], ['LL', { id: 'LL', title: 'Vidéos que j’aime', n: 0 }]]);
+  for (const p of (await getMeta('ytPlaylists')) || []) map.set(p.id, { ...map.get(p.id), id: p.id, title: p.title || map.get(p.id)?.title || p.id, n: map.get(p.id)?.n || 0, listed: p.count || 0 });
+  await new Promise((res, rej) => {
+    const req = db.transaction('tweets').objectStore('tweets').openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return res();
+      const v = c.value;
+      if (typeof v.id === 'string' && v.id.startsWith('yt:')) for (const p of v.playlists || []) { const cur = map.get(p.id) || { id: p.id, title: p.title || p.id, n: 0 }; cur.n++; if (p.title && (!cur.title || cur.title === cur.id)) cur.title = p.title; map.set(p.id, cur); }
+      c.continue();
+    };
+    req.onerror = () => rej(req.error);
+  });
+  return [...map.values()].sort((a, b) => (a.id === 'WL' ? -1 : b.id === 'WL' ? 1 : a.id === 'LL' ? -1 : b.id === 'LL' ? 1 : a.title.localeCompare(b.title)));
 }

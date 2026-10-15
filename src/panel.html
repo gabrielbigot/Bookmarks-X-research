@@ -156,6 +156,9 @@
         <label class="chk"><input type="checkbox" id="opt-linkimg"><span>Afficher l'image des cartes de liens <span class="hint">(l'image est chargée depuis le site du lien ; décoche pour ne contacter personne)</span></span></label>
         <label class="chk"><input type="checkbox" id="opt-images"><span>Recherche dans les images <span class="hint">(expérimental, CLIP ~150 Mo, requêtes en anglais)</span></span></label>
         <label class="chk">Historique YouTube : profondeur de la synchro <select id="yt-days"><option value="30">30 jours</option><option value="90">90 jours</option><option value="365">1 an</option><option value="0">tout</option></select></label>
+        <div class="ytpl"><b>Playlists YouTube prises en compte</b> <span class="hint">(synchro, recherche, statistiques, indexation, transcriptions — décocher n'efface rien, la playlist revient en la recochant)</span>
+          <div class="row2"><button type="button" class="ghost" id="ytpl-all">Tout cocher</button><button type="button" class="ghost" id="ytpl-none">Tout décocher</button></div>
+          <div id="ytpl-list" class="ytpl-list">Chargement…</div></div>
         <label class="chk">Transcriptions YouTube : vidéos concernées <select id="yt-trscope"><option value="playlists">celles de mes playlists</option><option value="all">toutes (playlists + historique)</option></select></label>
         <label class="chk">Transcriptions : vitesse de récupération <select id="yt-trspeed"><option value="prudent">prudente (1 à la fois, lent)</option><option value="normal">normale (3 en parallèle)</option><option value="rapide">rapide (6 en parallèle)</option></select></label>
         <label class="chk">Transcriptions : vidéos par passage <select id="yt-trbatch"><option value="0">toutes (reprise possible)</option><option value="400">400</option><option value="2000">2 000</option></select></label>

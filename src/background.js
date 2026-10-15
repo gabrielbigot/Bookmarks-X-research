@@ -1,4 +1,4 @@
-import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pendingTranscriptIds, reconcilePlaylist, playlistCounts, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
+import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pendingTranscriptIds, reconcilePlaylist, playlistCounts, applyYtSelection, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
 import { toItem, toHistoryItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
 
@@ -195,6 +195,7 @@ async function ytReconcile(msg) {
   // Garde-fou : si l'état en mémoire a été perdu (redémarrage du service worker), on n'efface RIEN.
   if (!seen || !seen.size || seen.size < (msg.count || 0) * 0.9) return;
   const orphans = await reconcilePlaylist(msg.playlistId, seen);
+  await applyYtSelection((await getSettings()).ytExcluded);
   if (orphans.length) {
     const cur = (await getMeta('orphans')) || [];
     await setMeta('orphans', [...new Set([...cur, ...orphans])]);
@@ -227,7 +228,7 @@ async function ytStart(mode, opts = {}) {
     }
   }
   for (let i = 0; i < 10; i++) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, counts, speed: mode === 'transcripts' ? (await getSettings()).ytTrSpeed : undefined, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, counts, excluded: (await getSettings()).ytExcluded, speed: mode === 'transcripts' ? (await getSettings()).ytTrSpeed : undefined, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
     catch { await new Promise((r) => setTimeout(r, 1000)); }
   }
   return { ok: false, reason: 'no-content-script' };
@@ -263,12 +264,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (!m.has(msg.playlist.id)) m.set(msg.playlist.id, new Set());
         for (const it of items) m.get(msg.playlist.id).add(it.id);
       }
-      putVideos(items).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } broadcast({ type: 'tweetsUpdated' }); sendResponse({ fresh: added }); }, () => sendResponse({ fresh: null }));
+      getSettings().then((st) => putVideos(items, new Set(st.ytExcluded))).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } broadcast({ type: 'tweetsUpdated' }); sendResponse({ fresh: added }); }, () => sendResponse({ fresh: null }));
       return true;
     }
     case 'ytHistory': {
       const items = msg.videos.map((v) => toHistoryItem(v, v.day || null));
-      putHistory(items).then((fresh) => {
+      getSettings().then((st) => putHistory(items, new Set(st.ytExcluded))).then((fresh) => {
         if (fresh) { broadcast({ type: 'tweetsAdded', added: fresh }); kickIndexing(); }
         broadcast({ type: 'tweetsUpdated' }); // des vidéos déjà connues ont pu recevoir un « vu le … »
         sendResponse({ fresh });

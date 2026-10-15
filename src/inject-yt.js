@@ -324,7 +324,8 @@ async function listUserPlaylists() {
   return [...known.values()].filter((p) => p.id && p.id !== 'WL' && p.id !== 'LL');
 }
 
-async function runSync(mode, counts = {}) {
+async function runSync(mode, counts = {}, excluded = []) {
+  const skip = new Set(excluded);
   if (busy) return;
   busy = true; stopFlag = false; currentRun = String(Date.now());
   progress('running', { message: 'Préparation…', pages: 0, count: 0 });
@@ -341,6 +342,7 @@ async function runSync(mode, counts = {}) {
     for (const l of lists) {
       if (stopFlag) break;
       progress('running', { playlist: l.title, pages: 0, count: total, lists: lists.length, listIndex: doneLists + 1 });
+      if (mode !== 'current' && skip.has(l.id)) { doneLists++; continue; } // playlist décochée : ni lue, ni mise à jour
       const isNew = mode === 'new';
       const recent = l.id === 'WL' || l.id === 'LL';
       // mise à jour : une playlist perso dont le nombre de vidéos n'a pas changé est ignorée
@@ -362,21 +364,21 @@ async function runSync(mode, counts = {}) {
 
 // Synchro « toutes les playlists » demandée depuis une autre page : on navigue, puis on reprend.
 const PENDING = 'xbs-yt-pending';
-function startAll() {
+function startAll(excluded = []) {
   if (location.pathname !== '/feed/playlists') {
-    try { sessionStorage.setItem(PENDING, 'all'); } catch {}
+    try { sessionStorage.setItem(PENDING, 'all:' + JSON.stringify(excluded)); } catch {}
     location.assign('/feed/playlists');
     return;
   }
-  runSync('all');
+  runSync('all', {}, excluded);
 }
 window.addEventListener('load', () => {
   try {
     const pend = sessionStorage.getItem(PENDING);
     if (pend && location.pathname === '/feed/playlists') {
       sessionStorage.removeItem(PENDING);
-      if (pend === 'all') setTimeout(() => runSync('all'), 1500);
-      else if (pend.startsWith('new:')) setTimeout(() => runSync('new', safeJson(pend.slice(4)) || {}), 1500);
+      if (pend.startsWith('all:')) setTimeout(() => runSync('all', {}, safeJson(pend.slice(4)) || []), 1500);
+      else if (pend.startsWith('new:')) { const o = safeJson(pend.slice(4)) || {}; setTimeout(() => runSync('new', o.counts || {}, o.excluded || []), 1500); }
     }
   } catch {}
 });
@@ -388,8 +390,8 @@ window.addEventListener('message', (ev) => {
   if (d.type === 'histAck') { const w = waiters.get(d.nonce); if (w) { waiters.delete(d.nonce); w(d.fresh ?? null); } }
   if (d.type === 'start' && d.mode === 'transcripts') runTranscripts(d.ids || [], d.speed);
   else if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
-  else if (d.type === 'start' && d.mode === 'new') { if (location.pathname !== '/feed/playlists') { try { sessionStorage.setItem(PENDING, 'new:' + JSON.stringify(d.counts || {})); } catch {} location.assign('/feed/playlists'); } else runSync('new', d.counts || {}); }
-  else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll());
+  else if (d.type === 'start' && d.mode === 'new') { if (location.pathname !== '/feed/playlists') { try { sessionStorage.setItem(PENDING, 'new:' + JSON.stringify({ counts: d.counts || {}, excluded: d.excluded || [] })); } catch {} location.assign('/feed/playlists'); } else runSync('new', d.counts || {}, d.excluded || []); }
+  else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll(d.excluded || []));
   if (d.type === 'stop') stopFlag = true;
   if (d.type === 'ping') post('pong', { path: location.pathname, ready: !!cfg('INNERTUBE_CONTEXT'), busy });
 });

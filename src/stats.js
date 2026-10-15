@@ -497,4 +497,4 @@ function finish(app) {
 
 drawSources();
 drawRanges();
-Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts')]).then(([t, w, dts, vds]) => { verdicts = vds || {}; everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X
+Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts')]).then(([t0, w, dts, vds]) => { verdicts = vds || {}; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X

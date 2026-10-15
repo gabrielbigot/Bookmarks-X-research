@@ -17,7 +17,9 @@ async function attachChunkVecs(index, model) {
 }
 
 export async function fullLoad(index, model) {
-  const [tweets, vecs] = await Promise.all([getAllTweets(), getAllVectors(model)]);
+  const [all, vecs] = await Promise.all([getAllTweets(), getAllVectors(model)]);
+  const tweets = all.filter((t) => !t.off); // vidéos de playlists décochées : hors de l'index (recherche, stats, détecteurs)
+  index.offIds = new Set(all.filter((t) => t.off).map((t) => t.id));
   await attachTranscripts(tweets);
   index.build(tweets, vecs);
   await attachChunkVecs(index, model);
@@ -30,11 +32,13 @@ export async function refresh(index, model) {
   const keySet = new Set(keys);
   if (index.tweets.length > keys.length || index.tweets.some((t) => !keySet.has(t.id))) return fullLoad(index, model);
 
-  const missing = keys.filter((id) => !index.rowById.has(id));
+  index.offIds ??= new Set();
+  const missing = keys.filter((id) => !index.rowById.has(id) && !index.offIds.has(id));
   let added = 0;
   for (let i = 0; i < missing.length; i += CHUNK) {
     const ids = missing.slice(i, i + CHUNK);
-    const [tweets, vecs] = await Promise.all([getTweets(ids), getVectors(ids, model)]);
+    const [loaded, vecs] = await Promise.all([getTweets(ids), getVectors(ids, model)]);
+    const tweets = loaded.filter((t) => { if (t.off) index.offIds.add(t.id); return !t.off; });
     await attachTranscripts(tweets);
     added += index.add(tweets, vecs);
   }

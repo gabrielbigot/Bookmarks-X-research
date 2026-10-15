@@ -18,7 +18,7 @@ window.addEventListener('message', (ev) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg.type === 'ytStart') ctl('start', { mode: msg.mode, days: msg.days, ids: msg.ids, speed: msg.speed, counts: msg.counts });
+  if (msg.type === 'ytStart') ctl('start', { mode: msg.mode, days: msg.days, ids: msg.ids, speed: msg.speed, counts: msg.counts, excluded: msg.excluded });
   if (msg.type === 'ytStop') ctl('stop');
   if (msg.type === 'ytPing') { ctl('ping'); setTimeout(() => sendResponse({ ready, path: lastPath, alive: Date.now() - lastPong < 1500 }), 250); return true; }
 });

@@ -714,6 +714,34 @@ assert.ok(!plLog.includes('VLPL3'), 'une playlist dont le nombre de vidéos n’
 await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé (mise à jour)', 15000);
 assert.equal(await panel.locator('#update-all').isVisible(), true, 'bouton de retour');
 
+// ------------------------------------------------------------------ 11f. choisir les playlists YouTube prises en compte
+await panel.fill('#q', 'lo-fi');
+await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'vidéo de la playlist « Musique » trouvée', 8000);
+await panel.click('#gear');
+await panel.waitForSelector('#ytpl-list input[data-id="PL3"]');
+assert.equal(await panel.locator('#ytpl-list input[type=checkbox]').count() >= 5, true, 'WL, J’aime et les playlists perso listées');
+await panel.uncheck('#ytpl-list input[data-id="PL3"]');
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.ytExcluded?.includes('PL3'), 'playlist décochée enregistrée', 5000);
+await panel.keyboard.press('Escape');
+await waitFor(async () => (await panel.locator('.tw.yt').count()) === 0, 'vidéo d’une playlist décochée : plus dans la recherche', 8000);
+await waitFor(async () => /10 vidéos YouTube/.test(await panel.locator('#stats').innerText()), 'compteur sans la playlist décochée', 8000);
+// synchro : la playlist décochée n'est pas lue
+ytLog.length = 0;
+await panel.fill('#q', '');
+await panel.click('#yt-sync');
+await panel.waitForFunction(() => /YouTube : terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
+const vl = ytLog.map((l) => l.body.browseId).filter((x) => x?.startsWith('VL'));
+assert.ok(vl.includes('VLWL') && !vl.includes('VLPL3'), 'VLPL3 non demandée : ' + vl);
+await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé', 15000);
+// recocher : la vidéo revient sans rien resynchroniser
+await panel.click('#gear');
+await panel.check('#ytpl-list input[data-id="PL3"]');
+await panel.keyboard.press('Escape');
+await panel.fill('#q', 'lo-fi');
+await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'playlist recochée : la vidéo revient', 8000);
+await waitFor(async () => /11 vidéos YouTube/.test(await panel.locator('#stats').innerText()), 'compteur rétabli', 8000);
+await panel.fill('#q', '');
+
 // statistiques YouTube
 const ys = await ctx.newPage();
 await ys.setViewportSize({ width: 1360, height: 900 });

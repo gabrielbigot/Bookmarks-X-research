@@ -12,6 +12,7 @@ export const DEFAULTS = {
   compute: 'cpu', // 'cpu' = WASM (plus lent, mémoire prévisible, par défaut) | 'auto' = GPU si possible (rapide, mais gourmand : à activer en connaissance de cause)
   indexMode: 'manual', // 'manual' : sur clic (« Indexer ») | 'soft' : automatique par petites tranches, jamais au lancement | 'auto' : tout, au démarrage et à chaque nouveau tweet (déconseillé)
   settingsVersion: 4,
+  ytExcluded: [], // playlists YouTube que le système ignore (synchro, recherche, stats, indexation, transcriptions). Vide = toutes
   updHistory: false, // « Tout mettre à jour » inclut l'historique YouTube (désactivé : gros retard à rattraper à part)
   updTranscripts: false, // … et les transcriptions des nouvelles vidéos (au plus 50 en automatique, 300 au clic)
   autoTabs: true, // la mise à jour automatique peut ouvrir un onglet X / YouTube en arrière-plan (refermé ensuite)

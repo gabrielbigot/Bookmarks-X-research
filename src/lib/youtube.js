@@ -267,3 +267,12 @@ export function videoText(t) {
   const pls = (t.playlists || []).map((p) => p.title).filter(Boolean);
   return `${t.text}\nChaîne : ${t.name}${pls.length ? `\nPlaylists : ${pls.join(', ')}` : ''}${t.desc ? `\n${t.desc}` : ''}`;
 }
+
+// Une vidéo est « écartée » (off) si elle n'appartient qu'à des playlists que tu as décochées et n'a pas été vue (l'historique est
+// indépendant des playlists). Rien n'est supprimé : recocher la playlist la fait revenir.
+export function videoOff(t, excluded) {
+  if (!excluded || !excluded.size) return false;
+  const pls = t.playlists || [];
+  if (!pls.length || (t.watched || []).length) return false;
+  return pls.every((p) => excluded.has(p.id));
+}
