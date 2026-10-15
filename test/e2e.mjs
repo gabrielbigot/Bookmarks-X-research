@@ -1035,6 +1035,12 @@ await stats.locator('.card.mine:has-text("Sujets") [data-act="edit"]').first().c
 await stats.fill('#dlg textarea[name="jd"]', 'Le tweet annonce une nouveauté sur les agents');
 await waitFor(async () => /(\d[\d\s\u202f]*) tweet\(s\) candidat\(s\), (\d[\d\s\u202f]*) à juger, 0 déjà jugé/.test(await stats.locator('#offmsg').innerText()), 'décompte des tweets à juger pour la condition', 10000);
 assert.ok(!/^Pour cette condition : 0 tweet/.test(await stats.locator('#offmsg').innerText()), 'des candidats existent');
+// « Faire juger par Jev » sur une condition libre : tous les candidats sont jugés ET conservés (pas seulement le premier paquet de 20)
+await stats.click('#off-go');
+await waitFor(async () => /Terminé : (\d+) tweet/.test(await stats.locator('#offmsg').innerText()), 'jugement Jev de la condition', 60000);
+const judgedN = Number((await stats.locator('#offmsg').innerText()).match(/Terminé : (\d+) tweet/)[1]);
+assert.ok(judgedN > 40, 'plus d’un paquet de 20 jugé : ' + judgedN);
+await waitFor(async () => /, 0 à juger,/.test(await stats.locator('#offmsg').innerText()), 'plus rien à juger après la passe', 10000);
 await stats.click('#dlg button[value="cancel"]');
 // comparaison de stats existantes : on coche deux stats, le graphique se génère
 await stats.click('#w-cmp');

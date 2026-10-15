@@ -23,12 +23,13 @@ const condMaps = () => ({ ...Object.fromEntries(Object.entries(conds).map(([k, c
 const saveCond = async (desc) => {
   if (desc === OFFICIAL_DESC) return saveOfficial();
   const db = (await getMeta('jevConds')) || {}, k = condKey(desc);
-  conds[k] = { desc, m: { ...(db[k]?.m || {}), ...(conds[k]?.m || {}) } };
+  if (!conds[k]) conds[k] = { desc, m: {} };
+  conds[k].m = { ...(db[k]?.m || {}), ...conds[k].m }; // on garde le même objet : les passes en cours continuent d'y écrire
   await setMeta('jevConds', { ...db, [k]: conds[k] });
 };
 const saveOfficial = async () => {
   const db = await getMeta('officialVerdicts');
-  if (db?.v === official.v) official = { v: official.v, m: { ...db.m, ...official.m } };
+  if (db?.v === official.v) official.m = { ...db.m, ...official.m }; // même objet conservé (une passe en cours y écrit)
   await setMeta('officialVerdicts', official);
 };
 try { const v = localStorage.getItem('xbs.stats.src'); src = v === 'yt' || v === 'mine' ? v : 'x'; } catch {}
@@ -539,9 +540,9 @@ async function editWidget(i, init) {
     try {
       offMsg(`Jugement en cours… 0/${items.length}`);
       const k = condKey(cond);
-      const store = cond === OFFICIAL_DESC ? official : (conds[k] ??= { desc: cond, m: {} });
+      const target = () => (cond === OFFICIAL_DESC ? official : (conds[k] ??= { desc: cond, m: {} })); // toujours l'objet courant (la sauvegarde fusionne et peut le remplacer)
       const r = await jevJudge(settings.decision, cond, items, { signal: offAbort.signal, onBatch: async (b) => {
-        for (const [id, p] of b) store.m[id] = p;
+        for (const [id, p] of b) target().m[id] = p;
         done += b.size; offMsg(`Jugement en cours… ${done}/${items.length}`); await saveCond(cond);
       } });
       offNote = r.error ? `⚠ Interrompu après ${done}/${items.length} : ${r.error}` : `Terminé : ${done} tweet(s) jugé(s).`;
