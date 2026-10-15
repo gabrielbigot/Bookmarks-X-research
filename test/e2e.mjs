@@ -673,6 +673,8 @@ await panel.fill('#q', '');
 // ------------------------------------------------------------------ 11d. YouTube : transcriptions
 ytLog.length = 0;
 await panel.fill('#q', '');
+// une vidéo à la fois : le jeton appris sur la première sert ensuite aux suivantes (ordre déterministe)
+await panel.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, ytTrSpeed: 'prudent' } }); });
 await panel.click('#yt-tr');
 await panel.waitForFunction(() => /transcriptions terminées/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
 assert.match(await panel.locator('#progress').innerText(), /3 récupérées, 3 sans transcription/);
@@ -891,6 +893,9 @@ await stats.locator('.wact [data-act="edit"]').nth(1).click();
 await stats.selectOption('#dlg select[name="kind"]', 'top');
 await stats.click('#dlg #ed-ok');
 await stats.waitForSelector('.card.mine svg.chart');
+await stats.waitForFunction(() => !document.getElementById('app').classList.contains('loading'), null, { timeout: 5000 }); // l'écran n'est pas resté grisé
+await stats.locator('.card.mine .tbl-btn').first().click();
+await stats.waitForSelector('.card.mine .tbl:not([hidden]) table');
 assert.match(await stats.locator('.card.mine').nth(1).innerText(), /Auteur/, 'classement des auteurs');
 // persistance
 await stats.reload();

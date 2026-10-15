@@ -154,6 +154,7 @@ async function renderMine(app) {
       const q = wQuery(w);
       const head = `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind])} · ${esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}</p></div>
         <div class="wact"><button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${i < widgets.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div></header>`;
+      const headT = head.replace('</header>', '<button class="tbl-btn" type="button" aria-pressed="false" title="Afficher les valeurs en tableau">Tableau</button></header>');
       if (w.kind === 'number') {
         html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
       } else {
@@ -162,7 +163,7 @@ async function renderMine(app) {
           : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) });
         const id = 'c' + cards.length;
         cards.push({ id, chart });
-        html += `<section class="card mine wide" id="${id}">${head}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
+        html += `<section class="card mine wide" id="${id}">${headT}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
       }
     });
     html += '</div>';
@@ -514,15 +515,17 @@ function render() {
 }
 
 function finish(app) {
-  {
+  try {
     for (const c of cards) {
       const el = document.getElementById(c.id);
+      if (!el) continue;
       c.chart.bind(el.querySelector('.viz'));
       const btn = el.querySelector('.tbl-btn'), tbl = el.querySelector('.tbl'), viz = el.querySelector('.viz');
-      btn.onclick = () => { const on = btn.getAttribute('aria-pressed') !== 'true'; btn.setAttribute('aria-pressed', String(on)); tbl.hidden = !on; viz.hidden = on; };
+      if (btn && tbl && viz) btn.onclick = () => { const on = btn.getAttribute('aria-pressed') !== 'true'; btn.setAttribute('aria-pressed', String(on)); tbl.hidden = !on; viz.hidden = on; };
     }
     app.querySelectorAll('.chip-s').forEach((b) => (b.onclick = () => openQ(b.dataset.q)));
-    app.classList.remove('loading');
+  } catch (e) { console.error('[xbs] stats', e); } finally {
+    app.classList.remove('loading'); // quoi qu'il arrive, l'écran ne reste jamais grisé
   }
 }
 
