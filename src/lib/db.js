@@ -332,3 +332,10 @@ export async function playlistCounts() {
   });
   return out;
 }
+
+export async function getChunkVecsFor(ids, model) {
+  const db = await openDb();
+  const st = db.transaction('chunkvecs').objectStore('chunkvecs');
+  const rows = await Promise.all(ids.map((id) => wrap(st.get(id + '@' + model))));
+  return new Map(rows.filter(Boolean).map((r) => [r.vid, { vecs: r.vecs, k: r.k }]));
+}

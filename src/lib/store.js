@@ -1,5 +1,5 @@
 // Garde l'index en mémoire synchronisé avec IndexedDB, sans tout reconstruire à chaque ajout.
-import { getAllTweets, getAllVectors, getAllTweetKeys, getAllVectorKeys, getTweets, getVectors, getTranscripts, getAllChunkVecs } from './db.js';
+import { getAllTweets, getAllVectors, getAllTweetKeys, getAllVectorKeys, getTweets, getVectors, getTranscripts, getAllChunkVecs, getChunkVecKeys, getChunkVecsFor } from './db.js';
 import { chunksText } from './transcript.js';
 
 const CHUNK = 500;
@@ -50,7 +50,11 @@ export async function refresh(index, model) {
     for (const [id, v] of vecs) if (index.setVector(id, v)) vectors++;
   }
   // Vecteurs de passages arrivés depuis.
-  const chunks = await getAllChunkVecs(model);
-  for (const [id, { vecs, k }] of chunks) { const r = index.rowById.get(id); if (r !== undefined && !index.chunkVecs.has(r)) { index.setChunkVecs(id, vecs, k); vectors++; } }
+  // (seulement les nouveaux : on ne relit pas tous les vecteurs de passages à chaque rechargement)
+  const ckeys = [...(await getChunkVecKeys(model))].filter((id) => { const r = index.rowById.get(id); return r !== undefined && !index.chunkVecs.has(r); });
+  for (let i = 0; i < ckeys.length; i += CHUNK) {
+    const chunks = await getChunkVecsFor(ckeys.slice(i, i + CHUNK), model);
+    for (const [id, { vecs, k }] of chunks) if (index.setChunkVecs(id, vecs, k)) vectors++;
+  }
   return { added, vectors, full: false };
 }

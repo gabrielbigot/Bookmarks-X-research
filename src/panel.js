@@ -1122,6 +1122,8 @@ $('bench-run').onclick = async () => {
 };
 
 // ---------- état du modèle / de l'indexation ----------
+let pollT = 0;
+function pollStatusSoon() { if (pollT) return; pollT = setTimeout(() => { pollT = 0; pollStatus(); }, 2500); } // au plus un relevé d'état toutes les 2,5 s
 async function pollStatus() {
   try {
     const st = await chrome.runtime.sendMessage({ type: 'q:status' });
@@ -1161,13 +1163,15 @@ function scheduleUpdatedReload() {
   try { gap = Number(localStorage.getItem('xbs.reloadGap')) || gap; } catch {}
   updTimer = setTimeout(() => { updTimer = null; lastUpdLoad = Date.now(); scheduleReload(0, true); }, Math.max(1500, lastUpdLoad + gap - Date.now()));
 }
-function scheduleReload(delay = 3000, full = false) {
+let needRender = false;
+function scheduleReload(delay = 3000, full = false, render = true) {
   needFull ||= full;
+  needRender ||= render;
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(async () => {
-    const f = needFull; needFull = false;
+    const f = needFull, r = needRender; needFull = needRender = false;
     await load(f);
-    if (!$('q').value.trim() && !$('answer').firstChild) run(); // la liste « derniers bookmarks » se met à jour ; une recherche en cours n'est jamais perturbée
+    if (r && !$('q').value.trim() && !$('answer').firstChild) run(); // la liste « derniers bookmarks » se met à jour ; une recherche en cours n'est jamais perturbée
   }, delay);
 }
 
@@ -1179,8 +1183,9 @@ chrome.runtime.onMessage.addListener((m) => {
     case 'tweetsRemoved': scheduleReload(200, true); renderBanners(); break;
     case 'orphans': case 'parseWarning': renderBanners(); break;
     case 'indexProgress':
-      if (Date.now() - lastHeavy > 60000) { lastHeavy = Date.now(); scheduleReload(500); }
-      pollStatus();
+      // pendant l'indexation : on recharge rarement (les vecteurs seuls) et sans redessiner la liste, pour ne pas faire ramer le panneau
+      if (Date.now() - lastHeavy > 180000) { lastHeavy = Date.now(); scheduleReload(500, false, false); }
+      pollStatusSoon();
       break;
     case 'indexDone': scheduleReload(500); pollStatus(); break;
     case 'indexError': case 'modelProgress': case 'enrichProgress': case 'imageProgress': pollStatus(); break;

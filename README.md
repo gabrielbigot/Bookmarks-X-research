@@ -27,7 +27,7 @@ Les playlists YouTube (dont **« À regarder plus tard »** et **« J'aime »**)
 
 - **« ⟳ Tout mettre à jour »** (panneau) : récupère ce qui est nouveau — bookmarks X (mode « nouveautés ») et playlists YouTube (« À regarder plus tard » et « J'aime » en s'arrêtant dès qu'une page n'apporte rien de nouveau ; les autres playlists seulement si leur nombre de vidéos a changé) — puis lance l'indexation. L'historique et les transcriptions n'en font **pas** partie par défaut (gros retards à rattraper à part, avec leurs propres boutons) : ⚙ permet de les inclure une fois rattrapés.
 - **Automatique toutes les 30 min** (⚙ › Mise à jour automatique) : X à chaque cycle, YouTube toutes les 3 h. Elle peut ouvrir un onglet X / YouTube en arrière-plan (refermé ensuite ; décochable).
-- **Indexation automatique par petites tranches** (⚙) : 600 textes au plus toutes les 4 min, jamais au lancement du navigateur, calcul CPU. C'est le réglage par défaut des installations existantes depuis la v0.7 (avant : manuel) ; décocher pour revenir au manuel. Le gros retard se résorbe ainsi tout seul, sans bloquer la machine.
+- **Indexation automatique par petites tranches** (⚙) : 600 textes au plus toutes les 4 min, jamais au lancement du navigateur, calcul CPU. C'est le réglage par défaut des installations existantes depuis la v0.7 (avant : manuel) ; décocher pour revenir au manuel. Le gros retard se résorbe ainsi tout seul, sans bloquer la machine : en tranche automatique le calcul tourne à ~45 % de la durée (pauses proportionnelles) avec 2 threads au plus, et le panneau ne recharge ni ne redessine rien pendant ce temps (au plus un rechargement des vecteurs toutes les 3 min). Le bouton « Indexer » reste à pleine vitesse.
 
 ## Ce que ça fait
 

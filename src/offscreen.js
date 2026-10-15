@@ -73,7 +73,7 @@ async function loadGemma1(m) {
 const threadsWanted = () => {
   if (!self.crossOriginIsolated) return 1;
   const hw = navigator.hardwareConcurrency || 4;
-  const t = config.threads === '1' ? 1 : config.threads === '2' ? 2 : config.threads === '6' ? 6 : Math.min(4, Math.max(1, hw - 2));
+  const t = config.threads === 'auto' && budget !== Infinity ? Math.min(2, Math.max(1, hw - 2)) : config.threads === '1' ? 1 : config.threads === '2' ? 2 : config.threads === '6' ? 6 : Math.min(4, Math.max(1, hw - 2));
   return Math.max(1, Math.min(t, hw));
 };
 const dtypesFor = (device, preferred) => (device === 'webgpu' ? [preferred, 'q8', 'fp32'] : ['q8', 'fp32']);
@@ -195,6 +195,8 @@ const docPrompt = (t) => `title: none | text: ${t}`;
 const queryPrompt = (q) => `task: search result | query: ${q}`;
 
 // Indexe tous les tweets sans vecteur (pour le modèle courant), sauf ceux de `exclude` (en attente d'enrichissement des liens).
+const gentle = () => budget !== Infinity; // tranche automatique en arrière-plan : on laisse du temps de calcul au navigateur
+const pace = async (t0) => { const dt = performance.now() - t0; await sleep(gentle() ? Math.min(1500, Math.max(60, dt * 1.2)) : config.compute === 'cpu' ? 20 : 0); };
 let budget = Infinity; // textes encore autorisés pour ce passage (indexation par tranches)
 async function indexLoop(exclude = new Set()) {
   const m = cur();
@@ -208,6 +210,7 @@ async function indexLoop(exclude = new Set()) {
     for (let i = 0; i < ids.length; i += BATCH) {
       if (cur().key !== m.key || stopRequested) return; // modèle changé / pause : on s'arrête (la boucle sera relancée)
       const tweets = await getTweets(ids.slice(i, i + BATCH));
+      const tB = performance.now();
       const vecs = await embed(tweets.map((t) => docPrompt(tweetText(t))));
       if (cur().key !== m.key) return;
       await putVectors(tweets.map((t, k) => ({ id: t.id, vec: vecs[k] })), m.id);
@@ -215,7 +218,7 @@ async function indexLoop(exclude = new Set()) {
       budget -= tweets.length;
       if ((i / BATCH) % 4 === 0) emit({ type: 'indexProgress', done, total });
       if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
-      await sleep(config.compute === 'cpu' ? 40 : 0); // laisse respirer la machine (et le navigateur)
+      await pace(tB); // laisse respirer la machine (et le navigateur)
     }
   }
 }
@@ -233,6 +236,7 @@ async function chunkLoop() {
   const flush = async (all) => {
     while (queue.length >= BATCH || (all && queue.length)) {
       const part = queue.splice(0, BATCH);
+      const tB = performance.now();
       const vecs = await embed(part.map((c) => docPrompt(c.text)));
       if (cur().key !== m.key) return false;
       part.forEach((c, k) => { const p = pend.get(c.id); p.out.set(vecs[k], c.i * m.dim); p.left--; });
@@ -244,7 +248,7 @@ async function chunkLoop() {
         emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
       }
       if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
-      await sleep(config.compute === 'cpu' ? 20 : 0);
+      await pace(tB);
       if (stopRequested) return false;
     }
     return true;
