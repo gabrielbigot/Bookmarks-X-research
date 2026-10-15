@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bookmarks & Playlists – Recherche intelligente",
-  "version": "0.9.8",
+  "version": "0.10.0",
   "description": "Recherche sémantique + mots-clés, 100 % locale, dans tes bookmarks X et tes playlists YouTube.",
   "permissions": [
     "unlimitedStorage",

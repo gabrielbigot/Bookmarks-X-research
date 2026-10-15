@@ -198,3 +198,23 @@ test('listes de réglage : reflètent la décision finale (verdicts de Jev compr
   assert.deepEqual(m.above.map(([id]) => id), ['m2', 'a'], 'retenus : m2 (confirmé par Jev) et a, pas m1');
   assert.deepEqual(m.below.map(([id]) => id), ['m1', 'lo'], 'écartés : m1 (refusé par Jev) puis lo');
 });
+
+import { learnedLabels } from '../src/lib/widgets.js';
+test('apprentissage : les éléments très semblables à un ✓ ou un ✗ suivent ton choix', () => {
+  const u = (...v) => { const n = Math.hypot(...v); return Float32Array.from(v.map((x) => x / n)); };
+  const vecs = new Map([['yes', u(1, 0, 0)], ['near-yes', u(1, 0.1, 0)], ['no', u(0, 1, 0)], ['near-no', u(0.1, 1, 0)], ['far', u(0, 0, 1)], ['mid', u(1, 1, 0)]]);
+  const l = learnedLabels(vecs, ['yes'], ['no'], 0.9);
+  assert.equal(l.get('near-yes'), 1);
+  assert.equal(l.get('near-no'), -1);
+  assert.equal(l.has('far'), false, 'trop différent : aucune étiquette');
+  assert.equal(l.has('mid'), false, 'à mi-chemin (0,71) : sous le seuil de ressemblance');
+  assert.equal(l.has('yes'), false, 'les éléments étiquetés à la main ne sont pas dans la propagation');
+  assert.equal(learnedLabels(vecs, [], [], 0.9).size, 0);
+  // effet sur le détecteur
+  const sc = new Map([['near-yes', 0.1], ['near-no', 0.9], ['far', 0.3]]);
+  const det = { threshold: 0.5, pos: ['yes'], neg: ['no'], learn: { on: true } };
+  assert.deepEqual([...detectorSet(sc, det, {}, l)].sort(), ['near-yes', 'yes'], 'near-no écarté malgré son score, near-yes retenu malgré le sien');
+  assert.deepEqual([...detectorSet(sc, { ...det, learn: { on: false } }, {}, l)].sort(), ['near-no', 'yes'], 'désactivé : seul le seuil décide');
+  // les choix explicites l'emportent
+  assert.equal(detectorSet(sc, { ...det, neg: ['no', 'near-yes'] }, {}, l).has('near-yes'), false);
+});

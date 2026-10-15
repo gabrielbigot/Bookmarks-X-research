@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
-import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
+import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
 import { jevJudge, estimateJudgeCost, fmtDollars } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
@@ -95,13 +95,21 @@ async function scoresOf(det) {
   if (!scoreCache.has(key)) scoreCache.set(key, detectorScores(vecs, chunks, protos));
   return scoreCache.get(key);
 }
+const learnCache = new Map();
+async function learnedOf(det) {
+  if (det.learn?.on === false || (!det.pos?.length && !det.neg?.length)) return null;
+  const sim = det.learn?.sim ?? LEARN_SIM;
+  const key = `${det.id}|${sim}|${(det.pos || []).join(',')}|${(det.neg || []).join(',')}`;
+  if (!learnCache.has(key)) { const { vecs } = await loadVectors(); learnCache.set(key, learnedLabels(vecs, det.pos, det.neg, sim)); }
+  return learnCache.get(key);
+}
 async function detectorSetsFor(ids) {
   const out = new Map(), missing = [];
   for (const id of ids) {
     const det = detectors.find((d) => d.id === id);
     if (!det) continue;
     const sc = await scoresOf(det);
-    if (!sc) { missing.push(det.name); out.set(id, new Set()); } else out.set(id, detectorSet(sc, det, verdictsOf(det)));
+    if (!sc) { missing.push(det.name); out.set(id, new Set()); } else out.set(id, detectorSet(sc, det, verdictsOf(det), await learnedOf(det)));
   }
   return { sets: out, missing };
 }
@@ -272,6 +280,8 @@ async function editDetector(k, init, backTo) {
     <label>Description <span class="hint">une phrase : ce que tu cherches</span><input name="desc" value="${esc(det.desc)}"></label>
     <label>Exemples <span class="hint">un par ligne, dans n’importe quelle langue (plus il y en a de variés, mieux c’est)</span><textarea name="examples" rows="5">${esc(det.examples.join('\n'))}</textarea></label>
     <label>Seuil de ressemblance <b id="thv"></b> <span class="hint">plus bas = plus de résultats, moins sûrs</span><input type="range" name="th" min="0" max="0.9" step="0.01" value="${det.threshold}"></label>
+    <div class="jv"><label class="chk"><input type="checkbox" name="ln"${det.learn?.on === false ? '' : ' checked'}> Apprendre de mes ✓ et ✗ <span class="hint">(les éléments très semblables à un de tes choix le suivent)</span></label>
+      <div id="lnbox"><label>Ressemblance minimale ≥ <b id="lsv"></b> <input type="range" name="ls" min="0.75" max="0.98" step="0.01" value="${det.learn?.sim ?? LEARN_SIM}"></label><div id="lrn" class="muted"></div></div></div>
     <div class="jv"><label class="chk"><input type="checkbox" name="cf"${det.confirm?.on ? ' checked' : ''}> Faire confirmer les cas ambigus par Jev <span class="hint">(facultatif : un modèle de décision tranche les éléments proches du seuil)</span></label>
       <div id="jvbox" ${det.confirm?.on ? '' : 'hidden'}><label>Zone ambiguë ± <b id="bdv"></b> autour du seuil <input type="range" name="bd" min="0.03" max="0.2" step="0.01" value="${det.confirm?.band ?? CONFIRM_BAND}"></label>
         <div id="jvstat" class="muted"></div>
@@ -284,8 +294,8 @@ async function editDetector(k, init, backTo) {
   const f = d.querySelector('form');
   const idm = byId();
   const texts = () => { const fd = new FormData(f); return [fd.get('desc').trim(), ...fd.get('examples').split('\n').map((x) => x.trim())].filter(Boolean); };
-  const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')), confirm: { on: fd.get('cf') === 'on', band: Number(fd.get('bd')) } }; };
-  let current = null, seq = 0, embedTimer = 0, protoErr = '', touched = k !== null;
+  const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')), confirm: { on: fd.get('cf') === 'on', band: Number(fd.get('bd')) }, learn: { on: fd.get('ln') === 'on', sim: Number(fd.get('ls')) } }; };
+  let current = null, seq = 0, embedTimer = 0, protoErr = '', touched = k !== null, learnedNow = null, lseq = 0, lTimer = 0;
   let costPrice = (await getSettings()).decision.priceInPerM;
   const { mid } = await loadVectors();
   const protoKeyOf = (arr) => arr.join('␞');
@@ -294,7 +304,10 @@ async function editDetector(k, init, backTo) {
     $('thv').textContent = dd.threshold.toFixed(2);
     if (!current) return;
     const vd = verdictsOf(dd);
-    const set = detectorSet(current, dd, vd);
+    const set = detectorSet(current, dd, vd, learnedNow);
+    $('lsv').textContent = dd.learn.sim.toFixed(2);
+    $('lnbox').hidden = !dd.learn.on;
+    if (dd.learn.on) { const pl = learnedNow ? [...learnedNow.values()].filter((x) => x > 0).length : 0, mi = learnedNow ? learnedNow.size - pl : 0; $('lrn').textContent = `${dd.pos.length} ✓ et ${dd.neg.length} ✗ de ta part · ${fmtInt(pl)} élément(s) suivent tes ✓ et ${fmtInt(mi)} suivent tes ✗, parce qu’ils leur ressemblent beaucoup`; }
     const st = scoreStats(current), sg = suggestThreshold(current);
     const sug = $('dsug');
     // suggestion : toujours visible si le détecteur ne retient (presque) rien ou si le seuil dépasse le meilleur score
@@ -312,11 +325,12 @@ async function editDetector(k, init, backTo) {
       $('jvstat').textContent = `${fmtInt(pend)} cas ambigu(s) à juger${pend ? ` (≈ ${fmtDollars(est.dollars)} pour tous, estimation)` : ''} · ${fmtInt(judged)} déjà jugé(s) par Jev (jamais redemandés)`;
     }
     $('dstat').textContent = `${fmtInt(set.size)} élément(s) retenus au total (sur ${fmtInt(current.size)} avec un vecteur) · ${dd.pos.length} validé(s), ${dd.neg.length} écarté(s) à la main`;
-    const { above, below } = detectorMargin(current, dd, 8, vd);
-    const li = (id, s, tag) => { const t = idm.get(id); const v = vd[id]; return `<li><span class="sc">${s.toFixed(2)}</span>${v !== undefined ? ` <span class="jvt ${v >= 50 ? 'y' : 'n'}" title="Verdict de Jev">Jev ${v >= 50 ? 'oui' : 'non'} ${v} %</span>` : ''} ${esc(t ? textOf(t) : id)} <span class="vb"><button type="button" data-v="ok" data-id="${esc(id)}" title="Oui, c’en est un">✓</button><button type="button" data-v="no" data-id="${esc(id)}" title="Non">✗</button></span></li>`; };
+    const { above, below } = detectorMargin(current, dd, 8, vd, learnedNow);
+    const li = (id, s, tag) => { const t = idm.get(id); const v = vd[id]; const lb = learnedNow?.get(id); return `<li><span class="sc">${s.toFixed(2)}</span>${lb ? ` <span class="jvt ${lb > 0 ? 'y' : 'n'}" title="Suit ton choix sur un élément très semblable">↳ comme ton ${lb > 0 ? '✓' : '✗'}</span>` : ''}${v !== undefined ? ` <span class="jvt ${v >= 50 ? 'y' : 'n'}" title="Verdict de Jev">Jev ${v >= 50 ? 'oui' : 'non'} ${v} %</span>` : ''} ${esc(t ? textOf(t) : id)} <span class="vb"><button type="button" data-v="ok" data-id="${esc(id)}" title="Oui, c’en est un">✓</button><button type="button" data-v="no" data-id="${esc(id)}" title="Non">✗</button></span></li>`; };
     $('ex-above').innerHTML = above.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
     $('ex-below').innerHTML = below.map(([id, s]) => li(id, s)).join('') || '<li class="muted">—</li>';
   };
+  const recompute = async () => { const my = ++lseq; learnedNow = await learnedOf({ ...draft(), id: det.id }); if (my === lseq) lists(); };
   const analyse = async () => {
     const my = ++seq, tx = texts();
     if (!tx.length) { $('dstat').textContent = 'Ajoute une description ou des exemples.'; current = null; return; }
@@ -330,11 +344,12 @@ async function editDetector(k, init, backTo) {
       }
       const sc = await scoresOf({ ...det, id: det.id });
       current = sc; protoErr = '';
+      learnedNow = await learnedOf({ ...draft(), id: det.id });
       if (k === null && !touched) { const sg = suggestThreshold(sc); if (sg) { f.elements.th.value = sg.threshold; touched = true; } } // nouveau détecteur : seuil de départ réaliste
       lists();
     } catch (e) { protoErr = e.message; $('dstat').textContent = '⚠ ' + e.message; }
   };
-  f.addEventListener('input', (ev) => { if (ev.target.name === 'th') touched = true; if (ev.target.name === 'th' || ev.target.name === 'bd' || ev.target.name === 'cf') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
+  f.addEventListener('input', (ev) => { if (ev.target.name === 'th') touched = true; if (ev.target.name === 'ls' || ev.target.name === 'ln') { lists(); clearTimeout(lTimer); lTimer = setTimeout(recompute, 300); return; } if (ev.target.name === 'th' || ev.target.name === 'bd' || ev.target.name === 'cf') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
   let abort = null;
   const judge = async () => {
     const dd = draft(), settings = await getSettings();
@@ -377,6 +392,7 @@ async function editDetector(k, init, backTo) {
     det.pos = det.pos.filter((x) => x !== id); det.neg = det.neg.filter((x) => x !== id);
     (b.dataset.v === 'ok' ? det.pos : det.neg).push(id);
     lists();
+    recompute();
   });
   d.onclose = async () => {
     if (d.returnValue === 'ok') {

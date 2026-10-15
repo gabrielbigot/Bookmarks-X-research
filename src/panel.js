@@ -1,6 +1,6 @@
 import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
-import { detectorScores, detectorSet, slugOf, verdictKey, eventDays } from './lib/widgets.js';
+import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, eventDays } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
@@ -129,11 +129,13 @@ const detCache = new Map();
 async function detectorIdsFor(det, mid) {
   const vds = (await getMeta('detVerdicts')) || {};
   const vd = vds[det.id]?.key === verdictKey(det) ? vds[det.id].v : {};
-  const key = `${det.id}|${mid}|${det.protoKey}|${det.threshold}|${det.pos?.length}|${det.neg?.length}|${det.confirm?.on}|${det.confirm?.band}|${Object.keys(vd).length}`;
+  const key = `${det.id}|${mid}|${det.protoKey}|${det.threshold}|${det.pos?.length}|${det.neg?.length}|${det.pos?.at(-1)}|${det.neg?.at(-1)}|${det.confirm?.on}|${det.confirm?.band}|${det.learn?.on}|${det.learn?.sim}|${Object.keys(vd).length}`;
   if (!detCache.has(key)) {
     const protos = (det.protos?.[mid] || []).map((a) => Float32Array.from(a));
     if (!protos.length) return new Set();
-    detCache.set(key, detectorSet(detectorScores(await getAllVectors(mid), await getAllChunkVecs(mid), protos), det, vd));
+    const vecs = await getAllVectors(mid);
+    const learned = det.learn?.on === false ? null : learnedLabels(vecs, det.pos, det.neg, det.learn?.sim ?? LEARN_SIM);
+    detCache.set(key, detectorSet(detectorScores(vecs, await getAllChunkVecs(mid), protos), det, vd, learned));
   }
   return detCache.get(key);
 }

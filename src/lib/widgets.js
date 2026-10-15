@@ -87,7 +87,7 @@ const bandOf = (det) => det.confirm?.band ?? CONFIRM_BAND;
 // Avec la confirmation (det.confirm.on) : au-dessus de seuil + marge = retenu ; en dessous de seuil − marge = écarté ;
 // dans la marge (cas ambigu) = verdict de Jev (≥ 50 % : retenu) ; sans verdict encore, le seuil seul décide.
 // verdicts : { id: pourcentage « oui » }
-export function detectorSet(scores, det, verdicts = {}) {
+export function detectorSet(scores, det, verdicts = {}, learned = null) {
   const set = new Set();
   const on = !!det.confirm?.on, band = bandOf(det);
   for (const [id, s] of scores) {
@@ -95,9 +95,29 @@ export function detectorSet(scores, det, verdicts = {}) {
     if (s >= det.threshold + band) set.add(id);
     else if (s >= det.threshold - band) { const v = verdicts[id]; if (v === undefined ? s >= det.threshold : v >= 50) set.add(id); }
   }
+  // apprentissage : les éléments très semblables à un de tes ✓ (ou ✗) suivent ton choix, avant les choix explicites
+  if (learned && det.learn?.on !== false) for (const [id, l] of learned) { if (l > 0) set.add(id); else set.delete(id); }
   for (const id of det.pos || []) set.add(id);
   for (const id of det.neg || []) set.delete(id);
   return set;
+}
+
+// Propagation de tes corrections : chaque élément dont le vecteur ressemble à celui d'un ✓ (ou d'un ✗) à `sim` ou plus
+// prend l'étiquette du plus proche (+1 retenu / −1 écarté). Les éléments étiquetés à la main sont exclus ; au plus `cap` corrections récentes.
+export const LEARN_SIM = 0.88;
+export function learnedLabels(vecMap, pos, neg, sim = LEARN_SIM, cap = 200) {
+  const out = new Map();
+  const P = (pos || []).slice(-cap).map((id) => vecMap.get(id)).filter(Boolean);
+  const N = (neg || []).slice(-cap).map((id) => vecMap.get(id)).filter(Boolean);
+  if (!P.length && !N.length) return out;
+  const fixed = new Set([...(pos || []), ...(neg || [])]);
+  const best = (v, list) => { let b = -1; for (const q of list) if (q.length === v.length) { let d = 0; for (let k = 0; k < v.length; k++) d += v[k] * q[k]; if (d > b) b = d; } return b; };
+  for (const [id, v] of vecMap) {
+    if (fixed.has(id)) continue;
+    const bp = P.length ? best(v, P) : -1, bn = N.length ? best(v, N) : -1;
+    if (Math.max(bp, bn) >= sim) out.set(id, bp >= bn ? 1 : -1);
+  }
+  return out;
 }
 // Cas ambigus pas encore jugés, les plus incertains d'abord (hors validations manuelles).
 export function ambiguousIds(scores, det, verdicts = {}) {
@@ -122,9 +142,9 @@ export function suggestThreshold(scores, { frac = 0.02, min = 20 } = {}) {
   return { threshold, count: v.filter((x) => x >= threshold).length };
 }
 // Pour régler le seuil : les moins sûrs retenus et les plus proches écartés (hors validations manuelles).
-export function detectorMargin(scores, det, n = 8, verdicts = {}) {
+export function detectorMargin(scores, det, n = 8, verdicts = {}, learned = null) {
   const fixed = new Set([...(det.pos || []), ...(det.neg || [])]);
-  const kept = detectorSet(scores, det, verdicts); // décision FINALE (seuil, zone ambiguë, verdicts de Jev)
+  const kept = detectorSet(scores, det, verdicts, learned); // décision FINALE (seuil, zone ambiguë, verdicts de Jev)
   const rows = [...scores].filter(([id]) => !fixed.has(id));
   const above = rows.filter(([id]) => kept.has(id)).sort((a, b) => a[1] - b[1]).slice(0, n);
   const below = rows.filter(([id]) => !kept.has(id)).sort((a, b) => b[1] - a[1]).slice(0, n);

@@ -950,6 +950,15 @@ await stats.waitForSelector('.card.mine .bignum');
 await stats.click('#d-manage');
 await stats.click('#dlg [data-e="0"]');
 await stats.waitForFunction(() => /0 cas ambigu\(s\) à juger.*· 50 déjà jugé/.test(document.getElementById('jvstat')?.textContent || ''), null, { timeout: 15000 });
+// apprentissage : un ✓ sur un élément refusé par Jev fait suivre ses jumeaux (vecteur identique)
+assert.match(await stats.locator('#dstat').innerText(), /75 élément\(s\) retenus au total/);
+await stats.locator('#ex-below [data-v="ok"]').first().click();
+await stats.waitForFunction(() => /100 élément\(s\) retenus au total/.test(document.getElementById('dstat')?.textContent || ''), null, { timeout: 15000 });
+assert.match(await stats.locator('#lrn').innerText(), /1 ✓ et 0 ✗ de ta part · 49 élément\(s\) suivent tes ✓ et 0 suivent tes ✗/, 'les 49 jumeaux (hors lui-même) suivent le ✓ : ' + await stats.locator('#lrn').innerText());
+assert.ok(await stats.locator('#ex-above .jvt:has-text("comme ton ✓")').count() > 0, 'étiquette « comme ton ✓ » dans la liste');
+// désactivé : le ✓ ne vaut plus que pour l'élément lui-même
+await stats.uncheck('#dlg input[name="ln"]');
+await stats.waitForFunction(() => /76 élément\(s\) retenus au total/.test(document.getElementById('dstat')?.textContent || ''), null, { timeout: 10000 });
 await stats.click('#dlg button[value="cancel"]');
 await stats.evaluate(() => localStorage.removeItem('xbs.stats.src'));
 await stats.screenshot({ path: 'test/stats-mine.png', fullPage: true });
