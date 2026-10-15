@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo } from './lib/time.js';
-import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
+import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
 import { jevJudge } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
 import { decisionReady } from './lib/settings.js';
@@ -121,7 +121,7 @@ const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
 const wQuery = (w) => [w.q, detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
 const rangeLabel = () => (range ? RANGES.find(([v]) => v === range)[1] : 'tout');
-const delta = (n, prev) => (prev == null ? '' : prev === 0 ? (n ? 'nouveau' : '=') : `${n >= prev ? '▲' : '▼'} ${Math.abs(Math.round(((n - prev) / prev) * 100))} % vs période précédente`);
+const delta = (n, prev) => (prev == null || (n === 0 && prev === 0) ? '' : prev === 0 ? (n ? 'nouveau' : '=') : `${n >= prev ? '▲' : '▼'} ${Math.abs(Math.round(((n - prev) / prev) * 100))} % vs période précédente`);
 
 const TEMPLATES = [
   { title: 'Tweets avec un lien', kind: 'series', q: 'has:link', source: 'x' },
@@ -129,7 +129,7 @@ const TEMPLATES = [
   { title: 'À regarder, pas encore vu', kind: 'number', q: 'playlist:"à regarder plus tard" viewed:no', source: 'youtube' },
   { title: 'Auteurs les plus enregistrés', kind: 'top', q: '', source: 'x', by: 'author' },
 ];
-const LAUNCH_DETECTOR = { name: 'Lancements', desc: 'Annonce d’un lancement : produit, entreprise, fonctionnalité', examples: ['Today, we launch our new product', 'Introducing our new app, available now', 'We just shipped a major update', 'Aujourd’hui, nous lançons notre startup', 'Lancement officiel de notre nouvelle version'], threshold: 0.55 };
+const LAUNCH_DETECTOR = { name: 'Lancements', desc: 'Annonce d’un lancement : produit, entreprise, fonctionnalité', examples: ['Today, we launch our new product', 'Introducing our new app, available now', 'We just shipped a major update', 'Aujourd’hui, nous lançons notre startup', 'Lancement officiel de notre nouvelle version'], threshold: 0.4 };
 
 async function renderMine(app) {
   const sv = savedInfo(all, Date.now());
@@ -138,6 +138,8 @@ async function renderMine(app) {
   const ctx = { sv, now: Date.now(), rangeDays: range, detSets: sets };
   let html = `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button></div>`;
   if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
+  const emptyDets = [...needed].filter((id) => sets.has(id) && sets.get(id).size === 0 && !missing.includes(detectors.find((d) => d.id === id)?.name)).map((id) => detectors.find((d) => d.id === id)?.name).filter(Boolean);
+  if (emptyDets.length) html += `<p class="note">⚠ Détecteur(s) <b>${esc(emptyDets.join(', '))}</b> : aucun élément retenu. Le seuil est probablement trop haut : ouvre « Détecteurs » › Modifier, une suggestion de seuil y est proposée.</p>`;
   if (!widgets.length) {
     html += `<p class="muted">Aucune stat personnalisée pour l’instant. Une stat compte ce que tu veux dans le temps, avec le filtre de période du haut : une requête de recherche (mots, <code>from:@…</code>, <code>has:link</code>, <code>playlist:"…"</code>) ou un <b>détecteur</b> qui comprend le sens (par exemple « annonce d’un lancement »).</p>
       <div class="tpl">${TEMPLATES.map((t, i) => `<button type="button" class="gbtn" data-tpl="${i}">+ ${esc(t.title)}</button>`).join('')}<button type="button" class="gbtn" data-tpl="launch">+ Détecteur « Lancements »</button></div>`;
@@ -212,7 +214,10 @@ async function editWidget(i, init) {
     if (my !== seq) return;
     const r = evalWidget(everything, { ...draft, kind: 'number' }, { sv: savedInfo(all, Date.now()), now: Date.now(), rangeDays: range, detSets: sets });
     const idm = byId();
-    $('pv').innerHTML = `<b>${fmtInt(r.n)}</b> élément(s) sur la période (${esc(rangeLabel())})${r.prev != null ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}</li>`).join('')}</ol>`;
+    const sizes = draft.dets.map((id) => [detectors.find((x) => x.id === id)?.name || id, sets.get(id)?.size ?? 0]);
+    const empty = sizes.filter(([, n]) => n === 0).map(([nm]) => nm);
+    const warn = empty.length ? `<p class="warn">⚠ ${esc(empty.join(', '))} ne retien${empty.length > 1 ? 'nent' : 't'} <b>aucun élément</b> : le seuil est trop haut (ou les exemples n’ont pas été analysés). Ouvre « Détecteurs » › Modifier : une suggestion de seuil y est proposée.</p>` : sizes.length ? `<p class="muted">${sizes.map(([nm, n]) => `${esc(nm)} : ${fmtInt(n)} retenus au total`).join(' · ')}</p>` : '';
+    $('pv').innerHTML = `${warn}<b>${fmtInt(r.n)}</b> élément(s) sur la période (${esc(rangeLabel())})${r.prev != null && delta(r.n, r.prev) ? ` · ${esc(delta(r.n, r.prev))}` : ''}<ol>${r.matched.slice(0, 5).map(({ t, day }) => `<li><span class="muted">${esc(day)}</span> ${esc(textOf(idm.get(t.id) || t))}</li>`).join('')}</ol>`;
   };
   f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(preview, 250); });
   f.addEventListener('change', preview);
@@ -258,12 +263,13 @@ async function editDetector(k, init, backTo) {
     <label>Nom<input name="name" value="${esc(det.name)}" placeholder="Ex. : Lancements"></label>
     <label>Description <span class="hint">une phrase : ce que tu cherches</span><input name="desc" value="${esc(det.desc)}"></label>
     <label>Exemples <span class="hint">un par ligne, dans n’importe quelle langue (plus il y en a de variés, mieux c’est)</span><textarea name="examples" rows="5">${esc(det.examples.join('\n'))}</textarea></label>
-    <label>Seuil de ressemblance <b id="thv"></b> <span class="hint">plus bas = plus de résultats, moins sûrs</span><input type="range" name="th" min="0.2" max="0.9" step="0.01" value="${det.threshold}"></label>
+    <label>Seuil de ressemblance <b id="thv"></b> <span class="hint">plus bas = plus de résultats, moins sûrs</span><input type="range" name="th" min="0" max="0.9" step="0.01" value="${det.threshold}"></label>
     <div class="jv"><label class="chk"><input type="checkbox" name="cf"${det.confirm?.on ? ' checked' : ''}> Faire confirmer les cas ambigus par Jev <span class="hint">(facultatif : un modèle de décision tranche les éléments proches du seuil)</span></label>
       <div id="jvbox" ${det.confirm?.on ? '' : 'hidden'}><label>Zone ambiguë ± <b id="bdv"></b> autour du seuil <input type="range" name="bd" min="0.03" max="0.2" step="0.01" value="${det.confirm?.band ?? CONFIRM_BAND}"></label>
         <div id="jvstat" class="muted"></div>
         <div class="row2"><label class="inl">Appels au plus <input type="number" name="mx" min="1" max="5000" value="50" style="width:90px"></label><button type="button" class="gbtn" id="jv-go">Juger maintenant</button><button type="button" class="gbtn" id="jv-stop" hidden>Arrêter</button></div>
         <div id="jvmsg" class="muted"></div></div></div>
+    <div id="dsug" class="sug" hidden></div>
     <div id="dstat" class="muted">Analyse…</div>
     <div class="cols"><div><h4>Retenus (les moins sûrs)</h4><ul class="ex" id="ex-above"></ul></div><div><h4>Écartés (les plus proches)</h4><ul class="ex" id="ex-below"></ul></div></div>
     <menu><button value="cancel" class="gbtn">Annuler</button><button value="ok" class="pbtn" id="d-ok">Enregistrer</button></menu></form>`;
@@ -271,7 +277,7 @@ async function editDetector(k, init, backTo) {
   const idm = byId();
   const texts = () => { const fd = new FormData(f); return [fd.get('desc').trim(), ...fd.get('examples').split('\n').map((x) => x.trim())].filter(Boolean); };
   const draft = () => { const fd = new FormData(f); return { ...det, name: fd.get('name').trim(), desc: fd.get('desc').trim(), examples: fd.get('examples').split('\n').map((x) => x.trim()).filter(Boolean), threshold: Number(fd.get('th')), confirm: { on: fd.get('cf') === 'on', band: Number(fd.get('bd')) } }; };
-  let current = null, seq = 0, embedTimer = 0, protoErr = '';
+  let current = null, seq = 0, embedTimer = 0, protoErr = '', touched = k !== null;
   const { mid } = await loadVectors();
   const protoKeyOf = (arr) => arr.join('␞');
   const lists = () => {
@@ -280,6 +286,14 @@ async function editDetector(k, init, backTo) {
     if (!current) return;
     const vd = verdictsOf(dd);
     const set = detectorSet(current, dd, vd);
+    const st = scoreStats(current), sg = suggestThreshold(current);
+    const sug = $('dsug');
+    // suggestion : toujours visible si le détecteur ne retient (presque) rien ou si le seuil dépasse le meilleur score
+    if (sg && (set.size < 5 || dd.threshold > st.max || Math.abs(sg.threshold - dd.threshold) > 0.05)) {
+      sug.hidden = false;
+      sug.innerHTML = `${set.size === 0 ? '⚠ <b>Ce seuil ne retient aucun élément.</b> ' : ''}Meilleur score : ${st.max.toFixed(2)} · médiane : ${st.median.toFixed(2)}. Suggestion : seuil <b>${sg.threshold.toFixed(2)}</b> (≈ ${fmtInt(sg.count)} éléments, environ 2 %). <button type="button" class="gbtn" id="sug-apply">Appliquer</button>`;
+      $('sug-apply').onclick = () => { f.elements.th.value = sg.threshold; lists(); };
+    } else sug.hidden = true;
     $('bdv').textContent = dd.confirm.band.toFixed(2);
     $('jvbox').hidden = !dd.confirm.on;
     if (dd.confirm.on) {
@@ -305,10 +319,11 @@ async function editDetector(k, init, backTo) {
       }
       const sc = await scoresOf({ ...det, id: det.id });
       current = sc; protoErr = '';
+      if (k === null && !touched) { const sg = suggestThreshold(sc); if (sg) { f.elements.th.value = sg.threshold; touched = true; } } // nouveau détecteur : seuil de départ réaliste
       lists();
     } catch (e) { protoErr = e.message; $('dstat').textContent = '⚠ ' + e.message; }
   };
-  f.addEventListener('input', (ev) => { if (ev.target.name === 'th' || ev.target.name === 'bd' || ev.target.name === 'cf') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
+  f.addEventListener('input', (ev) => { if (ev.target.name === 'th') touched = true; if (ev.target.name === 'th' || ev.target.name === 'bd' || ev.target.name === 'cf') return lists(); clearTimeout(embedTimer); embedTimer = setTimeout(analyse, 900); });
   let abort = null;
   const judge = async () => {
     const dd = draft(), settings = await getSettings();

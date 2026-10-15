@@ -152,3 +152,19 @@ test('requêtes : « a | b » (OU) et plusieurs détecteurs (ET / OU)', () => {
   assert.deepEqual(detsOf({ det: 'X' }), ['X'], 'ancien format (un seul détecteur)');
   assert.equal(evalWidget(all, { kind: 'number', q: '', det: 'R' }, ctx()).n, 2, 'ancien format toujours compté');
 });
+
+import { scoreStats, suggestThreshold } from '../src/lib/widgets.js';
+test('seuil suggéré : ~2 % des éléments, au moins 20, jamais au-dessus du meilleur score', () => {
+  const sc = new Map(Array.from({ length: 1000 }, (_, i) => ['i' + i, i / 1000 * 0.5])); // scores de 0 à 0,5
+  const st = scoreStats(sc);
+  assert.ok(st.max > 0.49 && st.max <= 0.5);
+  assert.ok(Math.abs(st.median - 0.25) < 0.01);
+  const sg = suggestThreshold(sc);
+  assert.ok(sg.threshold <= st.max && sg.threshold > 0.4, 'suggestion : ' + sg.threshold);
+  assert.ok(sg.count >= 20 && sg.count <= 40, 'compte : ' + sg.count);
+  // avec un seuil de 0,55 (trop haut), le détecteur ne retient rien : c'est ce que la suggestion corrige
+  assert.equal(detectorSet(sc, { threshold: 0.55 }).size, 0);
+  assert.ok(detectorSet(sc, { threshold: sg.threshold }).size >= 20);
+  assert.equal(suggestThreshold(new Map()), null);
+  assert.equal(suggestThreshold(new Map([['a', 0.3], ['b', 0.1]])).count, 2, 'petite collection : au plus tous les éléments');
+});

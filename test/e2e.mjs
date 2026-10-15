@@ -913,6 +913,7 @@ jevLog.length = 0;
 await stats.click('#d-manage');
 await stats.click('#dlg [data-e="0"]');
 await stats.waitForFunction(() => /50 cas ambigu\(s\) à juger · 0 déjà jugé/.test(document.getElementById('jvstat')?.textContent || ''), null, { timeout: 15000 });
+assert.match(await stats.locator('#dsug').innerText().catch(() => ''), /Suggestion : seuil \d\.\d\d/, 'suggestion de seuil proposée');
 await stats.fill('#dlg input[name="mx"]', '50');
 await stats.click('#jv-go');
 await stats.waitForFunction(() => /Terminé : 50 élément/.test(document.getElementById('jvmsg')?.textContent || ''), null, { timeout: 30000 });

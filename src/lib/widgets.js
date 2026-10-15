@@ -107,6 +107,20 @@ export function ambiguousIds(scores, det, verdicts = {}) {
   for (const [id, s] of scores) if (!fixed.has(id) && verdicts[id] === undefined && Math.abs(s - det.threshold) <= band) rows.push([id, Math.abs(s - det.threshold)]);
   return rows.sort((a, b) => a[1] - b[1]).map(([id]) => id);
 }
+// Aide au réglage : répartition des scores et seuil suggéré (on garde environ 2 % des éléments, au moins `min`).
+// Les similarités réelles sont souvent bien plus basses qu'on ne l'imagine (0,3–0,5 pour une vraie correspondance).
+export function scoreStats(scores) {
+  const v = [...scores.values()].filter((x) => Number.isFinite(x)).sort((a, b) => b - a);
+  const at = (f) => (v.length ? v[Math.min(v.length - 1, Math.floor(v.length * f))] : 0);
+  return { n: v.length, max: v[0] ?? 0, p98: at(0.02), p90: at(0.1), median: at(0.5) };
+}
+export function suggestThreshold(scores, { frac = 0.02, min = 20 } = {}) {
+  const v = [...scores.values()].filter((x) => Number.isFinite(x)).sort((a, b) => b - a);
+  if (!v.length) return null;
+  const k = Math.min(v.length, Math.max(min, Math.ceil(v.length * frac)));
+  const threshold = Math.floor(v[k - 1] * 100) / 100;
+  return { threshold, count: v.filter((x) => x >= threshold).length };
+}
 // Pour régler le seuil : les moins sûrs retenus et les plus proches écartés (hors validations manuelles).
 export function detectorMargin(scores, det, n = 8) {
   const fixed = new Set([...(det.pos || []), ...(det.neg || [])]);
