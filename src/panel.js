@@ -855,6 +855,7 @@ async function openSettings() {
   $('yt-trpass').value = String(settings.ytTrPassages);
   $('ai-history').checked = settings.aiHistory;
   $('compute').value = settings.compute;
+  $('threads').value = settings.threads;
   $('opt-autoindex').checked = settings.indexMode === 'auto';
   pollStatus();
   $('opt-linkimg').checked = settings.linkImages;
@@ -942,6 +943,7 @@ const runIndex = () => { chrome.runtime.sendMessage({ type: 'q:index', run: true
 const stopIndex = async () => { await chrome.runtime.sendMessage({ type: 'q:indexStop' }); setTimeout(pollStatus, 400); };
 $('idx-run').onclick = runIndex;
 $('idx-pause').onclick = stopIndex;
+$('threads').onchange = async (e) => { settings = await setSettings({ threads: e.target.value }); };
 $('opt-autoindex').onchange = async (e) => { settings = await setSettings({ indexMode: e.target.checked ? 'auto' : 'manual' }); };
 $('mem-free').onclick = async () => {
   $('mem-info').textContent = 'Libération…';
@@ -1116,8 +1118,8 @@ async function pollStatus() {
     const parts = [];
     if (st.error) parts.push('Recherche sémantique indisponible : ' + st.error);
     else if (st.model === 'loading') parts.push(`Recherche sémantique : téléchargement du modèle ${st.pct ?? 0}% (une seule fois, ~300 Mo)…`);
-    else if (st.indexing) parts.push(`Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + ')' : ''}…`);
-    else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + (st.dtype ? ', ' + st.dtype : '') + ')' : ''));
+    else if (st.indexing) parts.push(`Recherche sémantique : indexation ${st.done}/${st.total}${st.device ? ' (' + st.device + (st.threads > 1 ? ' ×' + st.threads : '') + ')' : ''}…`);
+    else if (st.model === 'ready') parts.push('Recherche sémantique prête' + (st.device ? ' (' + st.device + (st.threads > 1 ? ' ×' + st.threads : '') + (st.dtype ? ', ' + st.dtype : '') + ')' : ''));
     else if (st.asleep && !st.paused) parts.push('Recherche sémantique prête (modèle en veille : rechargé à la prochaine recherche)');
     if (st.enrich?.active) parts.push(`liens : ${st.enrich.done}/${st.enrich.total}`);
     if (st.images?.active) parts.push(`images : ${st.images.done}/${st.images.total}`);

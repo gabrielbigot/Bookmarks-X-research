@@ -14,7 +14,7 @@ const BATCH = 8;
 env.allowLocalModels = false;
 env.useBrowserCache = true;
 env.backends.onnx.wasm.wasmPaths = chrome.runtime.getURL('ort/');
-env.backends.onnx.wasm.numThreads = 1; // pas de SharedArrayBuffer dans une page d'extension
+env.backends.onnx.wasm.numThreads = 1; // relevé plus bas si la page est « cross-origin isolated » (voir threadsWanted)
 
 let config = { enrichLinks: false, imageSearch: false, embedModel: 'gemma1', compute: 'cpu', indexMode: 'manual' };
 let stopRequested = false; // arrêt demandé par l'utilisateur (non persistant)
@@ -63,12 +63,19 @@ async function withDevice(load) {
 
 async function loadGemma1(m) {
   const tokenizer = await AutoTokenizer.from_pretrained(m.id, { progress_callback: progressCb });
-  const model = await withDevice((device) => AutoModel.from_pretrained(m.id, { dtype: m.dtype, device, progress_callback: progressCb }));
+  const model = await withDeviceAndDtype({ dtype: m.dtype }, (device, dtype) => AutoModel.from_pretrained(m.id, { dtype, device, progress_callback: progressCb }));
   return { kind: 'gemma1', tokenizer, model };
 }
 
 // Précisions à essayer, de la plus légère à la plus lourde. « q4 » n'est pas géré par le CPU (WASM) :
 // ERROR_CODE 9, « Could not find an implementation for GatherBlockQuantized » -> on passe à q8, puis fp32.
+// Calcul CPU multi-threads : exige SharedArrayBuffer (page isolée, cf. manifest). Au moindre souci on retombe sur 1 thread.
+const threadsWanted = () => {
+  if (!self.crossOriginIsolated) return 1;
+  const hw = navigator.hardwareConcurrency || 4;
+  const t = config.threads === '1' ? 1 : config.threads === '2' ? 2 : config.threads === '6' ? 6 : Math.min(4, Math.max(1, hw - 2));
+  return Math.max(1, Math.min(t, hw));
+};
 const dtypesFor = (device, preferred) => (device === 'webgpu' ? [preferred, 'q8', 'fp32'] : ['q8', 'fp32']);
 
 // Essaie chaque appareil (GPU puis CPU) × chaque précision, jusqu'à ce qu'une combinaison fonctionne.
@@ -76,14 +83,18 @@ async function withDeviceAndDtype(m, load) {
   let lastErr;
   for (const device of devices()) {
     for (const dtype of dtypesFor(device, m.dtype)) {
-      try {
-        const r = await load(device, dtype);
-        status.device = device; status.dtype = dtype;
-        emit({ type: 'modelDevice', device });
-        return r;
-      } catch (e) {
-        lastErr = e;
-        console.warn(`[xbs] ${device}/${dtype} a échoué`, e);
+      const threads = device === 'wasm' ? threadsWanted() : 1;
+      for (const th of threads > 1 ? [threads, 1] : [1]) {
+        try {
+          if (device === 'wasm') env.backends.onnx.wasm.numThreads = th;
+          const r = await load(device, dtype);
+          status.device = device; status.dtype = dtype; status.threads = th;
+          emit({ type: 'modelDevice', device });
+          return r;
+        } catch (e) {
+          lastErr = e;
+          console.warn(`[xbs] ${device}/${dtype} ×${th} a échoué`, e);
+        }
       }
     }
   }
@@ -213,23 +224,37 @@ async function chunkLoop() {
   if (!ids.length) return;
   let done = 0;
   emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
+  // Les passages de plusieurs vidéos partagent les mêmes lots (pas de lot à moitié vide) ; une vidéo est enregistrée dès que tous ses passages sont calculés.
+  const pend = new Map(); // id -> { out, left, k }
+  let queue = []; // [{ id, i, text }]
+  const flush = async (all) => {
+    while (queue.length >= BATCH || (all && queue.length)) {
+      const part = queue.splice(0, BATCH);
+      const vecs = await embed(part.map((c) => docPrompt(c.text)));
+      if (cur().key !== m.key) return false;
+      part.forEach((c, k) => { const p = pend.get(c.id); p.out.set(vecs[k], c.i * m.dim); p.left--; });
+      const finished = [...pend].filter(([, p]) => p.left === 0);
+      if (finished.length) {
+        await putChunkVecs(finished.map(([id, p]) => ({ id, vecs: p.out, k: p.k })), m.id);
+        for (const [id] of finished) pend.delete(id);
+        done += finished.length;
+        emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
+      }
+      if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
+      await sleep(config.compute === 'cpu' ? 20 : 0);
+      if (stopRequested) return false;
+    }
+    return true;
+  };
   for (const id of ids) {
     if (cur().key !== m.key || stopRequested) return;
-    const trs = await getTranscripts([id]);
-    const chunks = sampleChunks(trs.get(id) || [], config.trPassages || 12);
-    if (!chunks.length) { await putChunkVecs([{ id, vecs: new Float32Array(0), k: 0 }], m.id); continue; }
-    const out = new Float32Array(chunks.length * m.dim);
-    for (let i = 0; i < chunks.length; i += BATCH) {
-      const part = chunks.slice(i, i + BATCH);
-      const vecs = await embed(part.map((c) => docPrompt(c.text)));
-      if (cur().key !== m.key) return;
-      vecs.forEach((v, k) => out.set(v, (i + k) * m.dim));
-      if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
-      await sleep(config.compute === 'cpu' ? 40 : 0);
-    }
-    await putChunkVecs([{ id, vecs: out, k: chunks.length }], m.id);
-    if (++done % 5 === 0) emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
+    const chunks = sampleChunks((await getTranscripts([id])).get(id) || [], config.trPassages || 12);
+    if (!chunks.length) { await putChunkVecs([{ id, vecs: new Float32Array(0), k: 0 }], m.id); done++; continue; }
+    pend.set(id, { out: new Float32Array(chunks.length * m.dim), left: chunks.length, k: chunks.length });
+    chunks.forEach((c, i) => queue.push({ id, i, text: c.text }));
+    if (!(await flush(false))) return;
   }
+  await flush(true);
 }
 
 // ---------------- enrichissement des liens ----------------

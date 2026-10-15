@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bookmarks & Playlists – Recherche intelligente",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Recherche sémantique + mots-clés, 100 % locale, dans tes bookmarks X et tes playlists YouTube.",
   "permissions": [
     "unlimitedStorage",
@@ -85,6 +85,8 @@
       ]
     }
   ],
+  "cross_origin_embedder_policy": { "value": "credentialless" },
+  "cross_origin_opener_policy": { "value": "same-origin" },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },

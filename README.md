@@ -76,6 +76,10 @@ npm test                                         # parser, recherche, index, clu
 npm run build && xvfb-run -a node test/e2e.mjs   # Chromium réel, x.com et fournisseur d'IA simulés
 ```
 
+## Vitesse d'indexation
+
+Le calcul CPU (WASM) utilise plusieurs threads (⚙ › Calcul CPU : auto = cœurs − 2, 4 au plus ; 1 pour le plus doux). Les pages de l'extension sont « cross-origin isolated » (manifest, `credentialless`) pour permettre SharedArrayBuffer ; si le moteur n'arrive pas à démarrer en multi-thread, il retombe seul sur 1 thread. Les passages de transcription de plusieurs vidéos partagent les mêmes lots. La ligne d'état indique le mode (ex. « wasm ×4 »). Le GPU (⚙ › Calcul : auto) reste l'option la plus rapide mais la plus gourmande en mémoire.
+
 ## Sécurité mémoire
 
 Calculer des embeddings pour des dizaines de milliers de tweets est lourd. Par défaut : **indexation manuelle** (bouton « ▶ Indexer », jamais au lancement du navigateur), **calcul CPU** (plus lent, mémoire prévisible), modèle libéré toutes les ~1 000 tweets et après 10 min d'inactivité. Le GPU et l'indexation automatique sont des options (⚙ › Indexation & mémoire). Si le navigateur plante au démarrage : `open -a Comet --args --disable-extensions`.

@@ -15,6 +15,7 @@ export const DEFAULTS = {
   linkImages: true, // afficher l'image des cartes de liens (charge l'image depuis le site : désactive pour ne contacter personne)
   ytHistoryDays: 90, // profondeur de la synchro de l'historique YouTube (0 = tout)
   ytTranscripts: 'playlists', // vidéos dont on récupère la transcription : 'playlists' | 'all' (+ historique)
+  threads: 'auto', // calcul CPU : 'auto' (cœurs − 2, max 4) | '1' | '2' | '6'
   ytTrSpeed: 'normal', // récupération des transcriptions : 'prudent' (1 à la fois) | 'normal' (3) | 'rapide' (6)
   ytTrBatch: 0, // vidéos par passage de récupération des transcriptions (0 = toutes ; reprise possible après un arrêt)
   ytTrWords: 20000, // profondeur d'indexation par mots d'une transcription, en caractères (20 000 ≈ 20 min de parole)

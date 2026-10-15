@@ -138,6 +138,7 @@
       <section>
         <h3>Indexation & mémoire</h3>
         <p class="hint">Par défaut l'indexation ne démarre que lorsque tu cliques sur « ▶ Indexer » : jamais toute seule au lancement du navigateur. Le calcul se fait sur le CPU (plus lent mais sans risque pour la mémoire). Le modèle est libéré toutes les ~1 000 tweets et après 10 min d'inactivité.</p>
+        <label class="chk">Calcul CPU : threads <select id="threads"><option value="auto">auto (cœurs − 2, max 4)</option><option value="1">1 (le plus doux)</option><option value="2">2</option><option value="6">6 (rapide, chauffe)</option></select></label>
         <label class="chk"><input type="checkbox" id="opt-autoindex"><span>Indexer automatiquement (au démarrage et à chaque nouveau tweet) <span class="hint">: déconseillé si ton Mac peine</span></span></label>
         <div class="grid"><label>Calcul des embeddings<select id="compute"><option value="cpu">CPU (recommandé : mémoire prévisible)</option><option value="auto">GPU si possible (rapide, mais peut saturer la mémoire)</option></select></label></div>
         <div class="btns">

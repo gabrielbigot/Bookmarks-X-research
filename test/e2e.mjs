@@ -577,6 +577,7 @@ await panel.screenshot({ path: 'test/grid.png' });
 
 // ------------------------------------------------------------------ 11b. YouTube : playlists (WL, J'aime, perso), fusion, recherche, retrait
 await panel.setViewportSize({ width: 1100, height: 900 });
+assert.equal(await panel.evaluate(() => self.crossOriginIsolated), true, 'page isolée (SharedArrayBuffer) : calcul CPU multi-threads possible');
 await panel.evaluate(() => localStorage.setItem('xbs.reloadGap', '1500')); // rechargements groupés : délai réduit pour les tests
 await panel.reload(); await panel.waitForSelector('.tw');
 const before = Number((await panel.locator('#stats').innerText()).match(/^([\d\s\u202f\u00a0]+) bookmarks/)[1].replace(/\D/g, ''));
