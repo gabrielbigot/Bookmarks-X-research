@@ -1,7 +1,7 @@
 import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from './lib/db.js';
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
-import { savedInfo } from './lib/time.js';
+import { savedInfo, dayKey } from './lib/time.js';
 import { detsOf, evalWidget, detectorScores, detectorSet, detectorMargin, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf } from './lib/widgets.js';
 import { jevJudge } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
@@ -120,6 +120,10 @@ const SOURCES = { all: 'Tout', x: 'Bookmarks X', youtube: 'YouTube' };
 const BYS = { author: 'Auteurs / chaînes', site: 'Sites cités', lang: 'Langues' };
 const detSlugs = (w) => detsOf(w).map((id) => slugOf(detectors.find((d) => d.id === id)?.name)).filter(Boolean);
 const wQuery = (w) => [w.q, detSlugs(w).length ? (w.detMode === 'or' ? 'is:' + detSlugs(w).join(',') : detSlugs(w).map((x) => 'is:' + x).join(' ')) : '', w.source === 'x' ? 'source:x' : w.source === 'youtube' ? 'source:youtube' : ''].filter(Boolean).join(' ');
+// Ce qui est compté = éléments dont le jour (enregistrement / visionnage / ajout) tombe dans la période : le clic ouvre la même chose.
+const duringRange = () => { if (!range) return ''; const to = dayKey(Date.now()), from = dayKey(Date.now() - (range - 1) * 86_400_000); return `during:${from}..${to}`; };
+const withPeriod = (q) => [q, duringRange()].filter(Boolean).join(' ');
+const duringBucket = (k, g) => `during:${g === 'month' ? k + '-01..' + lastOfMonth(k) : g === 'week' ? k + '..' + shiftDay(k, 6) : k}`;
 const rangeLabel = () => (range ? RANGES.find(([v]) => v === range)[1] : 'tout');
 const delta = (n, prev) => (prev == null || (n === 0 && prev === 0) ? '' : prev === 0 ? (n ? 'nouveau' : '=') : `${n >= prev ? '▲' : '▼'} ${Math.abs(Math.round(((n - prev) / prev) * 100))} % vs période précédente`);
 
@@ -151,14 +155,14 @@ async function renderMine(app) {
       const head = `<header><div><h3>${esc(w.title || 'Sans titre')}</h3><p class="sub">${esc(KINDS[w.kind])} · ${esc(SOURCES[w.source || 'all'])} · ${esc(rangeLabel())}${q ? ' · ' + esc(q) : ''}</p></div>
         <div class="wact"><button type="button" data-act="edit" data-i="${i}" title="Modifier">✎</button><button type="button" data-act="dup" data-i="${i}" title="Dupliquer">⧉</button><button type="button" data-act="up" data-i="${i}" title="Monter"${i ? '' : ' disabled'}>↑</button><button type="button" data-act="down" data-i="${i}" title="Descendre"${i < widgets.length - 1 ? '' : ' disabled'}>↓</button><button type="button" data-act="del" data-i="${i}" title="Supprimer">✕</button></div></header>`;
       if (w.kind === 'number') {
-        html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(q)}" title="Ouvrir ces éléments dans la recherche">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
+        html += `<section class="card mine"><div>${head}<div class="big"><button type="button" class="bignum" data-open="${esc(withPeriod(q))}" title="Ouvrir ces éléments dans la recherche (même période)">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div>${r.noDate && range ? `<p class="sub">${fmtInt(r.noDate)} éléments sans date ne sont pas comptés sur une période.</p>` : ''}</div></section>`;
       } else {
         const chart = w.kind === 'series'
-          ? timeSeries(r.series.points, { gran: r.series.gran, label: 'éléments', onPick: () => openQ(q) })
-          : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(x.q) });
+          ? timeSeries(r.series.points, { gran: r.series.gran, label: 'éléments', onPick: (pt) => openQ(`${q} ${duringBucket(pt.k, r.series.gran)}`.trim()) })
+          : hbars((r.top || []).map((x) => ({ label: x.label, n: x.n, q: w.by === 'site' ? `${w.q || ''} ${x.key}`.trim() : w.by === 'lang' ? `${w.q || ''} lang:${x.key}`.trim() : `${w.q || ''} from:@${x.key}`.trim() })), { label: 'éléments', labelW: 200, onPick: (x) => openQ(withPeriod(x.q)) });
         const id = 'c' + cards.length;
         cards.push({ id, chart });
-        html += `<section class="card mine${w.kind === 'series' ? ' full' : ''}" id="${id}">${head}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(q)}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
+        html += `<section class="card mine${w.kind === 'series' ? ' full' : ''}" id="${id}">${head}<div class="big inl"><button type="button" class="bignum sm" data-open="${esc(withPeriod(q))}">${fmtInt(r.n)}</button><span class="dl">${esc(delta(r.n, r.prev))}</span></div><div class="viz">${chart.html}</div><div class="tbl" hidden>${tableHtml(chart.table)}</div></section>`;
       }
     });
     html += '</div>';

@@ -873,6 +873,13 @@ const bignum = async () => Number((await stats.locator('.card.mine .bignum').fir
 assert.equal(await bignum(), 270, 'sur 90 jours');
 await stats.click('#ranges button:has-text("7 j")');
 await waitFor(async () => { const n = await bignum(); return n >= 18 && n <= 24; }, 'la stat suit le filtre « 7 j »', 6000);
+// le clic sur le nombre ouvre la recherche sur la MÊME période : autant de résultats que le chiffre affiché
+const n7 = await bignum();
+const [opened] = await Promise.all([ctx.waitForEvent('page'), stats.locator('.card.mine .bignum').first().click()]);
+await opened.waitForSelector('.tw', { timeout: 15000 });
+assert.match(decodeURIComponent(opened.url()), /during:\d{4}-\d{2}-\d{2}\.\.\d{4}-\d{2}-\d{2}/, 'période transmise à la recherche : ' + opened.url());
+await waitFor(async () => new RegExp('— ' + n7 + ' résultat').test(await opened.locator('#mode').innerText()), `la recherche affiche ${n7} résultats (comme la stat)`, 15000);
+await opened.close();
 await stats.click('#ranges button:has-text("1 j")');
 await waitFor(async () => (await bignum()) <= 4, 'la stat suit le filtre « 1 j »', 6000);
 await stats.click('#ranges button:has-text("Tout")');

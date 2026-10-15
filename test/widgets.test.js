@@ -168,3 +168,12 @@ test('seuil suggéré : ~2 % des éléments, au moins 20, jamais au-dessus du me
   assert.equal(suggestThreshold(new Map()), null);
   assert.equal(suggestThreshold(new Map([['a', 0.3], ['b', 0.1]])).count, 2, 'petite collection : au plus tous les éléments');
 });
+
+test('opérateur during: (période d’une stat)', () => {
+  assert.deepEqual(parseQuery('is:a during:2026-10-01..2026-10-14 foo').filters.during, { from: '2026-10-01', to: '2026-10-14' });
+  assert.deepEqual(parseQuery('during:2026-10-05').filters.during, { from: '2026-10-05', to: '2026-10-05' });
+  assert.equal(parseQuery('during:hier').filters.during, undefined);
+  // les jours d'un élément servent aussi pour la recherche : même définition que la stat
+  const d = eventDays(items[0], sv)[0];
+  assert.ok(d >= '2026-10-14' && d <= '2026-10-14');
+});

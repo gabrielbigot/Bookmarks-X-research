@@ -1,6 +1,7 @@
 import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog } from './lib/db.js';
 import { bestChunk, fmtTime } from './lib/transcript.js';
-import { detectorScores, detectorSet, slugOf, verdictKey } from './lib/widgets.js';
+import { detectorScores, detectorSet, slugOf, verdictKey, eventDays } from './lib/widgets.js';
+import { savedInfo } from './lib/time.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
@@ -137,6 +138,13 @@ async function detectorIdsFor(det, mid) {
   return detCache.get(key);
 }
 async function resolveIs(filters) {
+  if (filters.during) { // même notion de date que les stats (enregistrement, visionnage ou ajout)
+    const { from, to } = filters.during;
+    const sv = savedInfo(index.tweets.filter((t) => !isVideoItem(t)), Date.now());
+    const ids = new Set();
+    for (const t of index.tweets) if (eventDays(t, sv).some((d) => d >= from && d <= to)) ids.add(t.id);
+    filters.isIds = ids;
+  }
   if (!filters.is?.length) return;
   const dets = (await getMeta('dashDetectors')) || [];
   const mid = modelOf(settings.embedModel).id;
@@ -149,7 +157,7 @@ async function resolveIs(filters) {
     }
     result = result ? new Set([...result].filter((id) => union.has(id))) : union;
   }
-  filters.isIds = result;
+  filters.isIds = filters.isIds ? new Set([...result].filter((id) => filters.isIds.has(id))) : result;
 }
 
 async function run(opts = {}) {
