@@ -137,8 +137,8 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         const ep = url.pathname.split('/').pop();
         ytLog.push({ auth: req.headers.authorization || '', key: url.searchParams.get('key'), ctx: !!body.context, client: req.headers['x-youtube-client-version'], body: { ep, videoId: body.videoId, params: body.params } });
         res.writeHead(200, { 'content-type': 'application/json' });
-        if (ep === 'next') return res.end(JSON.stringify(TRANSCRIPTS[body.videoId] && !PLAYER_ONLY.has(body.videoId) ? { engagementPanels: [{ engagementPanelSectionListRenderer: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: 'T_' + body.videoId } } } } } }] } : {}));
-        if (ep === 'get_transcript') { const segs = TRANSCRIPTS[(body.params || '').slice(2)] || []; return res.end(JSON.stringify({ actions: [{ updateEngagementPanelAction: { content: { transcriptRenderer: { body: { transcriptSegmentListRenderer: { initialSegments: segs.map(([ms, text]) => ({ transcriptSegmentRenderer: { startMs: String(ms), snippet: { runs: [{ text }] } } })) } } } } } }] })); }
+        if (ep === 'next') return res.end(JSON.stringify(TRANSCRIPTS[body.videoId] && !PLAYER_ONLY.has(body.videoId) ? { engagementPanels: [{ engagementPanelSectionListRenderer: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: btoa('\n\x02' + body.videoId + '\x12\x03asr') } } } } } }] } : {}));
+        if (ep === 'get_transcript') { const segs = TRANSCRIPTS[atob(body.params || '').slice(2, 4)] || []; return res.end(JSON.stringify({ actions: [{ updateEngagementPanelAction: { content: { transcriptRenderer: { body: { transcriptSegmentListRenderer: { initialSegments: segs.map(([ms, text]) => ({ transcriptSegmentRenderer: { startMs: String(ms), snippet: { runs: [{ text }] } } })) } } } } } }] })); }
         if (ep === 'player' && PLAYER_ONLY.has(body.videoId)) return res.end(JSON.stringify({ playabilityStatus: { status: 'OK' }, captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: `https://www.youtube.com/api/timedtext?v=${body.videoId}&lang=en`, languageCode: 'en', kind: 'asr' }] } } }));
         return res.end('{}');
       });
@@ -672,7 +672,11 @@ await panel.fill('#q', '');
 await panel.click('#yt-tr');
 await panel.waitForFunction(() => /transcriptions terminées/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
 assert.match(await panel.locator('#progress').innerText(), /3 récupérées, 3 sans transcription/);
-assert.deepEqual(ytLog.filter((l) => l.body.ep === 'next').map((l) => l.body.videoId).sort(), ['c1', 'l1', 'm1', 'p2', 'w1', 'w3'], 'une requête « next » par vidéo de playlist (pas l’historique seul)');
+const nextIds = ytLog.filter((l) => l.body.ep === 'next').map((l) => l.body.videoId);
+for (const id of ['c1', 'l1', 'm1', 'p2']) assert.ok(nextIds.includes(id), 'next pour ' + id + ' (sans transcription via le modèle : jamais conclu sans « next ») : ' + nextIds);
+const gtIds = ytLog.filter((l) => l.body.ep === 'get_transcript').map((l) => Buffer.from(l.body.params, 'base64').toString().slice(2, 4));
+assert.ok(gtIds.includes('w1') && gtIds.includes('w3'), 'transcriptions récupérées : ' + gtIds);
+assert.ok(!(nextIds.includes('w1') && nextIds.includes('w3')), 'le jeton appris sur une vidéo sert pour l’autre : une seule requête « next » parmi w1/w3 : ' + nextIds);
 assert.ok(ytLog.filter((l) => l.client !== '20.10.38').every((l) => /^SAPISIDHASH/.test(l.auth)), 'requêtes web signées ; le client Android n’envoie ni cookies ni signature');
 await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé (transcriptions)', 15000);
 // recherche par un mot qui n'est QUE dans la transcription : extrait daté + lien à la seconde près

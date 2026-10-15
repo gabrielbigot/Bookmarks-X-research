@@ -257,3 +257,19 @@ test('transcriptions : XML timedtext et ancien format de cues', () => {
   assert.deepEqual(parseTimedTextXml(''), []);
   assert.deepEqual(parseTranscript({ cueGroups: [{ transcriptCueGroupRenderer: { cues: [{ transcriptCueRenderer: { cue: { simpleText: 'ancien' }, startOffsetMs: '3000' } }] } }] }), [{ t: 3, text: 'ancien' }]);
 });
+
+import { learnTemplate, deriveParams } from '../src/lib/transcript.js';
+test('transcriptions : jeton get_transcript réécrit pour une autre vidéo', () => {
+  const mk = (id, extra = '') => btoa('\n\x0b' + id + '\x12\x0cCgNhc3ISAmVuGAEqMmVuZ2FnZW1lbnQ=' + extra);
+  const std = mk('dQw4w9WgXcQ');
+  const tpl = learnTemplate(std, 'dQw4w9WgXcQ');
+  assert.ok(tpl);
+  assert.equal(deriveParams(tpl, 'abcdefghijk'), mk('abcdefghijk'));
+  assert.equal(deriveParams(tpl, 'court'), null, 'longueur différente : pas de réécriture');
+  // variante encodée pour une URL, avec « = » en pourcentage et alphabet url-safe
+  const enc = encodeURIComponent(std.replace(/\+/g, '-').replace(/\//g, '_'));
+  const t2 = learnTemplate(enc, 'dQw4w9WgXcQ');
+  assert.equal(deriveParams(t2, 'abcdefghijk'), encodeURIComponent(mk('abcdefghijk').replace(/\+/g, '-').replace(/\//g, '_')));
+  assert.equal(learnTemplate(std, 'zzzzzzzzzzz'), null, 'identifiant absent : pas de modèle');
+  assert.equal(learnTemplate('pas du base64 !!', 'dQw4w9WgXcQ'), null);
+});

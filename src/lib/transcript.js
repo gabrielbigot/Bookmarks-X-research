@@ -116,3 +116,26 @@ export function bestChunk(chunks, terms, norm = (x) => x.toLowerCase()) {
 }
 
 export const fmtTime = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(s).padStart(2, '0'); };
+
+// ---- gain de vitesse : le jeton `params` de get_transcript est un message protobuf encodé en base64 qui contient l'identifiant
+// de la vidéo en clair. Appris une fois (via « next »), il se réécrit pour une autre vidéo : une seule requête par vidéo au lieu de deux.
+// Un modèle ne sert qu'à tenter ; en cas d'échec l'appelant retombe sur « next » (jamais de « sans transcription » conclu à partir d'un modèle).
+export function learnTemplate(params, videoId) {
+  try {
+    const pct = /%[0-9A-Fa-f]{2}/.test(params);
+    const raw = pct ? decodeURIComponent(params) : params;
+    const urlSafe = /[-_]/.test(raw);
+    const std = raw.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(std + '='.repeat((4 - (std.length % 4)) % 4));
+    const i = bin.indexOf(videoId);
+    if (i < 0 || bin.indexOf(videoId, i + 1) >= 0 || !videoId) return null;
+    return { prefix: bin.slice(0, i), suffix: bin.slice(i + videoId.length), len: videoId.length, pct, urlSafe, padded: raw.endsWith('=') };
+  } catch { return null; }
+}
+export function deriveParams(tpl, videoId) {
+  if (!tpl || videoId.length !== tpl.len) return null;
+  let b = btoa(tpl.prefix + videoId + tpl.suffix);
+  if (tpl.urlSafe) b = b.replace(/\+/g, '-').replace(/\//g, '_');
+  if (!tpl.padded) b = b.replace(/=+$/, '');
+  return tpl.pct ? encodeURIComponent(b) : b;
+}

@@ -152,7 +152,7 @@ async function ytStart(mode) {
     }
   }
   for (let i = 0; i < 10; i++) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, speed: mode === 'transcripts' ? (await getSettings()).ytTrSpeed : undefined, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
     catch { await new Promise((r) => setTimeout(r, 1000)); }
   }
   return { ok: false, reason: 'no-content-script' };

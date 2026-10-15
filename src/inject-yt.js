@@ -1,7 +1,7 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
 import { parseYoutube, parseHistoryHeader } from './lib/youtube.js';
-import { findTranscriptParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
+import { findTranscriptParams, learnTemplate, deriveParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
 const BROWSE_RE = /\/youtubei\/v1\/browse(\?|$)/;
@@ -209,10 +209,18 @@ async function trackSegments(track, why, tag) {
   return [];
 }
 
+const templates = []; // [{ tpl, hits }] modèles de jeton appris (au plus 3 variantes : automatique / manuel / langue)
 async function fetchTranscript(videoId) {
   const why = [];
   let segs = [], noPanel = false, noTracks = 0, tried = 0;
-  try {
+  // 1) voie rapide : jeton réécrit depuis un modèle appris (1 requête). Un échec ici ne conclut jamais rien.
+  for (const m of [...templates].sort((a, b) => b.hits - a.hits)) {
+    const p = deriveParams(m.tpl, videoId);
+    if (!p) continue;
+    try { segs = parseTranscript((await innertube('get_transcript', { params: p })).json); } catch (e) { if (rate(e)) throw e; }
+    if (segs.length) { m.hits++; break; }
+  }
+  if (!segs.length) try {
     const next = await innertube('next', { videoId });
     const params = findTranscriptParams(next.json);
     if (!params) { noPanel = true; why.push('next:pas-de-panneau'); }
@@ -220,7 +228,11 @@ async function fetchTranscript(videoId) {
       const variants = [...new Set([params, /%[0-9A-Fa-f]{2}/.test(params) ? decodeURIComponent(params) : null].filter(Boolean))];
       for (const v of variants) {
         try { segs = parseTranscript((await innertube('get_transcript', { params: v })).json); } catch (e) { if (rate(e)) throw e; why.push('get_transcript:' + e.message); }
-        if (segs.length) break;
+        if (segs.length) {
+          const tpl = learnTemplate(v, videoId);
+          if (tpl && templates.length < 3 && !templates.some((m) => m.tpl.prefix === tpl.prefix && m.tpl.suffix === tpl.suffix)) templates.push({ tpl, hits: 0 });
+          break;
+        }
       }
       if (!segs.length && !why.some((w) => w.startsWith('get_transcript'))) why.push('get_transcript:vide');
     }
@@ -245,34 +257,52 @@ async function fetchTranscript(videoId) {
   return { state: noPanel && noTracks === tried ? 'none' : 'error', why };
 }
 
-async function runTranscripts(ids) {
+const SPEEDS = { prudent: { conc: 1, min: 1200, max: 3000 }, normal: { conc: 3, min: 300, max: 800 }, rapide: { conc: 6, min: 100, max: 300 } };
+
+// Plusieurs vidéos en parallèle, avec frein automatique : au moindre refus la vitesse retombe à 1 et on marque une pause.
+async function runTranscripts(ids, speed = 'normal') {
   if (busy) return;
   busy = true; stopFlag = false; currentRun = String(Date.now());
-  let done = 0, ok = 0, none = 0, fail = 0, strikes = 0;
+  const sp = SPEEDS[speed] || SPEEDS.normal;
+  let done = 0, ok = 0, none = 0, fail = 0, idx = 0, limit = sp.conc, calm = 0, errRun = 0, pauses = 0, abort = null;
   const reasons = new Map();
   let lastWhy = '';
+  const t0 = Date.now();
   progress('running', { transcripts: true, done, total: ids.length, ok });
-  try {
-    for (const id of ids) {
-      if (stopFlag) break;
+  const brake = async (why) => {
+    limit = 1; calm = 0;
+    if (++pauses >= 4) { abort = abort || new Error(why); return; }
+    await sleep(45_000); // pause : on laisse YouTube se calmer
+  };
+  const worker = async (k) => {
+    while (!stopFlag && !abort) {
+      if (k >= limit) { await sleep(500); continue; }
+      const i = idx++;
+      if (i >= ids.length) return;
+      const id = ids[i];
       try {
         const r = await fetchTranscript(id);
-        strikes = 0;
-        if (r.state === 'ok') ok++; else if (r.state === 'none') none++; else fail++;
-        if (r.state !== 'ok') { lastWhy = r.why.join(' | '); for (const w of r.why) reasons.set(w, (reasons.get(w) || 0) + 1); if (done < 3) console.warn('[xbs-yt] transcription', id, r.state, r.why); }
+        if (r.state === 'ok') { ok++; errRun = 0; if (++calm >= 60 && limit < sp.conc) { limit++; calm = 0; } }
+        else if (r.state === 'none') { none++; errRun = 0; }
+        else { fail++; if (++errRun >= 6) { errRun = 0; await brake('échecs répétés'); } }
+        if (r.state !== 'ok') { lastWhy = r.why.join(' | '); for (const w of r.why) reasons.set(w, (reasons.get(w) || 0) + 1); }
         if (r.state !== 'error') post('transcript', { id: 'yt:' + id, state: r.state, chunks: r.chunks });
       } catch (e) {
-        if (++strikes >= 3) throw e; // limite de débit : on s'arrête là
         fail++;
+        await brake(e instanceof HttpError ? `YouTube limite les requêtes (${e.message})` : e.message);
       }
       done++;
-      progress('running', { transcripts: true, done, total: ids.length, ok, fail, last: ok === 0 && done >= 2 ? lastWhy : '' });
-      await sleep(1200 + Math.random() * 1800);
+      progress('running', { transcripts: true, done, total: ids.length, ok, fail, rate: done / Math.max(1, (Date.now() - t0) / 1000), last: ok === 0 && done >= 2 ? lastWhy : '' });
+      await sleep(sp.min + Math.random() * (sp.max - sp.min));
     }
+  };
+  try {
+    await Promise.all(Array.from({ length: sp.conc }, (_, k) => worker(k)));
+    if (abort) throw abort;
     const top = [...reasons].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, n]) => `${k} ×${n}`).join(' ; ');
     progress(stopFlag ? 'stopped' : 'done', { transcripts: true, total: ids.length, ok, none, fail, done, reasons: top });
   } catch (e) {
-    progress('error', { message: e instanceof HttpError ? `YouTube limite les requêtes (${e.message}) : réessaie plus tard (ce qui a été récupéré est conservé).` : e.message, transcripts: true });
+    progress('error', { message: `${e.message} : arrêt de sécurité, réessaie plus tard ou en vitesse « prudente » (ce qui a été récupéré est conservé).`, transcripts: true });
   } finally {
     busy = false; currentRun = null;
   }
@@ -341,7 +371,7 @@ window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG + '-ctl') return;
   const d = ev.data;
   if (d.type === 'histAck') { const w = waiters.get(d.nonce); if (w) { waiters.delete(d.nonce); w(d.fresh ?? null); } }
-  if (d.type === 'start' && d.mode === 'transcripts') runTranscripts(d.ids || []);
+  if (d.type === 'start' && d.mode === 'transcripts') runTranscripts(d.ids || [], d.speed);
   else if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
   else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll());
   if (d.type === 'stop') stopFlag = true;
