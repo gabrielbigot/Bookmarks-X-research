@@ -55,6 +55,7 @@
       <div class="bar">
         <span id="stats">Chargement…</span>
         <span class="spacer"></span>
+        <button id="update-all" class="primary" title="Récupère ce qui est nouveau : bookmarks X et playlists YouTube (historique et transcriptions si activés dans ⚙), puis indexe">⟳ Tout mettre à jour</button>
         <button id="news" class="ghost" title="Récupère seulement les nouveaux bookmarks">↻ Nouveautés</button>
         <button id="yt-sync" class="ghost" title="Remonte « À regarder plus tard », « J'aime » et toutes tes playlists YouTube (dans un onglet en arrière-plan)">▶ Playlists YouTube</button>
         <button id="yt-hist" class="ghost" title="Remonte ton historique de visionnage YouTube (profondeur réglable dans ⚙)">▶ Historique YouTube</button>
@@ -139,7 +140,7 @@
         <h3>Indexation & mémoire</h3>
         <p class="hint">Par défaut l'indexation ne démarre que lorsque tu cliques sur « ▶ Indexer » : jamais toute seule au lancement du navigateur. Le calcul se fait sur le CPU (plus lent mais sans risque pour la mémoire). Le modèle est libéré toutes les ~1 000 tweets et après 10 min d'inactivité.</p>
         <label class="chk">Calcul CPU : threads <select id="threads"><option value="auto">auto (cœurs − 2, max 4)</option><option value="1">1 (le plus doux)</option><option value="2">2</option><option value="6">6 (rapide, chauffe)</option></select></label>
-        <label class="chk"><input type="checkbox" id="opt-autoindex"><span>Indexer automatiquement (au démarrage et à chaque nouveau tweet) <span class="hint">: déconseillé si ton Mac peine</span></span></label>
+        <label class="chk"><input type="checkbox" id="opt-autoindex"><span>Indexer automatiquement, par petites tranches <span class="hint">(600 textes toutes les 4 min au plus ; jamais au lancement du navigateur)</span></span></label>
         <div class="grid"><label>Calcul des embeddings<select id="compute"><option value="cpu">CPU (recommandé : mémoire prévisible)</option><option value="auto">GPU si possible (rapide, mais peut saturer la mémoire)</option></select></label></div>
         <div class="btns">
           <button type="button" id="idx-run">▶ Indexer maintenant</button>
@@ -161,7 +162,10 @@
         <label class="chk">Transcriptions : profondeur de la recherche par mots <select id="yt-trwords"><option value="20000">20 min de parole (défaut, léger)</option><option value="60000">1 heure</option><option value="200000">tout (plus de mémoire)</option></select></label>
         <label class="chk">Transcriptions : passages vectorisés par vidéo <select id="yt-trpass"><option value="12">12 (défaut)</option><option value="24">24</option><option value="48">48 (long à calculer)</option></select> <span class="hint">s'applique aux prochaines vidéos indexées</span></label>
         <label class="chk"><input type="checkbox" id="ai-history"><span>Autoriser l'envoi de mon historique de visionnage à l'IA externe <span class="hint">(désactivé par défaut ; l'export de sauvegarde contient aussi l'historique : chiffre-le)</span></span></label>
-        <label class="chk"><input type="checkbox" id="opt-auto"><span>Récupérer les nouveautés automatiquement quand un onglet X est ouvert</span></label>
+        <label class="chk"><input type="checkbox" id="opt-auto"><span>Mise à jour automatique toutes les 30 min (X ; YouTube et transcriptions toutes les 3 h)</span></label>
+        <label class="chk"><input type="checkbox" id="upd-hist"><span>« Tout mettre à jour » inclut l'historique YouTube <span class="hint">(à activer une fois ton historique rattrapé)</span></span></label>
+        <label class="chk"><input type="checkbox" id="upd-tr"><span>« Tout mettre à jour » inclut les transcriptions des nouvelles vidéos</span></label>
+        <label class="chk"><input type="checkbox" id="opt-tabs"><span>Autoriser la mise à jour automatique à ouvrir un onglet X / YouTube en arrière-plan <span class="hint">(refermé ensuite)</span></span></label>
         <div class="btns"><button type="button" id="reindex">Tout réindexer</button></div>
       </section>
 

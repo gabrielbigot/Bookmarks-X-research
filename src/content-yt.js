@@ -7,7 +7,7 @@ let statusEl, host, lastPong = 0, ready = false, lastPath = '';
 window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG) return;
   const d = ev.data;
-  if (d.type === 'videos') send({ type: 'ytCaptured', videos: d.videos, playlist: d.playlist, runId: d.runId });
+  if (d.type === 'videos') chrome.runtime.sendMessage({ type: 'ytCaptured', videos: d.videos, playlist: d.playlist, runId: d.runId }).then((r) => ctl('vidAck', { nonce: d.nonce, fresh: r?.fresh ?? null }), () => ctl('vidAck', { nonce: d.nonce, fresh: null }));
   else if (d.type === 'history') chrome.runtime.sendMessage({ type: 'ytHistory', videos: d.videos, runId: d.runId }).then((r) => ctl('histAck', { nonce: d.nonce, fresh: r?.fresh ?? null }), () => ctl('histAck', { nonce: d.nonce, fresh: null }));
   else if (d.type === 'transcript') send({ type: 'ytTranscript', id: d.id, state: d.state, chunks: d.chunks });
   else if (d.type === 'playlists') send({ type: 'ytPlaylists', playlists: d.playlists });
@@ -18,7 +18,7 @@ window.addEventListener('message', (ev) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
-  if (msg.type === 'ytStart') ctl('start', { mode: msg.mode, days: msg.days, ids: msg.ids, speed: msg.speed });
+  if (msg.type === 'ytStart') ctl('start', { mode: msg.mode, days: msg.days, ids: msg.ids, speed: msg.speed, counts: msg.counts });
   if (msg.type === 'ytStop') ctl('stop');
   if (msg.type === 'ytPing') { ctl('ping'); setTimeout(() => sendResponse({ ready, path: lastPath, alive: Date.now() - lastPong < 1500 }), 250); return true; }
 });

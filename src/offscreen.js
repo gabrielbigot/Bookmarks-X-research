@@ -195,10 +195,12 @@ const docPrompt = (t) => `title: none | text: ${t}`;
 const queryPrompt = (q) => `task: search result | query: ${q}`;
 
 // Indexe tous les tweets sans vecteur (pour le modèle courant), sauf ceux de `exclude` (en attente d'enrichissement des liens).
+let budget = Infinity; // textes encore autorisés pour ce passage (indexation par tranches)
 async function indexLoop(exclude = new Set()) {
   const m = cur();
   for (;;) {
-    const ids = (await pendingIds(m.id)).filter((id) => !exclude.has(id));
+    if (budget <= 0) break;
+    const ids = (await pendingIds(m.id)).filter((id) => !exclude.has(id)).slice(0, budget === Infinity ? undefined : budget);
     if (!ids.length) break;
     let done = 0;
     const total = ids.length;
@@ -210,6 +212,7 @@ async function indexLoop(exclude = new Set()) {
       if (cur().key !== m.key) return;
       await putVectors(tweets.map((t, k) => ({ id: t.id, vec: vecs[k] })), m.id);
       done += tweets.length;
+      budget -= tweets.length;
       if ((i / BATCH) % 4 === 0) emit({ type: 'indexProgress', done, total });
       if (++batchesSinceLoad >= RECYCLE_EVERY) { await disposeModels(); status.recycles++; }
       await sleep(config.compute === 'cpu' ? 40 : 0); // laisse respirer la machine (et le navigateur)
@@ -220,7 +223,7 @@ async function indexLoop(exclude = new Set()) {
 // Passages de transcription : au plus 12 par vidéo, embeddings rangés par vidéo (la recherche prend le meilleur passage).
 async function chunkLoop() {
   const m = cur();
-  const ids = await pendingChunkIds(m.id);
+  const ids = (await pendingChunkIds(m.id)).slice(0, budget === Infinity ? undefined : Math.max(0, Math.ceil(budget / 6)));
   if (!ids.length) return;
   let done = 0;
   emit({ type: 'indexProgress', done, total: ids.length, label: 'transcriptions' });
@@ -363,12 +366,13 @@ async function imageLoop() {
 
 // ---------------- boucle principale ----------------
 let processing = false, rerun = false, lastFailure = 0;
-async function processAll(run = false) {
+async function processAll(run = false, limit) {
   if (!(config.indexMode === 'auto' || run)) return; // mode manuel : jamais sans demande explicite
   if (run) stopRequested = false;
   if (processing) { rerun = true; return; }
   if (Date.now() - lastFailure < 60_000) return; // pas de retry en rafale après une erreur
   processing = true;
+  budget = limit || Infinity;
   try {
     do {
       rerun = false;
@@ -406,7 +410,7 @@ chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
       if (switched) Object.assign(status, { model: loaded.has(config.embedModel) ? 'ready' : 'idle', pct: 0, device: '', error: '', indexing: false });
     }
     if (msg.force) lastFailure = 0;
-    processAll(!!msg.run);
+    processAll(!!msg.run, msg.limit);
     return false;
   }
   if (msg?.type === 'off:stop') { stopRequested = true; (processing ? Promise.resolve() : disposeModels()).then(() => sendResponse({ ok: true })); return true; }

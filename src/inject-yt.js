@@ -39,9 +39,10 @@ function handle(json, body) {
     post('playlists', { playlists: r.playlists });
   }
   // On ne garde les vidéos QUE dans le contexte d'une playlist connue (jamais les recommandations de l'accueil).
-  if (r.videos.length && pid) post('videos', { videos: r.videos, playlist: { id: pid, title: titles.get(pid) || '' }, runId: currentRun });
+  const vnonce = ++nonceN;
+  if (r.videos.length && pid) post('videos', { videos: r.videos, playlist: { id: pid, title: titles.get(pid) || '' }, runId: currentRun, nonce: vnonce });
   if (r.unparsed && !r.videos.length) post('warn', { unparsed: r.unparsed });
-  return { ...r, pid };
+  return { ...r, pid, nonce: vnonce };
 }
 
 // Historique : vidéos groupées par jour. Chaque capture reçoit un accusé du service worker (nombre de nouveaux couples vidéo/jour).
@@ -133,8 +134,8 @@ const browse = (body) => innertube('browse', body);
 const progress = (state, extra = {}) => post('sync', { state, runId: currentRun, ...extra });
 
 // Remonte une playlist page par page. Retourne { count, complete }.
-async function syncPlaylist(pid, title, label) {
-  let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false;
+async function syncPlaylist(pid, title, label, incremental = false) {
+  let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false, stoppedEarly = false;
   titles.set(pid, title || titles.get(pid) || '');
   while (body && !stopFlag && pages < 400) {
     const { json } = await browse(body);
@@ -142,11 +143,13 @@ async function syncPlaylist(pid, title, label) {
     pages++;
     if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
     progress('running', { playlist: label, pages, count });
+    // mise à jour : « À regarder plus tard » et « J'aime » listent le plus récent en premier -> on s'arrête dès qu'une page n'apporte rien de nouveau
+    if (incremental && r?.videos.length && (await ackP(r.nonce)) === 0) { stoppedEarly = true; body = null; break; }
     body = r?.continuation ? { continuation: r.continuation } : null;
     if (body) await sleep(1000 + Math.random() * 1500); // rythme « humain »
   }
   // « complète » seulement si on a bien lu quelque chose (une page d'erreur muette ne doit rien effacer)
-  return { count, complete: !stopFlag && gotAny && !body };
+  return { count, complete: !stopFlag && gotAny && !body && !stoppedEarly };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -321,7 +324,7 @@ async function listUserPlaylists() {
   return [...known.values()].filter((p) => p.id && p.id !== 'WL' && p.id !== 'LL');
 }
 
-async function runSync(mode) {
+async function runSync(mode, counts = {}) {
   if (busy) return;
   busy = true; stopFlag = false; currentRun = String(Date.now());
   progress('running', { message: 'Préparation…', pages: 0, count: 0 });
@@ -338,7 +341,11 @@ async function runSync(mode) {
     for (const l of lists) {
       if (stopFlag) break;
       progress('running', { playlist: l.title, pages: 0, count: total, lists: lists.length, listIndex: doneLists + 1 });
-      const r = await syncPlaylist(l.id, l.title, l.title);
+      const isNew = mode === 'new';
+      const recent = l.id === 'WL' || l.id === 'LL';
+      // mise à jour : une playlist perso dont le nombre de vidéos n'a pas changé est ignorée
+      if (isNew && !recent && l.count > 0 && counts[l.id] === l.count) { doneLists++; continue; }
+      const r = await syncPlaylist(l.id, l.title, l.title, isNew && recent);
       total += r.count; doneLists++;
       if (!r.complete) incomplete++;
       post('sync', { state: 'playlist-done', runId: currentRun, playlistId: l.id, complete: r.complete, count: r.count });
@@ -364,15 +371,24 @@ function startAll() {
   runSync('all');
 }
 window.addEventListener('load', () => {
-  try { if (sessionStorage.getItem(PENDING) === 'all' && location.pathname === '/feed/playlists') { sessionStorage.removeItem(PENDING); setTimeout(() => runSync('all'), 1500); } } catch {}
+  try {
+    const pend = sessionStorage.getItem(PENDING);
+    if (pend && location.pathname === '/feed/playlists') {
+      sessionStorage.removeItem(PENDING);
+      if (pend === 'all') setTimeout(() => runSync('all'), 1500);
+      else if (pend.startsWith('new:')) setTimeout(() => runSync('new', safeJson(pend.slice(4)) || {}), 1500);
+    }
+  } catch {}
 });
 
 window.addEventListener('message', (ev) => {
   if (ev.source !== window || ev.data?.src !== TAG + '-ctl') return;
   const d = ev.data;
+  if (d.type === 'vidAck') { const w = waiters.get(d.nonce); if (w) { waiters.delete(d.nonce); w(d.fresh ?? null); } }
   if (d.type === 'histAck') { const w = waiters.get(d.nonce); if (w) { waiters.delete(d.nonce); w(d.fresh ?? null); } }
   if (d.type === 'start' && d.mode === 'transcripts') runTranscripts(d.ids || [], d.speed);
   else if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
+  else if (d.type === 'start' && d.mode === 'new') { if (location.pathname !== '/feed/playlists') { try { sessionStorage.setItem(PENDING, 'new:' + JSON.stringify(d.counts || {})); } catch {} location.assign('/feed/playlists'); } else runSync('new', d.counts || {}); }
   else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll());
   if (d.type === 'stop') stopFlag = true;
   if (d.type === 'ping') post('pong', { path: location.pathname, ready: !!cfg('INNERTUBE_CONTEXT'), busy });

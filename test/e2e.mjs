@@ -515,17 +515,19 @@ await panel.waitForFunction(() => /45 indexés sémantiquement/.test(document.ge
 // ------------------------------------------------------------------ 10b. sécurité mémoire : indexation MANUELLE par défaut, CPU par défaut, arrêt, libération
 await panel.click('#gear');
 assert.equal(await panel.locator('#compute').inputValue(), 'cpu', 'calcul CPU par défaut');
-assert.equal(await panel.locator('#opt-autoindex').isChecked(), false, 'indexation automatique désactivée par défaut');
+assert.equal(await panel.locator('#opt-autoindex').isChecked(), true, 'réglages d’une ancienne version : indexation automatique par tranches (migration v4)');
 await waitFor(async () => /Tas JS : panneau \d+ Mo/.test(await panel.locator('#mem-info').innerText()), 'mesure mémoire', 8000);
 await panel.click('#mem-free');
 await waitFor(async () => /en veille|actif/.test(await panel.locator('#mem-info').innerText()), 'libération mémoire', 8000);
 await panel.selectOption('#compute', 'auto');
 await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.compute === 'auto', 'compute enregistré', 5000);
 await panel.selectOption('#compute', 'cpu');
-await panel.check('#opt-autoindex');
-await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'auto', 'réglage indexMode', 5000);
 await panel.uncheck('#opt-autoindex');
-await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'manual', 'réglage indexMode', 5000);
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'manual', 'réglage indexMode manuel', 5000);
+await panel.check('#opt-autoindex');
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'soft', 'réglage indexMode par tranches', 5000);
+await panel.uncheck('#opt-autoindex'); // la suite des tests tourne en manuel (aucun calcul de modèle)
+await waitFor(async () => (await panel.evaluate(() => chrome.storage.local.get('settings'))).settings.indexMode === 'manual', 'retour manuel', 5000);
 await panel.click('#idx-pause');
 await panel.keyboard.press('Escape');
 
@@ -693,6 +695,23 @@ await count('has:transcript', 3, 'has:transcript');
 await panel.fill('#q', '');
 await panel.click('#yt-tr');
 await panel.waitForFunction(() => /ont déjà leur transcription/.test(document.getElementById('progress').textContent), null, { timeout: 15000 });
+
+// ------------------------------------------------------------------ 11e. « Tout mettre à jour » : X + playlists (historique et transcriptions exclus par défaut) + indexation
+ytLog.length = 0;
+histNew = false;
+await panel.fill('#q', '');
+await panel.click('#update-all');
+await panel.waitForFunction(() => /Mise à jour terminée/.test(document.getElementById('progress').textContent), null, { timeout: 180000 });
+const upd = await panel.locator('#progress').innerText();
+assert.match(upd, /X : \d+ lus/, 'étape X : ' + upd);
+assert.match(upd, /playlists : \d+/, 'étape playlists : ' + upd);
+assert.ok(!/historique|transcriptions :/.test(upd), 'historique et transcriptions exclus par défaut : ' + upd);
+assert.ok(!ytLog.some((l) => l.body.browseId === 'FEhistory'), 'aucune requête d’historique');
+const plLog = ytLog.filter((l) => l.body.browseId?.startsWith('VL')).map((l) => l.body.browseId).sort();
+assert.ok(plLog.includes('VLWL') && plLog.includes('VLLL'), 'WL et J’aime relus : ' + plLog);
+assert.ok(!plLog.includes('VLPL3'), 'une playlist dont le nombre de vidéos n’a pas changé est ignorée : ' + plLog);
+await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé (mise à jour)', 15000);
+assert.equal(await panel.locator('#update-all').isVisible(), true, 'bouton de retour');
 
 // statistiques YouTube
 const ys = await ctx.newPage();

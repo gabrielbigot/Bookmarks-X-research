@@ -216,16 +216,16 @@ test('sauvegarde avec vecteurs : quantification int8 fidèle, recherches enregis
 
 import { getSettings, setSettings } from '../src/lib/settings.js';
 
-test('réglages : migration de sécurité (GPU auto + indexation au démarrage -> CPU + manuel), une seule fois', async () => {
+test('réglages : migration de sécurité (GPU auto + indexation au démarrage -> CPU + indexation par tranches), une seule fois', async () => {
   let store = { settings: { llm: { baseUrl: 'https://x/v1', model: 'm', apiKey: 'k' }, compute: 'auto', indexPaused: false, embedModel: 'gemma2' } };
   globalThis.chrome = { storage: { local: { get: async () => ({ ...store }), set: async (o) => { store = { ...store, ...o }; } } } };
   const s = await getSettings();
   assert.equal(s.compute, 'cpu');
-  assert.equal(s.indexMode, 'manual');
+  assert.equal(s.indexMode, 'soft'); // v3 : manuel, puis v4 : automatique par petites tranches
   assert.equal(s.embedModel, 'gemma2'); // les autres choix de l'utilisateur sont conservés
   assert.equal(s.llm.apiKey, 'k');
   assert.equal('indexPaused' in store.settings, false);
-  assert.equal(store.settings.settingsVersion, 3);
+  assert.equal(store.settings.settingsVersion, 4);
   // après la migration, un choix explicite de l'utilisateur est respecté
   await setSettings({ compute: 'auto', indexMode: 'auto' });
   const s2 = await getSettings();

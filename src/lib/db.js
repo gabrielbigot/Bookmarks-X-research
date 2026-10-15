@@ -314,3 +314,21 @@ export async function pendingChunkIds(model) {
   const trIds = await scanTweets((t) => t.trState === 'ok');
   return trIds.filter((id) => !have.has(id));
 }
+
+// Nombre de vidéos connues par playlist (curseur : rien n'est gardé en mémoire).
+export async function playlistCounts() {
+  const db = await openDb();
+  const out = {};
+  await new Promise((res, rej) => {
+    const req = db.transaction('tweets').objectStore('tweets').openCursor();
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return res();
+      const v = c.value;
+      if (typeof v.id === 'string' && v.id.startsWith('yt:')) for (const p of v.playlists || []) out[p.id] = (out[p.id] || 0) + 1;
+      c.continue();
+    };
+    req.onerror = () => rej(req.error);
+  });
+  return out;
+}

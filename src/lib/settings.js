@@ -10,8 +10,11 @@ export const DEFAULTS = {
   decisionIntent: false, // tri / période / type compris par le modèle de décision
   decisionRerank: false, // reclassement par le modèle de décision
   compute: 'cpu', // 'cpu' = WASM (plus lent, mémoire prévisible, par défaut) | 'auto' = GPU si possible (rapide, mais gourmand : à activer en connaissance de cause)
-  indexMode: 'manual', // 'manual' : l'indexation ne démarre que sur clic (« Indexer ») | 'auto' : au démarrage et à chaque nouveau tweet
-  settingsVersion: 3,
+  indexMode: 'manual', // 'manual' : sur clic (« Indexer ») | 'soft' : automatique par petites tranches, jamais au lancement | 'auto' : tout, au démarrage et à chaque nouveau tweet (déconseillé)
+  settingsVersion: 4,
+  updHistory: false, // « Tout mettre à jour » inclut l'historique YouTube (désactivé : gros retard à rattraper à part)
+  updTranscripts: false, // … et les transcriptions des nouvelles vidéos (au plus 50 en automatique, 300 au clic)
+  autoTabs: true, // la mise à jour automatique peut ouvrir un onglet X / YouTube en arrière-plan (refermé ensuite)
   linkImages: true, // afficher l'image des cartes de liens (charge l'image depuis le site : désactive pour ne contacter personne)
   ytHistoryDays: 90, // profondeur de la synchro de l'historique YouTube (0 = tout)
   ytTranscripts: 'playlists', // vidéos dont on récupère la transcription : 'playlists' | 'all' (+ historique)
@@ -30,6 +33,11 @@ export async function getSettings() {
   if (settings && (settings.settingsVersion || 0) < 3) {
     settings = { ...settings, compute: 'cpu', indexMode: 'manual', settingsVersion: 3 };
     delete settings.indexPaused;
+    await chrome.storage.local.set({ settings });
+  }
+  // v4 : l'indexation manuelle devient « automatique par tranches » (mémoire bornée, jamais au lancement) ; modifiable dans ⚙
+  if (settings && settings.settingsVersion < 4) {
+    settings = { ...settings, indexMode: settings.indexMode === 'manual' ? 'soft' : settings.indexMode, settingsVersion: 4 };
     await chrome.storage.local.set({ settings });
   }
   return { ...DEFAULTS, ...settings, llm: { ...DEFAULTS.llm, ...settings?.llm }, decision: { ...DEFAULTS.decision, ...settings?.decision } };

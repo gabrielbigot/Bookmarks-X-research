@@ -807,7 +807,7 @@ const startSync = async (mode) => {
 };
 $('sync').onclick = () => startSync('full');
 $('news').onclick = () => startSync('incremental');
-$('stop').onclick = () => { chrome.runtime.sendMessage({ type: 'stopBackfill' }); chrome.runtime.sendMessage({ type: 'q:ytStop' }); };
+$('stop').onclick = () => { chrome.runtime.sendMessage({ type: 'stopBackfill' }); chrome.runtime.sendMessage({ type: 'q:ytStop' }); chrome.runtime.sendMessage({ type: 'q:updateStop' }); };
 $('yt-sync').onclick = async () => {
   $('progress').textContent = 'YouTube : ouverture d’un onglet en arrière-plan…';
   const res = await chrome.runtime.sendMessage({ type: 'q:ytSync', mode: 'all' });
@@ -820,6 +820,14 @@ $('yt-hist').onclick = async () => {
   if (!res?.ok) $('progress').textContent = 'YouTube : impossible de démarrer (' + (res?.reason || 'erreur') + '). Vérifie que tu es connecté à YouTube.';
 };
 
+let updatingUi = false; // une mise à jour globale pilote déjà les boutons (les sous-étapes ne doivent pas les rebasculer)
+$('update-all').onclick = async () => {
+  updatingUi = true;
+  $('progress').textContent = 'Mise à jour…';
+  $('update-all').hidden = true; $('stop').hidden = false;
+  const res = await chrome.runtime.sendMessage({ type: 'q:updateAll' });
+  if (res && !res.ok && res.reason === 'busy') $('progress').textContent = 'Une mise à jour est déjà en cours.';
+};
 $('yt-tr').onclick = async () => {
   $('progress').textContent = 'YouTube : préparation des transcriptions…';
   const res = await chrome.runtime.sendMessage({ type: 'q:ytSync', mode: 'transcripts' });
@@ -856,7 +864,10 @@ async function openSettings() {
   $('ai-history').checked = settings.aiHistory;
   $('compute').value = settings.compute;
   $('threads').value = settings.threads;
-  $('opt-autoindex').checked = settings.indexMode === 'auto';
+  $('opt-autoindex').checked = settings.indexMode !== 'manual';
+  $('opt-tabs').checked = settings.autoTabs;
+  $('upd-hist').checked = settings.updHistory;
+  $('upd-tr').checked = settings.updTranscripts;
   pollStatus();
   $('opt-linkimg').checked = settings.linkImages;
   $('embed-model').replaceChildren(...Object.values(MODELS).map((m) => Object.assign(document.createElement('option'), { value: m.key, textContent: m.label, selected: m.key === settings.embedModel })));
@@ -944,7 +955,10 @@ const stopIndex = async () => { await chrome.runtime.sendMessage({ type: 'q:inde
 $('idx-run').onclick = runIndex;
 $('idx-pause').onclick = stopIndex;
 $('threads').onchange = async (e) => { settings = await setSettings({ threads: e.target.value }); };
-$('opt-autoindex').onchange = async (e) => { settings = await setSettings({ indexMode: e.target.checked ? 'auto' : 'manual' }); };
+$('opt-autoindex').onchange = async (e) => { settings = await setSettings({ indexMode: e.target.checked ? 'soft' : 'manual' }); };
+$('upd-hist').onchange = async (e) => { settings = await setSettings({ updHistory: e.target.checked }); };
+$('upd-tr').onchange = async (e) => { settings = await setSettings({ updTranscripts: e.target.checked }); };
+$('opt-tabs').onchange = async (e) => { settings = await setSettings({ autoTabs: e.target.checked }); };
 $('mem-free').onclick = async () => {
   $('mem-info').textContent = 'Libération…';
   await chrome.runtime.sendMessage({ type: 'q:free' });
@@ -1170,10 +1184,24 @@ chrome.runtime.onMessage.addListener((m) => {
       break;
     case 'indexDone': scheduleReload(500); pollStatus(); break;
     case 'indexError': case 'modelProgress': case 'enrichProgress': case 'imageProgress': pollStatus(); break;
+    case 'updateProgress': {
+      const end = m.step === 'end';
+      updatingUi = !end;
+      $('update-all').hidden = !end; $('stop').hidden = end;
+      if (!end) { $('progress').textContent = m.label; break; }
+      const r = m.report || {}, bits = [];
+      if (r.x != null) bits.push(`X : ${r.x === 'impossible' ? 'impossible' : r.x + ' lus'}`);
+      if (r.playlists != null) bits.push(`playlists : ${r.playlists}`);
+      if (r.history != null) bits.push(`historique : ${r.history}`);
+      if (r.transcripts != null) bits.push(`transcriptions : ${r.transcripts}`);
+      $('progress').textContent = m.label + (bits.length ? ' — ' + bits.join(' · ') : '');
+      scheduleReload(1000, true);
+      break;
+    }
     case 'ytProgress': {
       if (m.state === 'playlist-done') break;
       const running = m.state === 'running';
-      $('stop').hidden = !running;
+      if (!updatingUi) $('stop').hidden = !running;
       $('yt-sync').hidden = $('yt-hist').hidden = $('yt-tr').hidden = running;
       $('progress').textContent = { running: m.transcripts ? `YouTube : transcriptions ${m.done}/${m.total}${m.total - m.done > 30 ? ` · reste ≈ ${etaText((m.total - m.done) / (m.rate || 0.4))}` : ''} (${m.ok} récupérées${m.last ? ` ; dernier échec : ${m.last}` : ''})…` : m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
         done: m.transcripts ? `YouTube : transcriptions terminées — ${m.ok} récupérées, ${m.none} sans transcription${m.fail ? `, ${m.fail} en échec` : ''}${m.reasons ? ' — ' + m.reasons : ''}` : m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
@@ -1181,7 +1209,7 @@ chrome.runtime.onMessage.addListener((m) => {
     }
     case 'backfillProgress': {
       const running = m.state === 'running';
-      $('stop').hidden = !running;
+      if (!updatingUi) $('stop').hidden = !running;
       $('sync').hidden = $('news').hidden = running;
       const kind = m.mode === 'incremental' ? 'Nouveautés' : 'Synchro';
       $('progress').textContent = { running: `${kind} : ${m.total} tweets lus`, done: `${kind} terminée (${m.total} lus)`, stopped: `${kind} arrêtée` }[m.state] || m.message || '';

@@ -1,4 +1,4 @@
-import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pendingTranscriptIds, reconcilePlaylist, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
+import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pendingTranscriptIds, reconcilePlaylist, playlistCounts, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
 import { toItem, toHistoryItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
 
@@ -31,11 +31,18 @@ async function getConfig() {
 
 // run = demande explicite de l'utilisateur (bouton « Indexer »). En mode manuel, rien ne démarre sans elle :
 // ni au lancement du navigateur, ni sur l'alarme, ni à l'arrivée de nouveaux tweets.
+// indexMode « soft » : indexation automatique par petites tranches (au plus une toutes les 4 min, jamais au lancement du navigateur).
+const SOFT_LIMIT = 600; // textes par tranche
+let lastSoft = 0;
 async function kickIndexing(run = false, force = false) {
   const s = await getSettings();
-  if (!run && s.indexMode !== 'auto') return;
+  let limit;
+  if (!run && s.indexMode === 'soft') {
+    if (Date.now() - lastSoft < 4 * 60_000) return;
+    lastSoft = Date.now(); run = true; limit = SOFT_LIMIT;
+  } else if (!run && s.indexMode !== 'auto') return;
   await ensureOffscreen();
-  chrome.runtime.sendMessage({ type: 'off:index', run, force, config: await getConfig() }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'off:index', run, force, limit, config: await getConfig() }).catch(() => {});
 }
 
 const broadcast = (msg) => chrome.runtime.sendMessage(msg).catch(() => {});
@@ -49,8 +56,8 @@ async function openPanelTab() {
 }
 chrome.action.onClicked.addListener(openPanelTab);
 
-chrome.runtime.onInstalled.addListener(() => kickIndexing());
-chrome.runtime.onStartup.addListener(() => kickIndexing());
+chrome.runtime.onInstalled.addListener(async () => { if ((await getSettings()).indexMode === 'auto') kickIndexing(); });
+chrome.runtime.onStartup.addListener(async () => { if ((await getSettings()).indexMode === 'auto') kickIndexing(); }); // « soft » : pas d'indexation au lancement
 chrome.alarms.create('index', { periodInMinutes: 5 });
 chrome.alarms.create('autosync', { periodInMinutes: SYNC_EVERY_MIN });
 chrome.alarms.onAlarm.addListener((a) => {
@@ -67,16 +74,83 @@ async function findCaptureTab() {
   return { withRequest: rs.find((x) => x.r?.hasRequest)?.t || null, likely: rs.find((x) => x.r?.likely)?.t || null, ping };
 }
 
-// Synchro des nouveautés automatique, sans jamais ouvrir d'onglet de sa propre initiative.
+// ---------------- « Tout mettre à jour » : X, playlists, historique, transcriptions, puis indexation ----------------
+const waiters = [];
+const waitMsg = (match, timeoutMs) => new Promise((resolve) => {
+  const w = { match, resolve };
+  waiters.push(w);
+  setTimeout(() => { const k = waiters.indexOf(w); if (k >= 0) { waiters.splice(k, 1); resolve(null); } }, timeoutMs);
+});
+const settle = (msg) => { for (let k = waiters.length - 1; k >= 0; k--) if (waiters[k].match(msg)) { const [w] = waiters.splice(k, 1); w.resolve(msg); } };
+
+let updating = false, updateStop = false;
+const YT_AUTO_EVERY = 3 * 3600_000; // en automatique, YouTube au plus toutes les 3 h (X : à chaque cycle)
+const updProgress = (step, label, extra = {}) => broadcast({ type: 'updateProgress', step, label, ...extra });
+
+async function updateAll({ manual }) {
+  if (updating) return { ok: false, reason: 'busy' };
+  const s = await getSettings();
+  updating = true; updateStop = false;
+  const report = { x: null, playlists: null, history: null, transcripts: null };
+  try {
+    // 1) X : nouveaux bookmarks
+    updProgress('x', 'X : nouveaux bookmarks…');
+    const { withRequest, likely } = await findCaptureTab();
+    if (manual || withRequest || likely || s.autoTabs) {
+      const wait = waitMsg((m) => m.type === 'backfillProgress' && ['done', 'stopped', 'error'].includes(m.state), 20 * 60_000);
+      const res = await startOrStop({ type: 'startBackfill', mode: 'incremental' });
+      if (res.ok) { const m = await wait; report.x = m?.state === 'done' ? m.total : null; } else if (manual) report.x = 'impossible';
+      if (res.ok) await setMeta('lastSyncAt', Date.now());
+    }
+    if (updateStop) return finishUpdate(report, 'stopped');
+
+    // 2) YouTube : playlists, historique, transcriptions (en automatique : au plus toutes les 3 h)
+    const lastYt = (await getMeta('lastYtAutoAt')) || 0;
+    if (manual || Date.now() - lastYt > YT_AUTO_EVERY) {
+      if (!manual && !s.autoTabs) return finishUpdate(report, 'done');
+      // historique et transcriptions : à part (gros retards à rattraper), sauf si tu les inclus dans ⚙
+      const steps = [
+        ['playlists', 'YouTube : nouvelles vidéos des playlists…', 'new'],
+        ...(s.updHistory ? [['history', 'YouTube : historique…', 'history']] : []),
+        ...(s.updTranscripts ? [['transcripts', 'YouTube : transcriptions des nouvelles vidéos…', 'transcripts']] : []),
+      ];
+      for (const [key, label, mode] of steps) {
+        if (updateStop) return finishUpdate(report, 'stopped');
+        updProgress(key, label);
+        const wait = waitMsg((m) => m.type === 'ytProgress' && ['done', 'error', 'stopped'].includes(m.state) && !!m.history === (mode === 'history') && !!m.transcripts === (mode === 'transcripts'), 3 * 3600_000);
+        const res = await ytStart(mode, { limit: manual ? 300 : 50 });
+        if (!res.ok) { if (res.reason !== 'nothing-to-do') report[key] = 'impossible'; continue; }
+        const m = await wait;
+        report[key] = m?.state === 'done' ? (m.total ?? m.ok ?? 0) : m?.state === 'error' ? 'erreur' : null;
+      }
+      await setMeta('lastYtAutoAt', Date.now());
+    }
+    // 3) indexation
+    if (s.indexMode === 'soft' || s.indexMode === 'auto' || manual) {
+      updProgress('index', 'Indexation…');
+      await ensureOffscreen();
+      chrome.runtime.sendMessage({ type: 'off:index', run: true, limit: s.indexMode === 'auto' && !manual ? undefined : (manual ? 2000 : SOFT_LIMIT), config: await getConfig() }).catch(() => {});
+      lastSoft = Date.now();
+    }
+    return finishUpdate(report, 'done');
+  } catch (e) {
+    return finishUpdate(report, 'error', String(e?.message || e));
+  }
+}
+function finishUpdate(report, state, message) {
+  updating = false;
+  setMeta('lastUpdateAt', Date.now());
+  updProgress('end', state === 'done' ? 'Mise à jour terminée' : state === 'stopped' ? 'Mise à jour arrêtée' : 'Mise à jour : ' + (message || 'erreur'), { state, report });
+  return { ok: state !== 'error', state, report };
+}
+
+// Mise à jour automatique toutes les 30 min (X d'abord ; YouTube, transcriptions et indexation ensuite).
 async function autoSync() {
   const s = await getSettings();
   if (!s.autoSync) return;
-  const last = (await getMeta('lastSyncAt')) || 0;
+  const last = (await getMeta('lastUpdateAt')) || 0;
   if (Date.now() - last < (SYNC_EVERY_MIN - 2) * 60_000) return;
-  const { withRequest } = await findCaptureTab();
-  if (!withRequest) return;
-  await setMeta('lastSyncAt', Date.now());
-  chrome.tabs.sendMessage(withRequest.id, { type: 'startBackfill', mode: 'incremental' }).catch(() => {});
+  updateAll({ manual: false });
 }
 
 async function startOrStop(msg) {
@@ -128,10 +202,11 @@ async function ytReconcile(msg) {
   }
 }
 
-async function ytStart(mode) {
-  let ids;
+async function ytStart(mode, opts = {}) {
+  let ids, counts;
+  if (mode === 'new') counts = await playlistCounts();
   if (mode === 'transcripts') {
-    ids = (await pendingTranscriptIds((await getSettings()).ytTranscripts, (await getSettings()).ytTrBatch || 100000)).map((id) => id.slice(3));
+    ids = (await pendingTranscriptIds((await getSettings()).ytTranscripts, opts.limit || (await getSettings()).ytTrBatch || 100000)).map((id) => id.slice(3));
     if (!ids.length) return { ok: false, reason: 'nothing-to-do' };
   }
   const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
@@ -152,13 +227,14 @@ async function ytStart(mode) {
     }
   }
   for (let i = 0; i < 10; i++) {
-    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, speed: mode === 'transcripts' ? (await getSettings()).ytTrSpeed : undefined, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
+    try { await chrome.tabs.sendMessage(tab.id, { type: 'ytStart', mode, ids, counts, speed: mode === 'transcripts' ? (await getSettings()).ytTrSpeed : undefined, days: mode === 'history' ? (await getSettings()).ytHistoryDays : undefined }); return { ok: true }; }
     catch { await new Promise((r) => setTimeout(r, 1000)); }
   }
   return { ok: false, reason: 'no-content-script' };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'backfillProgress' || msg?.type === 'ytProgress') settle(msg);
   switch (msg?.type) {
     case 'captured': {
       if (msg.runId) {
@@ -187,8 +263,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (!m.has(msg.playlist.id)) m.set(msg.playlist.id, new Set());
         for (const it of items) m.get(msg.playlist.id).add(it.id);
       }
-      putVideos(items).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } broadcast({ type: 'tweetsUpdated' }); });
-      return false;
+      putVideos(items).then((added) => { if (added) { broadcast({ type: 'tweetsAdded', added }); kickIndexing(); } broadcast({ type: 'tweetsUpdated' }); sendResponse({ fresh: added }); }, () => sendResponse({ fresh: null }));
+      return true;
     }
     case 'ytHistory': {
       const items = msg.videos.map((v) => toHistoryItem(v, v.day || null));
@@ -224,6 +300,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       }
       return false;
     }
+    case 'q:updateAll': { updateAll({ manual: true }).then(sendResponse); return true; }
+    case 'q:updateStop': {
+      updateStop = true;
+      chrome.tabs.query({ url: ['https://www.youtube.com/*', ...X_TABS] }).then((tabs) => { for (const t of tabs) { chrome.tabs.sendMessage(t.id, { type: 'ytStop' }).catch(() => {}); chrome.tabs.sendMessage(t.id, { type: 'stopBackfill' }).catch(() => {}); } sendResponse({ ok: true }); });
+      return true;
+    }
+    case 'q:updateStatus': { sendResponse({ updating }); return false; }
     case 'q:ytSync': { ytStart(msg.mode || 'all').then(sendResponse); return true; }
     case 'q:ytStop': {
       chrome.tabs.query({ url: 'https://www.youtube.com/*' }).then((tabs) => { for (const t of tabs) chrome.tabs.sendMessage(t.id, { type: 'ytStop' }).catch(() => {}); sendResponse({ ok: true }); });
