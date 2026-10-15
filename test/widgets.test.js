@@ -373,3 +373,37 @@ test('comparaison de stats existantes : refDefs fournit les séries', () => {
   assert.deepEqual(m.series.map((s) => [s.label, s.n]), [['Robots', 2], ['IA', 1]]);
   assert.equal(m.keys.length, 7);
 });
+
+import { runAutoJev } from '../src/lib/autojev.js';
+import { modelOf } from '../src/lib/models.js';
+test('Jev automatique : mêmes réglages que les détecteurs et les stats, plafond quotidien, jamais deux fois', async () => {
+  const mid = modelOf('default').id;
+  const settings = { embedModel: 'default', aiHistory: false, autoJev: { on: true, dailyCap: 1 }, decision: { url: 'u', model: 'm', apiKey: 'k', priceInPerM: 0.042 } };
+  const det = { id: 'd1', name: 'D', desc: 'annonce de lancement', threshold: 0.5, confirm: { on: true, band: 0.2 }, protos: { [mid]: [[1, 0, 0]] }, examples: ['x'] };
+  const unused = { id: 'd2', name: 'U', desc: 'autre', threshold: 0.5, confirm: { on: true, band: 0.2 }, protos: { [mid]: [[1, 0, 0]] } };
+  const meta = new Map([['dashWidgets', [{ id: 'w', kind: 'number', dets: ['d1'] }, { id: 'w2', kind: 'number', q: '', source: 'x', officialOnly: true }]], ['dashDetectors', [det, unused]]]);
+  const T = (id, s) => ({ id, name: 'N' + id, handle: 'h' + id, text: 'tweet ' + id, createdAt: '2026-10-1' + id, links: [], media: [], stats: {} });
+  const tweets = [T('1'), T('2'), T('3')];
+  const vecs = new Map([['1', Float32Array.from([0.55, 0, 0])], ['2', Float32Array.from([0.95, 0, 0])], ['3', Float32Array.from([0.1, 0, 0])]]);
+  const io = { getMeta: async (k) => meta.get(k), setMeta: async (k, v) => { meta.set(k, v); }, getAllVectors: async () => vecs, getAllChunkVecs: async () => new Map(), getTweets: async (ids) => tweets.filter((t) => ids.includes(t.id)), eachTweet: async (fn) => tweets.forEach(fn) };
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return { ok: true, json: async () => ({ answers: { match: { choice: 'oui', confidence: 0.9, probabilities: { oui: 0.9, non: 0.1 } } } }) }; };
+  const now = Date.parse('2026-10-14T12:00:00Z');
+  const r = await runAutoJev(settings, { io, now });
+  assert.equal(r.detectors, 1, 'seul le cas ambigu (0,55) du détecteur utilisé et confirmé est jugé');
+  assert.equal(r.official, 3, 'la stat « annonces officielles » fait juger ses 3 tweets');
+  assert.equal(calls, 4);
+  assert.equal(meta.get('detVerdicts').d1.v['1'], 90);
+  assert.equal(Object.keys(meta.get('officialVerdicts').m).length, 3);
+  assert.equal(meta.get('jevSpend').count, 4);
+  const r2 = await runAutoJev(settings, { io, now });
+  assert.equal(r2.judged, 0, 'rien n’est rejugé');
+  assert.equal(calls, 4);
+  // désactivé / plafond
+  assert.equal((await runAutoJev({ ...settings, autoJev: { on: false, dailyCap: 1 } }, { io, now })).skipped, 'off');
+  meta.delete('officialVerdicts'); meta.delete('detVerdicts'); meta.delete('jevSpend');
+  const r3 = await runAutoJev({ ...settings, autoJev: { on: true, dailyCap: 0.0001 } }, { io, now });
+  assert.equal(r3.judged, 0);
+  assert.ok(r3.capReached, 'le plafond du jour bloque les dépenses');
+  assert.equal(calls, 4);
+});

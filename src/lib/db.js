@@ -192,6 +192,16 @@ export async function scanTweets(predicate) {
   });
 }
 
+// Parcourt tous les tweets avec un curseur, sans les accumuler en mémoire (fn reçoit chaque élément).
+export async function eachTweet(fn) {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction('tweets').objectStore('tweets').openCursor();
+    req.onsuccess = () => { const c = req.result; if (!c) return resolve(); fn(c.value); c.continue(); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 // Vidéos YouTube : fusion avec l'existant (appartenance aux playlists = union). Retourne le nombre de nouvelles vidéos.
 export async function putVideos(items, excluded) {
   if (!items.length) return 0;

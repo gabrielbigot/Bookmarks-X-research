@@ -18,7 +18,11 @@ const RKEY = 'xbs.stats.range';
 let all = [], videos = [], everything = [], range = 90, src = 'x', widgets = [], detectors = [], verdicts = {};
 let primaryList = [], official = { v: OFFICIAL_DESC, m: {} }; // sources primaires déclarées ; verdicts « annonce officielle » de Jev (% oui)
 const primarySet = () => new Set(primaryList.map(handleKey));
-const saveOfficial = () => setMeta('officialVerdicts', official);
+const saveOfficial = async () => {
+  const db = await getMeta('officialVerdicts');
+  if (db?.v === official.v) official = { v: official.v, m: { ...db.m, ...official.m } };
+  await setMeta('officialVerdicts', official);
+};
 try { const v = localStorage.getItem('xbs.stats.src'); src = v === 'yt' || v === 'mine' ? v : 'x'; } catch {}
 try { const v = localStorage.getItem(RKEY); if (v !== null) range = v === 'all' ? null : Number(v); } catch {}
 
@@ -75,7 +79,12 @@ const lastOfMonth = (ym) => { const [y, m] = ym.split('-').map(Number); return `
 // =====================================================================================================================
 const saveWidgets = () => setMeta('dashWidgets', widgets);
 const saveDetectors = () => setMeta('dashDetectors', detectors);
-const saveVerdicts = () => setMeta('detVerdicts', verdicts);
+// fusion avec la base : le jugement automatique (en arrière-plan) peut écrire en même temps, on ne perd jamais un verdict
+const saveVerdicts = async () => {
+  const db = (await getMeta('detVerdicts')) || {};
+  for (const [id, vd] of Object.entries(verdicts)) db[id] = db[id]?.key === vd.key ? { key: vd.key, v: { ...db[id].v, ...vd.v } } : vd;
+  verdicts = db; await setMeta('detVerdicts', db);
+};
 // verdicts de Jev valables pour ce détecteur (la description a pu changer depuis)
 const verdictsOf = (det) => (verdicts[det.id]?.key === verdictKey(det) ? verdicts[det.id].v : {});
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
@@ -212,6 +221,7 @@ async function renderMine(app) {
   if (!allBoards().some((b) => b.id === board)) board = 'main';
   let html = `<div class="boards">${allBoards().map((b) => `<button type="button" class="bt${b.id === board ? ' on' : ''}" data-b="${esc(b.id)}">${esc(b.name)}</button>`).join('')}<button type="button" class="bt add" id="b-add">+ Tableau</button>${board !== 'main' ? '<button type="button" class="bt" id="b-ren">Renommer</button><button type="button" class="bt" id="b-del">Supprimer</button>' : '<button type="button" class="bt" id="b-ren">Renommer</button>'}</div>`;
   html += `<div class="mine-bar"><button type="button" class="pbtn" id="w-add">+ Ajouter une stat</button><button type="button" class="pbtn alt" id="w-cmp" title="Superposer plusieurs de tes stats sur un même graphique">⇄ Comparer des stats</button><select id="tpl-sel" class="gbtn" title="Ajouter une stat toute prête"><option value="">+ Modèle…</option>${TEMPLATES.map((t, i) => `<option value="${i}">${esc(t.title)}</option>`).join('')}</select><button type="button" class="gbtn" id="d-manage">Détecteurs (${detectors.length})</button><button type="button" class="gbtn" id="p-manage">Sources primaires (${primaryList.length})</button></div>`;
+  if (autoJevLast && autoJevLast.at > Date.now() - 864e5 && autoJevLast.judged) html += `<p class="muted">Jev automatique : ${fmtInt(autoJevLast.judged)} élément(s) jugé(s) lors de la dernière passe (≈ ${autoJevLast.dollars.toFixed(3).replace('.', ',')} $)${autoJevLast.capReached ? ' — plafond du jour atteint, la suite reprendra demain' : ''}.</p>`;
   if (missing.length) html += `<p class="note">Détecteur(s) <b>${esc(missing.join(', '))}</b> : les exemples n’ont pas encore été analysés avec le modèle actuel — ouvre « Détecteurs » et enregistre-les à nouveau (le modèle de recherche doit être disponible).</p>`;
   const emptyDets = [...needed].filter((id) => sets.has(id) && sets.get(id).size === 0 && !missing.includes(detectors.find((d) => d.id === id)?.name)).map((id) => detectors.find((d) => d.id === id)?.name).filter(Boolean);
   if (emptyDets.length) html += `<p class="note">⚠ Détecteur(s) <b>${esc(emptyDets.join(', '))}</b> : aucun élément retenu. Le seuil est probablement trop haut : ouvre « Détecteurs » › Modifier, une suggestion de seuil y est proposée.</p>`;
@@ -849,14 +859,17 @@ function finish(app) {
 // ---------- mise à jour automatique : les stats suivent les nouvelles données ----------
 // Écoute les messages de l'extension (nouveaux tweets/vidéos, indexation, fin de « Tout mettre à jour »). Au plus un rechargement
 // toutes les 45 s, jamais pendant l'édition (boîte de dialogue ouverte) ni onglet caché (rattrapage au retour).
+let autoJevLast = null;
 let refreshAt = 0, refreshTimer = 0, refreshDirty = false, vecDirty = false, refreshing = false, savedScroll = null;
 const REFRESH_GAP = 45_000;
 async function refreshData() {
   if (refreshing) return;
   refreshing = true;
   try {
-    const [t0, ov] = await Promise.all([getAllTweets(), getMeta('officialVerdicts')]);
+    const [t0, ov, vds, last] = await Promise.all([getAllTweets(), getMeta('officialVerdicts'), getMeta('detVerdicts'), getMeta('autoJevLast')]);
     if (ov?.v === OFFICIAL_DESC) official = ov;
+    if (vds) verdicts = vds;
+    autoJevLast = last || null;
     const t = t0.filter((x) => !x.off);
     everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem);
     if (vecDirty) { vecCache = null; scoreCache.clear(); learnCache.clear(); vecDirty = false; }
@@ -884,6 +897,7 @@ try {
       case 'tweetsAdded': case 'tweetsUpdated': case 'tweetsRemoved': case 'tweetsEnriched': wantRefresh(); break;
       case 'indexProgress': vecDirty = true; wantRefresh(); break;
       case 'indexDone': vecDirty = true; wantRefresh(true); break;
+      case 'autoJevProgress': if (m.state === 'done' && !m.skipped && m.judged) wantRefresh(true); break;
       case 'updateProgress': if (m.step === 'end') { vecDirty = true; wantRefresh(true); } break;
     }
   });
@@ -891,4 +905,5 @@ try {
 
 drawSources();
 drawRanges();
+getMeta('autoJevLast').then((v) => { autoJevLast = v || null; }).catch(() => {});
 Promise.all([getAllTweets(), getMeta('dashWidgets'), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts'), getMeta('dashBoards'), getMeta('dashMainName')]).then(([t0, w, dts, vds, ps, ov, bds, mn]) => { boards = bds || []; if (mn) MAIN.name = mn; verdicts = vds || {}; primaryList = ps || []; official = ov?.v === OFFICIAL_DESC ? ov : { v: OFFICIAL_DESC, m: {} }; const t = t0.filter((x) => !x.off); everything = t; all = t.filter((x) => !isVideoItem(x)); videos = t.filter(isVideoItem); widgets = w || []; detectors = dts || []; render(); }); // ces statistiques portent sur les bookmarks X

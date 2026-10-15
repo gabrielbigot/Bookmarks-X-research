@@ -114,6 +114,9 @@
         </div>
         <label class="chk"><input type="checkbox" id="dec-intent"><span>Comprendre mes requêtes avec Jev (tri, période, type)</span></label>
         <label class="chk"><input type="checkbox" id="dec-rerank"><span>Reclasser les 20 meilleurs résultats avec Jev</span></label>
+        <label class="chk"><input type="checkbox" id="aj-on"><span>Faire juger <b>automatiquement</b> les nouveaux éléments par Jev (stats et détecteurs)</span></label>
+        <div class="grid"><label>Plafond de dépense par jour ($)<input id="aj-cap" type="number" min="0" step="0.01" style="width:100px"></label></div>
+        <p class="hint" id="aj-msg">Désactivé par défaut. Après l'indexation et chaque mise à jour, Jev juge uniquement ce que tes réglages prévoient déjà : les cas ambigus des détecteurs « confirmés par Jev » utilisés par une stat, et les tweets des stats « annonces officielles ». Chaque élément n'est jugé qu'une fois ; le plafond est une estimation (la sortie de Jev est gratuite).</p>
         <div class="btns"><button type="button" id="dec-test">Enregistrer & tester</button></div>
         <p class="hint" id="dec-msg"></p>
       </section>

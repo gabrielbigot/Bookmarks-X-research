@@ -1,6 +1,7 @@
 import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pendingTranscriptIds, reconcilePlaylist, playlistCounts, applyYtSelection, counts, setMeta, getMeta, getAllTweetKeys, deleteTweets } from './lib/db.js';
 import { toItem, toHistoryItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
+import { runAutoJev } from './lib/autojev.js';
 
 const PANEL_URL = chrome.runtime.getURL('panel.html');
 const X_TABS = ['https://x.com/*', 'https://twitter.com/*'];
@@ -137,8 +138,29 @@ async function updateAll({ manual }) {
     return finishUpdate(report, 'error', String(e?.message || e));
   }
 }
+// Jugement automatique par Jev des nouveaux éléments (désactivé par défaut ; plafond de dépenses par jour). Lancé après l'indexation
+// et à la fin d'une mise à jour, au plus une fois à la fois, jamais pendant une mise à jour.
+let autoJevRunning = false, autoJevTimer = 0;
+function scheduleAutoJev(delay = 20_000) {
+  clearTimeout(autoJevTimer);
+  autoJevTimer = setTimeout(async () => {
+    if (autoJevRunning || updating) { scheduleAutoJev(60_000); return; }
+    const s = await getSettings();
+    if (!s.autoJev?.on) return;
+    autoJevRunning = true;
+    broadcast({ type: 'autoJevProgress', state: 'start' });
+    try {
+      const r = await runAutoJev(s, { onProgress: (p) => broadcast({ type: 'autoJevProgress', state: 'progress', ...p }) });
+      if (!r.skipped || r.skipped === 'cap') await setMeta('autoJevLast', { at: Date.now(), ...r });
+      broadcast({ type: 'autoJevProgress', state: 'done', ...r });
+    } catch (e) {
+      broadcast({ type: 'autoJevProgress', state: 'error', error: String(e?.message || e) });
+    } finally { autoJevRunning = false; }
+  }, delay);
+}
 function finishUpdate(report, state, message) {
   updating = false;
+  scheduleAutoJev(60_000);
   setMeta('lastUpdateAt', Date.now());
   updProgress('end', state === 'done' ? 'Mise à jour terminée' : state === 'stopped' ? 'Mise à jour arrêtée' : 'Mise à jour : ' + (message || 'erreur'), { state, report });
   return { ok: state !== 'error', state, report };
@@ -235,6 +257,7 @@ async function ytStart(mode, opts = {}) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'indexDone') scheduleAutoJev();
   if (msg?.type === 'backfillProgress' || msg?.type === 'ytProgress') settle(msg);
   switch (msg?.type) {
     case 'captured': {

@@ -1070,6 +1070,11 @@ async function openSettings() {
   $('dec-key').value = settings.decision.apiKey;
   $('dec-intent').checked = settings.decisionIntent;
   $('dec-rerank').checked = settings.decisionRerank;
+  $('aj-on').checked = !!settings.autoJev?.on;
+  $('aj-cap').value = settings.autoJev?.dailyCap ?? 0.1;
+  const sp = await getMeta('jevSpend'), spToday = sp?.day === new Date().toISOString().slice(0, 10) ? sp : null;
+  $('aj-msg').dataset.base = $('aj-msg').dataset.base || $('aj-msg').textContent;
+  $('aj-msg').textContent = $('aj-msg').dataset.base + (spToday ? ` Aujourd’hui : ${spToday.count} élément(s) jugé(s), ≈ ${spToday.dollars.toFixed(3).replace('.', ',')} $.` : '');
   const h = await getMeta('syncDir');
   setDirUi(h);
   dlg.showModal();
@@ -1136,6 +1141,8 @@ $('dec-test').onclick = async () => {
     msg.textContent = `✓ Connecté. Réponse : « ${r?.choice} » (confiance ${Number(r?.confidence ?? 0).toFixed(2)})`;
   } catch (e) { msg.textContent = '⚠ ' + e.message; }
 };
+const saveAj = async () => { settings = await setSettings({ autoJev: { on: $('aj-on').checked, dailyCap: Math.max(0, Number($('aj-cap').value) || 0) } }); };
+$('aj-on').onchange = saveAj; $('aj-cap').onchange = saveAj;
 for (const id of ['dec-intent', 'dec-rerank']) {
   $(id).onchange = async () => { settings = await setSettings({ decisionIntent: $('dec-intent').checked, decisionRerank: $('dec-rerank').checked }); };
 }
@@ -1415,6 +1422,14 @@ chrome.runtime.onMessage.addListener((m) => {
       if (r.transcripts != null) bits.push(`transcriptions : ${r.transcripts}`);
       $('progress').textContent = m.label + (bits.length ? ' — ' + bits.join(' · ') : '');
       scheduleReload(1000, true);
+      break;
+    }
+    case 'autoJevProgress': {
+      if (updatingUi) break;
+      if (m.state === 'start') $('progress').textContent = 'Jev : jugement automatique des nouveaux éléments…';
+      else if (m.state === 'progress') $('progress').textContent = `Jev : ${m.judged} élément(s) jugé(s) (≈ ${m.dollars.toFixed(3).replace('.', ',')} $)`;
+      else if (m.state === 'done') $('progress').textContent = m.skipped ? '' : `Jev : ${m.judged} élément(s) jugé(s) (≈ ${m.dollars.toFixed(3).replace('.', ',')} $)${m.capReached ? ' — plafond du jour atteint' : ''}${m.error ? ' — ' + m.error : ''}`;
+      else if (m.state === 'error') $('progress').textContent = 'Jev auto : ' + m.error;
       break;
     }
     case 'ytProgress': {
