@@ -227,7 +227,7 @@ async function ytReconcile(msg) {
 
 async function ytStart(mode, opts = {}) {
   let ids, counts;
-  if (mode === 'new') counts = await playlistCounts();
+  if (!['current', 'history', 'transcripts'].includes(mode)) counts = await playlistCounts(); // « new » : playlists inchangées ignorées ; toutes : incomplètes lues en premier
   if (mode === 'transcripts') {
     ids = (await pendingTranscriptIds((await getSettings()).ytTranscripts, opts.limit || (await getSettings()).ytTrBatch || 100000)).map((id) => id.slice(3));
     if (!ids.length) return { ok: false, reason: 'nothing-to-do' };

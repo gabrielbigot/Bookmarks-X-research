@@ -178,6 +178,12 @@ export function parseYoutube(json, opts = {}) {
     } else if (n.pageHeaderRenderer && typeof n.pageHeaderRenderer.pageTitle === 'string' && !header) {
       header = { id: '', title: n.pageHeaderRenderer.pageTitle, count: 0 };
     }
+    // ancien format : jeton porté par la liste elle-même (playlistVideoListRenderer / playlistVideoListContinuation)
+    const oldList = n.playlistVideoListRenderer?.continuations || n.playlistVideoListContinuation?.continuations;
+    if (oldList) {
+      const t = oldList.map((c) => c?.nextContinuationData?.continuation || c?.reloadContinuationData?.continuation).find(Boolean);
+      if (t) contViaRenderer = contViaRenderer || t;
+    }
     // jeton de pagination : celui de l'élément de fin de liste en priorité (menus de tri exclus)
     if (n.continuationItemRenderer) {
       const t = n.continuationItemRenderer.continuationEndpoint?.continuationCommand?.token || deepFindString(n.continuationItemRenderer, 'token');
@@ -307,4 +313,33 @@ export function transcriptOrder(videos) {
 export function syncSummary(d) {
   const probs = (d.problems || []).slice(0, 4).map((p) => `${p.title} (${p.count}${p.expected ? '/' + p.expected : ''}${p.why ? ' : ' + p.why : ''})`);
   return `${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}${probs.length ? ' — à reprendre : ' + probs.join(' ; ') + ((d.problems || []).length > 4 ? '…' : '') : ''}`;
+}
+
+// Ordre de lecture des playlists : d'abord les playlists perso incomplètes (moins de vidéos connues que YouTube n'en annonce),
+// puis « À regarder plus tard » et « J'aime » (longues, lues en dernier recours), puis les autres. Ordre relatif conservé.
+export function orderLists(lists, counts = {}) {
+  const rank = (l) => (l.id === 'WL' || l.id === 'LL' ? 1 : l.count > 0 && (counts[l.id] || 0) + 5 < l.count ? 0 : 2);
+  return lists.map((l, i) => ({ l, i, r: rank(l) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.l);
+}
+// Mise à jour incrémentale (WL / J'aime, plus récent d'abord) : s'arrête quand une page n'apporte rien, quand deux pages de suite
+// n'apportent presque rien (≤ 2 nouvelles), ou après `maxPages` pages. fresh = nombre de nouvelles vidéos de la page (null = inconnu).
+export function incrementalStop(fresh, state, { maxPages = 6 } = {}) {
+  state.pages = (state.pages || 0) + 1;
+  if (fresh === 0) return true;
+  state.low = fresh !== null && fresh <= 2 ? (state.low || 0) + 1 : 0;
+  return state.low >= 2 || state.pages >= maxPages;
+}
+
+// Dernier recours : tout jeton de page suivante présent dans la réponse (le dernier rencontré). À n'utiliser que si l'on SAIT qu'il manque des vidéos.
+export function findAnyContinuation(json) {
+  let last = null;
+  const walkAll = (n, d = 0) => {
+    if (!n || typeof n !== 'object' || d > 40) return;
+    if (Array.isArray(n)) { for (const x of n) walkAll(x, d + 1); return; }
+    const t = n.continuationCommand?.token || n.nextContinuationData?.continuation || n.reloadContinuationData?.continuation;
+    if (typeof t === 'string' && t.length > 20) last = t;
+    for (const v of Object.values(n)) walkAll(v, d + 1);
+  };
+  walkAll(json);
+  return last;
 }

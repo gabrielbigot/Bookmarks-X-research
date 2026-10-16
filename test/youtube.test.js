@@ -308,3 +308,33 @@ test('fin de synchro : playlists incomplètes nommées, avec lu / annoncé', () 
   const s = syncSummary({ total: 220, lists: 4, incomplete: 2, problems: [{ title: '3', count: 100, expected: 549, why: 'YouTube n’a pas renvoyé la suite' }, { title: 'À regarder plus tard 2', count: 0, expected: 4995, why: 'HTTP 400' }] });
   assert.match(s, /\(2 incomplète\(s\)\) — à reprendre : 3 \(100\/549 : YouTube n’a pas renvoyé la suite\) ; À regarder plus tard 2 \(0\/4995 : HTTP 400\)/);
 });
+
+import { orderLists, incrementalStop } from '../src/lib/youtube.js';
+test('synchro : playlists incomplètes d’abord, mise à jour incrémentale bornée', () => {
+  const lists = [{ id: 'WL' }, { id: 'LL' }, { id: 'A', count: 40 }, { id: 'B', count: 549 }, { id: 'C', count: 4995 }, { id: 'D', count: 10 }];
+  const counts = { A: 40, B: 100, C: 100, D: 8 };
+  assert.deepEqual(orderLists(lists, counts).map((l) => l.id), ['B', 'C', 'WL', 'LL', 'A', 'D']); // D : 8/10, écart ≤ 5 = complète
+  const st = {};
+  assert.equal(incrementalStop(30, st), false);   // page riche en nouveautés : on continue
+  assert.equal(incrementalStop(1, st), false);    // presque rien (1re fois)
+  assert.equal(incrementalStop(2, st), true);     // presque rien 2 fois de suite : stop
+  assert.equal(incrementalStop(0, {}), true);     // rien : stop
+  const st2 = {}; let stop = false, n = 0;
+  while (!stop) { stop = incrementalStop(50, st2); n++; }
+  assert.equal(n, 6, 'borné à 6 pages (600 vidéos) même si chaque page apporte des nouveautés');
+  assert.equal(incrementalStop(null, {}), false); // accusé perdu : on continue (jusqu'à la borne)
+});
+
+import { findAnyContinuation } from '../src/lib/youtube.js';
+test('pagination : ancien format (jeton porté par la liste) et jeton de dernier recours', () => {
+  const old = { contents: { playlistVideoListRenderer: { contents: [pvr('aaaaaaaaaaa', 'Une')], continuations: [{ nextContinuationData: { continuation: 'TOKEN_OLD_FORMAT_AAAAAAAAAAAAAAA' } }] } } };
+  assert.equal(parseYoutube(old).continuation, 'TOKEN_OLD_FORMAT_AAAAAAAAAAAAAAA');
+  const oldCont = { continuationContents: { playlistVideoListContinuation: { contents: [pvr('bbbbbbbbbbb', 'Deux')], continuations: [{ nextContinuationData: { continuation: 'TOKEN_OLD_CONT_BBBBBBBBBBBBBBBBBB' } }] } } };
+  assert.equal(parseYoutube(oldCont).continuation, 'TOKEN_OLD_CONT_BBBBBBBBBBBBBBBBBB');
+  assert.equal(parseYoutube({ a: [pvr('ccccccccccc', 'Trois'), contItem('TOKEN_NEW_FORMAT_CCCCCCCCCCCCCCCCCCC')] }).continuation, 'TOKEN_NEW_FORMAT_CCCCCCCCCCCCCCCCCCC');
+  // dernier recours : un jeton que le lecteur normal ne reconnaît pas
+  const odd = { x: { weird: { continuationCommand: { token: 'TOKEN_SOMEWHERE_ELSE_DDDDDDDDDDDDDD' } } } };
+  assert.equal(parseYoutube(odd).continuation, null);
+  assert.equal(findAnyContinuation(odd), 'TOKEN_SOMEWHERE_ELSE_DDDDDDDDDDDDDD');
+  assert.equal(findAnyContinuation({ a: 1 }), null);
+});

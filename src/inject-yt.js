@@ -1,6 +1,6 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
-import { parseYoutube, parseHistoryHeader } from './lib/youtube.js';
+import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findAnyContinuation } from './lib/youtube.js';
 import { findTranscriptParams, learnTemplate, deriveParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
@@ -145,22 +145,29 @@ async function browseRetry(body) {
 }
 async function syncPlaylist(pid, title, label, incremental = false, expected = 0) {
   let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false, stoppedEarly = false;
+  const incState = {};
+  let altTokens = 0;
   titles.set(pid, title || titles.get(pid) || '');
   while (body && !stopFlag && pages < 400) {
     const { json } = await browseRetry(body);
     const r = handle(json, body);
     pages++;
     if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
+    // la page n'indique pas de suite alors que la playlist en annonce nettement plus : on cherche un jeton ailleurs dans la réponse
+    if (r && !r.continuation && r.videos.length && expected > count + 5 && !stopFlag) {
+      const alt = findAnyContinuation(json);
+      if (alt) { r.continuation = alt; if (pid) contMap.set(alt, pid); altTokens++; }
+    }
     progress('running', { playlist: label, pages, count });
     // mise à jour : « À regarder plus tard » et « J'aime » listent le plus récent en premier -> on s'arrête dès qu'une page n'apporte rien de nouveau
-    if (incremental && r?.videos.length && (await ackP(r.nonce)) === 0) { stoppedEarly = true; body = null; break; }
+    if (incremental && r?.videos.length && incrementalStop(await ackP(r.nonce), incState)) { stoppedEarly = true; body = null; break; }
     body = r?.continuation ? { continuation: r.continuation } : null;
     if (body) await sleep(1000 + Math.random() * 1500); // rythme « humain »
   }
   // « complète » seulement si on a bien lu quelque chose (une page d'erreur muette ne doit rien effacer)
   // « courte » : YouTube a cessé de donner des pages alors que la playlist annonce nettement plus de vidéos
   const short = !stopFlag && !body && !stoppedEarly && expected > 0 && count < expected * 0.9 && expected - count > 5;
-  return { count, short, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
+  return { count, short, altTokens, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -347,7 +354,7 @@ async function runSync(mode, counts = {}, excluded = []) {
       if (!pid) { progress('error', { message: 'Ouvre d’abord une playlist (page « /playlist »).' }); return; }
       lists = [{ id: pid, title: titles.get(pid) || document.title.replace(/ - YouTube$/, '') }];
     } else {
-      lists = [{ id: 'WL', title: 'À regarder plus tard' }, { id: 'LL', title: 'Vidéos que j’aime' }, ...(await listUserPlaylists())];
+      lists = orderLists([{ id: 'WL', title: 'À regarder plus tard' }, { id: 'LL', title: 'Vidéos que j’aime' }, ...(await listUserPlaylists())], counts);
     }
     let total = 0, doneLists = 0, incomplete = 0;
     const problems = [];
@@ -365,7 +372,7 @@ async function runSync(mode, counts = {}, excluded = []) {
         r = { count: 0, complete: false, error: e.message }; // une playlist qui échoue ne bloque pas les suivantes
       }
       total += r.count; doneLists++;
-      if (!r.complete) { incomplete++; if (r.error || r.short) problems.push({ title: l.title, count: r.count, expected: l.count || 0, why: r.error || 'YouTube n’a pas renvoyé la suite' }); }
+      if (!r.complete) { incomplete++; if (r.error || r.short) problems.push({ title: l.title, count: r.count, expected: l.count || 0, why: r.error || (r.altTokens ? 'la suite renvoyée par YouTube était vide' : 'YouTube n’a pas renvoyé de page suivante') }); }
       post('sync', { state: 'playlist-done', runId: currentRun, playlistId: l.id, complete: r.complete, count: r.count });
       await sleep(500);
     }
@@ -380,20 +387,20 @@ async function runSync(mode, counts = {}, excluded = []) {
 
 // Synchro « toutes les playlists » demandée depuis une autre page : on navigue, puis on reprend.
 const PENDING = 'xbs-yt-pending';
-function startAll(excluded = []) {
+function startAll(excluded = [], counts = {}) {
   if (location.pathname !== '/feed/playlists') {
-    try { sessionStorage.setItem(PENDING, 'all:' + JSON.stringify(excluded)); } catch {}
+    try { sessionStorage.setItem(PENDING, 'all:' + JSON.stringify({ excluded, counts })); } catch {}
     location.assign('/feed/playlists');
     return;
   }
-  runSync('all', {}, excluded);
+  runSync('all', counts, excluded);
 }
 window.addEventListener('load', () => {
   try {
     const pend = sessionStorage.getItem(PENDING);
     if (pend && location.pathname === '/feed/playlists') {
       sessionStorage.removeItem(PENDING);
-      if (pend.startsWith('all:')) setTimeout(() => runSync('all', {}, safeJson(pend.slice(4)) || []), 1500);
+      if (pend.startsWith('all:')) { const o = safeJson(pend.slice(4)); const ex = Array.isArray(o) ? o : o?.excluded || [], cn = Array.isArray(o) ? {} : o?.counts || {}; setTimeout(() => runSync('all', cn, ex), 1500); }
       else if (pend.startsWith('new:')) { const o = safeJson(pend.slice(4)) || {}; setTimeout(() => runSync('new', o.counts || {}, o.excluded || []), 1500); }
     }
   } catch {}
@@ -407,7 +414,7 @@ window.addEventListener('message', (ev) => {
   if (d.type === 'start' && d.mode === 'transcripts') runTranscripts(d.ids || [], d.speed);
   else if (d.type === 'start' && d.mode === 'history') runHistory(d.days ?? 90);
   else if (d.type === 'start' && d.mode === 'new') { if (location.pathname !== '/feed/playlists') { try { sessionStorage.setItem(PENDING, 'new:' + JSON.stringify({ counts: d.counts || {}, excluded: d.excluded || [] })); } catch {} location.assign('/feed/playlists'); } else runSync('new', d.counts || {}, d.excluded || []); }
-  else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll(d.excluded || []));
+  else if (d.type === 'start') (d.mode === 'current' ? runSync('current') : startAll(d.excluded || [], d.counts || {}));
   if (d.type === 'stop') stopFlag = true;
   if (d.type === 'ping') post('pong', { path: location.pathname, ready: !!cfg('INNERTUBE_CONTEXT'), busy });
 });
