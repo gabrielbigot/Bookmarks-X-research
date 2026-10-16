@@ -279,6 +279,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (msg.state === 'done' && msg.complete && msg.mode === 'full' && msg.runId) detectOrphans(msg.runId);
       return false;
     }
+    case 'ytDiag': { // forme de la réponse YouTube d'une playlist sans page suivante (clés seulement) : copiable depuis ⚙
+      getMeta('ytDiag').then((cur) => setMeta('ytDiag', { at: Date.now(), build: __BUILD__, items: { ...((cur && cur.items) || {}), [msg.item.playlistId]: msg.item } })).catch(() => {});
+      return false;
+    }
     case 'ytCaptured': {
       const items = msg.videos.map((v) => toItem(v, msg.playlist));
       if (msg.runId && msg.playlist?.id) {

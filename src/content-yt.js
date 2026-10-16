@@ -13,6 +13,7 @@ window.addEventListener('message', (ev) => {
   else if (d.type === 'transcript') send({ type: 'ytTranscript', id: d.id, state: d.state, chunks: d.chunks });
   else if (d.type === 'playlists') send({ type: 'ytPlaylists', playlists: d.playlists });
   else if (d.type === 'sync') { send({ ...d, type: 'ytProgress' }); showStatus(d); }
+  else if (d.type === 'diag') send({ type: 'ytDiag', item: { playlistId: d.playlistId, title: d.title, count: d.count, expected: d.expected, pages: d.pages, alt: d.alt, shape: d.shape } });
   else if (d.type === 'warn') send({ type: 'parseWarning', src: 'youtube', unparsed: d.unparsed, parsed: 0, ops: [] });
   else if (d.type === 'error') console.warn('[xbs-yt]', d.message);
   else if (d.type === 'pong') { lastPong = Date.now(); ready = d.ready; lastPath = d.path; }

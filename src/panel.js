@@ -1127,6 +1127,12 @@ $('embed-model').onchange = async (e) => {
   chrome.runtime.sendMessage({ type: 'q:index', force: true });
 };
 
+$('yt-diag').onclick = async () => {
+  const d = await getMeta('ytDiag');
+  const msg = $('yt-diag-msg');
+  if (!d?.items || !Object.keys(d.items).length) { msg.textContent = 'Aucun diagnostic : lance d’abord « Playlists YouTube » ; il n’y en a que si une playlist reste incomplète.'; return; }
+  try { await navigator.clipboard.writeText(JSON.stringify(d, null, 1)); msg.textContent = `Copié (${Object.keys(d.items).length} playlist(s)) : colle-le dans la conversation.`; } catch (e) { msg.textContent = 'Copie impossible : ' + e.message; }
+};
 $('dec-test').onclick = async () => {
   const decision = { url: $('dec-url').value.trim(), model: $('dec-model').value.trim(), apiKey: $('dec-key').value.trim() };
   const msg = $('dec-msg');

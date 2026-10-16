@@ -1,6 +1,6 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
-import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findAnyContinuation } from './lib/youtube.js';
+import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findAnyContinuation, jsonShape } from './lib/youtube.js';
 import { findTranscriptParams, learnTemplate, deriveParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
@@ -146,10 +146,11 @@ async function browseRetry(body) {
 async function syncPlaylist(pid, title, label, incremental = false, expected = 0) {
   let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false, stoppedEarly = false;
   const incState = {};
-  let altTokens = 0;
+  let altTokens = 0, lastJson = null;
   titles.set(pid, title || titles.get(pid) || '');
   while (body && !stopFlag && pages < 400) {
     const { json } = await browseRetry(body);
+    lastJson = json;
     const r = handle(json, body);
     pages++;
     if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
@@ -167,7 +168,7 @@ async function syncPlaylist(pid, title, label, incremental = false, expected = 0
   // « complète » seulement si on a bien lu quelque chose (une page d'erreur muette ne doit rien effacer)
   // « courte » : YouTube a cessé de donner des pages alors que la playlist annonce nettement plus de vidéos
   const short = !stopFlag && !body && !stoppedEarly && expected > 0 && count < expected * 0.9 && expected - count > 5;
-  return { count, short, altTokens, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
+  return { count, short, altTokens, shape: short && lastJson ? jsonShape(lastJson) : '', pages, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -372,7 +373,8 @@ async function runSync(mode, counts = {}, excluded = []) {
         r = { count: 0, complete: false, error: e.message }; // une playlist qui échoue ne bloque pas les suivantes
       }
       total += r.count; doneLists++;
-      if (!r.complete) { incomplete++; if (r.error || r.short) problems.push({ title: l.title, count: r.count, expected: l.count || 0, why: r.error || (r.altTokens ? 'la suite renvoyée par YouTube était vide' : 'YouTube n’a pas renvoyé de page suivante') }); }
+      if (r.shape) post('diag', { playlistId: l.id, title: l.title, count: r.count, expected: l.count || 0, pages: r.pages, alt: r.altTokens, shape: r.shape });
+      if (!r.complete) { incomplete++; if (r.error || r.short) problems.push({ title: l.title, count: r.count, expected: l.count || 0, diag: !!r.shape, why: r.error || (r.altTokens ? 'la suite renvoyée par YouTube était vide' : 'YouTube n’a pas renvoyé de page suivante') }); }
       post('sync', { state: 'playlist-done', runId: currentRun, playlistId: l.id, complete: r.complete, count: r.count });
       await sleep(500);
     }

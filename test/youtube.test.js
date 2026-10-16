@@ -338,3 +338,13 @@ test('pagination : ancien format (jeton porté par la liste) et jeton de dernier
   assert.equal(findAnyContinuation(odd), 'TOKEN_SOMEWHERE_ELSE_DDDDDDDDDDDDDD');
   assert.equal(findAnyContinuation({ a: 1 }), null);
 });
+
+import { jsonShape } from '../src/lib/youtube.js';
+test('diagnostic : la forme d’une réponse ne contient aucun texte, seulement des clés et des tailles', () => {
+  const json = { responseContext: { x: 1 }, contents: { playlistVideoListRenderer: { contents: [pvr('aaaaaaaaaaa', 'Secret titre'), contItem('TOKEN_ABCDEFGHIJKLMNOPQRSTUVWXYZ')], isEditable: true } }, header: { title: 'Mon titre privé' } };
+  const shape = jsonShape(json);
+  assert.ok(!/Secret|privé|aaaaaaaaaaa/.test(shape), shape);
+  assert.ok(/playlistVideoListRenderer/.test(shape) && /continuationItemRenderer/.test(shape) && /token:str\(32\)/.test(shape), shape);
+  assert.ok(!/responseContext/.test(shape));
+  assert.ok(jsonShape({ a: 'x'.repeat(10000) }, { max: 100 }).length <= 101);
+});

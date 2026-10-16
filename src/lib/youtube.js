@@ -312,7 +312,8 @@ export function transcriptOrder(videos) {
 // Message de fin d'une synchro de playlists : incomplètes et en échec, avec le nombre lu et le nombre annoncé par YouTube.
 export function syncSummary(d) {
   const probs = (d.problems || []).slice(0, 4).map((p) => `${p.title} (${p.count}${p.expected ? '/' + p.expected : ''}${p.why ? ' : ' + p.why : ''})`);
-  return `${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}${probs.length ? ' — à reprendre : ' + probs.join(' ; ') + ((d.problems || []).length > 4 ? '…' : '') : ''}`;
+  const diag = (d.problems || []).some((p) => p.diag) ? ' · diagnostic enregistré : ⚙ › « Copier le diagnostic YouTube »' : '';
+  return `${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}${probs.length ? ' — à reprendre : ' + probs.join(' ; ') + ((d.problems || []).length > 4 ? '…' : '') + diag : ''}`;
 }
 
 // Ordre de lecture des playlists : d'abord les playlists perso incomplètes (moins de vidéos connues que YouTube n'en annonce),
@@ -342,4 +343,21 @@ export function findAnyContinuation(json) {
   };
   walkAll(json);
   return last;
+}
+
+// Forme d'une réponse YouTube (clés seulement, jamais les textes) : sert à comprendre pourquoi une playlist n'a pas de page suivante.
+const SHAPE_SKIP = /^(trackingParams|clickTrackingParams|responseContext|frameworkUpdates|accessibility|accessibilityData|thumbnails|webCommandMetadata|loggingDirectives|serviceTrackingParams)$/;
+export function jsonShape(json, { depth = 9, max = 6000 } = {}) {
+  const one = (v, key, d) => {
+    if (v === null || v === undefined) return 'null';
+    if (typeof v === 'string') return /ontinuation|token/i.test(key || '') ? `str(${v.length})` : 's';
+    if (typeof v === 'number') return 'n';
+    if (typeof v === 'boolean') return 'b';
+    if (Array.isArray(v)) return d <= 0 ? `[${v.length}]` : `[${v.length}]${v.length ? one(v[0], key, d - 1) : ''}${v.length > 1 && typeof v.at(-1) === 'object' && Object.keys(v.at(-1) || {}).join() !== Object.keys(v[0] || {}).join() ? '…' + one(v.at(-1), key, d - 1) : ''}`;
+    if (d <= 0) return '{…}';
+    const ks = Object.keys(v).filter((k) => !SHAPE_SKIP.test(k)).slice(0, 25);
+    return '{' + ks.map((k) => `${k}:${one(v[k], k, d - 1)}`).join(',') + '}';
+  };
+  const out = one(json, '', depth);
+  return out.length > max ? out.slice(0, max) + '…' : out;
 }
