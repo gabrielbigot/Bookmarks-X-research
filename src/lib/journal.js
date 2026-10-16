@@ -136,7 +136,7 @@ export function extractPageText(html, { max = 6000 } = {}) {
 
 // ---------- dossier de preuves ----------
 // pages : Map(url -> { title, text }) lues pour ce sujet. Retourne { sources, text }.
-export function evidenceFor(subject, pages = new Map(), { maxTweets = 8, maxPages = 2, maxTweetChars = 700, maxPageChars = 5000 } = {}) {
+export function evidenceFor(subject, pages = new Map(), { maxTweets = 8, maxPages = 2, maxTweetChars = 700, maxPageChars = 5000, web = [] } = {}) {
   const sources = [];
   const lines = [];
   subject.members.slice(0, maxTweets).forEach((t) => {
@@ -159,12 +159,17 @@ export function evidenceFor(subject, pages = new Map(), { maxTweets = 8, maxPage
     sources.push({ id, kind: 'page', url, title: p.title || host, host, text });
     lines.push(`[${id}] Page liée (${host}) « ${p.title || ''} » : ${text}`);
   }
+  web.forEach((w, i) => {
+    const id = 'W' + (i + 1);
+    sources.push({ id, kind: 'web', url: w.url, title: w.title || w.host, host: w.host, text: w.text });
+    lines.push(`[${id}] Page web trouvée par recherche (${w.host}) « ${w.title || ''} » : ${w.text}`);
+  });
   return { sources, text: lines.join('\n\n') };
 }
 
 // ---------- invites ----------
 const STYLE = 'Style : journal économique sobre, factuel, phrases claires, pas de superlatifs ni d’emphase, pas d’exclamation.';
-const RULES = 'Règles strictes : utilise UNIQUEMENT les informations du dossier fourni. N’ajoute aucun fait, chiffre, date ou nom qui n’y figure pas. Si une information manque, ne la devine pas. Cite tes sources dans le texte avec leur identifiant entre crochets, par exemple [T1] ou [L1], à la fin de la phrase concernée. Le texte est en français.';
+const RULES = 'Règles strictes : utilise UNIQUEMENT les informations du dossier fourni. N’ajoute aucun fait, chiffre, date ou nom qui n’y figure pas. Si une information manque, ne la devine pas. Cite tes sources dans le texte avec leur identifiant entre crochets, par exemple [T1], [L1] ou [W1], à la fin de la phrase concernée. Les sources [T] sont des tweets (elles portent l’annonce), [L] des pages liées dans les tweets, [W] des pages web trouvées par recherche (elles servent au contexte, aux chiffres et aux réactions). Le texte est en français.';
 
 export const TIER = { lead: { words: 700, maxTokens: 2400, paras: '6 à 8' }, article: { words: 300, maxTokens: 1100, paras: '3 à 4' } };
 
@@ -190,7 +195,7 @@ export function editorialMessages(summary) {
 
 // ---------- lecture des réponses ----------
 export function cleanCitations(text, valid) {
-  return String(text || '').replace(/\[((?:[TL]\d+)(?:\s*[,;]\s*[TL]\d+)*)\]/g, (m, ids) => {
+  return String(text || '').replace(/\[((?:[TLW]\d+)(?:\s*[,;]\s*[TLW]\d+)*)\]/g, (m, ids) => {
     const keep = ids.split(/\s*[,;]\s*/).filter((i) => valid.has(i));
     return keep.length ? `[${keep.join(',')}]` : '';
   }).replace(/\s{2,}/g, ' ').replace(/\s+([.,;:])/g, '$1').trim();
@@ -200,7 +205,10 @@ export function parseArticle(text, pack) {
   const valid = new Set(pack.sources.map((s) => s.id));
   const paragraphs = (Array.isArray(o.paragraphs) ? o.paragraphs : String(o.paragraphs || o.body || '').split(/\n+/)).map((p) => cleanCitations(clean(p), valid)).filter((p) => p.length > 20);
   if (!paragraphs.length || !clean(o.title)) throw new Error('article inexploitable');
-  const pull = clean(o.pull_quote), ps = valid.has(String(o.pull_source || '').trim()) ? String(o.pull_source).trim() : '';
+  const norm = (x) => clean(x).toLowerCase().replace(/[«»"'’]/g, '');
+  const pullTxt = clean(o.pull_quote).replace(/^[«"\s]+|[»"\s]+$/g, '');
+  const pullFound = pullTxt && pack.sources.some((x) => x.kind === 'tweet' && norm(x.text).includes(norm(pullTxt))); // la citation doit figurer mot pour mot dans un tweet
+  const pull = pullFound ? pullTxt : '', ps = valid.has(String(o.pull_source || '').trim()) ? String(o.pull_source).trim() : '';
   return { title: clean(o.title), dek: cleanCitations(clean(o.dek), valid), paragraphs, pull: pull.length >= 15 && pull.length <= 220 ? pull : '', pullSource: ps, points: (Array.isArray(o.key_points) ? o.key_points : []).map((p) => cleanCitations(clean(p), valid)).filter(Boolean).slice(0, 4) };
 }
 export function parseBriefs(text, valids) {
@@ -258,15 +266,74 @@ export function makeBibliography() {
 // [T1,L1] -> <sup>3,4</sup>
 export function citeHtml(text, pack, bib) {
   const byId = new Map(pack.sources.map((s) => [s.id, s]));
-  return esc(text).replace(/\[((?:[TL]\d+)(?:,[TL]\d+)*)\]/g, (m, ids) => {
+  return esc(text).replace(/\[((?:[TLW]\d+)(?:,[TLW]\d+)*)\]/g, (m, ids) => {
     const ns = [...new Set(ids.split(',').map((i) => byId.get(i)).filter(Boolean).map((s) => bib.number(s)))].sort((a, b) => a - b);
     return ns.length ? `<sup class="c">${ns.join(',')}</sup>` : '';
   });
 }
 export const sourcesLine = (article, pack, bib) => {
   const ids = new Set();
-  for (const m of [article.dek, ...article.paragraphs, ...article.points].join(' ').matchAll(/\[((?:[TL]\d+)(?:,[TL]\d+)*)\]/g)) m[1].split(',').forEach((i) => ids.add(i));
+  for (const m of [article.dek, ...article.paragraphs, ...article.points].join(' ').matchAll(/\[((?:[TLW]\d+)(?:,[TLW]\d+)*)\]/g)) m[1].split(',').forEach((i) => ids.add(i));
   const srcs = pack.sources.filter((s) => ids.has(s.id));
   if (!srcs.length) return '';
   return `<p class="srcl">Sources : ${srcs.map((s) => `<a href="${esc(s.url)}">${bib.number(s)}. ${esc(s.kind === 'tweet' ? '@' + s.handle : s.host)}</a>`).join(' · ')}</p>`;
 };
+
+// ---------- recherche web ----------
+export function searchMessages(subject) {
+  const tw = subject.members.slice(0, 3).map((t) => `- @${t.handle} (${(t.createdAt || '').slice(0, 10)}) : ${clean(t.text).slice(0, 400)}`).join('\n');
+  return [
+    { role: 'system', content: 'Tu fais de la recherche documentaire pour un journal hebdomadaire sur l’IA et la robotique. Utilise la recherche web. Trouve 4 à 8 faits vérifiables et utiles sur le sujet : contexte, chiffres, dates, caractéristiques, réactions, concurrents ; privilégie les sources primaires (blog officiel, documentation, papier de recherche). Chaque fait est une phrase complète, en français, soutenue par UNE page que tu as réellement consultée. N’invente aucun fait ni aucune adresse. Réponds uniquement en JSON : {"findings": [{"fact": "…", "url": "https://…"}]}.' },
+    { role: 'user', content: `Sujet (rubrique ${subject.sectionName}), d’après ces tweets :\n${tw}` },
+  ];
+}
+const normUrl = (u) => { try { const x = new URL(u); x.hash = ''; for (const k of [...x.searchParams.keys()]) if (/^utm_|^ref$|^fbclid$|^gclid$/i.test(k)) x.searchParams.delete(k); return x.href.replace(/\/$/, ''); } catch { return ''; } };
+// Retient les faits dont l'adresse figure parmi les pages réellement consultées (annotations du fournisseur) : jamais d'adresse inventée.
+export function parseFindings(text, annotations = []) {
+  const known = new Map();
+  for (const a of annotations || []) {
+    const c = a?.url_citation || a;
+    const u = normUrl(c?.url);
+    if (u && !known.has(u)) known.set(u, { title: clean(c.title), snippet: clean(c.content).slice(0, 1200) });
+  }
+  if (!known.size) return { sources: [], rejected: 0, noAnnotations: true };
+  let o; try { o = parseJsonLoose(text); } catch { return { sources: [], rejected: 0 }; }
+  const byUrl = new Map();
+  let rejected = 0;
+  for (const f of Array.isArray(o.findings) ? o.findings : []) {
+    const u = normUrl(f?.url), fact = clean(f?.fact);
+    if (!fact || !u || !known.has(u)) { rejected++; continue; }
+    const cur = byUrl.get(u) || { url: u, title: known.get(u).title, host: '', facts: [], snippet: known.get(u).snippet };
+    cur.facts.push(fact);
+    byUrl.set(u, cur);
+  }
+  const sources = [...byUrl.values()].slice(0, 5).map((w) => { let host = ''; try { host = new URL(w.url).hostname.replace(/^www\./, ''); } catch { /* */ } return { url: w.url, title: w.title, host, text: `${w.facts.join(' ')}${w.snippet ? ' | Extrait de la page : ' + w.snippet : ''}`.slice(0, 1800) }; });
+  return { sources, rejected };
+}
+
+// ---------- relecture automatique ----------
+export function splitSentences(par) {
+  return String(par || '').split(/(?<=[.!?»])\s+(?=[A-ZÀ-ÝÉ«"“0-9])/).map((x) => x.trim()).filter(Boolean);
+}
+export function verifyMessages(article, pack) {
+  const lines = [];
+  article.paragraphs.forEach((p, i) => splitSentences(p).forEach((s, j) => lines.push({ id: `${i}.${j}`, text: s })));
+  return {
+    lines,
+    messages: [
+      { role: 'system', content: 'Tu es vérificateur dans un journal. On te donne un dossier de sources et des phrases numérotées d’un article. Pour chaque phrase, réponds si elle est ENTIÈREMENT soutenue par le dossier (les faits, chiffres, dates et noms qu’elle contient figurent dans les sources citées ou dans le dossier). Une phrase de transition sans fait précis est soutenue. Réponds uniquement en JSON : {"results": [{"id": "numéro de la phrase", "supported": true ou false}]}.' },
+      { role: 'user', content: `DOSSIER :\n${pack.text}\n\nPHRASES :\n${lines.map((l) => `${l.id} : ${l.text}`).join('\n')}` },
+    ],
+  };
+}
+// Retire les phrases jugées non étayées ; retourne { article, removed }. Garde l'article tel quel si la réponse est inexploitable.
+export function applyVerification(article, lines, text) {
+  let o; try { o = parseJsonLoose(text); } catch { return { article, removed: 0 }; }
+  const bad = new Set((Array.isArray(o.results) ? o.results : []).filter((r) => r && r.supported === false).map((r) => String(r.id)));
+  if (!bad.size || bad.size >= lines.length) return { article, removed: bad.size >= lines.length ? 0 : 0 }; // tout rejeter = réponse suspecte : on ne touche à rien
+  const keep = new Map();
+  lines.forEach((l) => { if (!bad.has(l.id)) { const [i] = l.id.split('.'); keep.set(i, [...(keep.get(i) || []), l.text]); } });
+  const paragraphs = article.paragraphs.map((_, i) => (keep.get(String(i)) || []).join(' ')).filter((p) => p.length > 20);
+  if (!paragraphs.length) return { article, removed: 0 };
+  return { article: { ...article, paragraphs, verified: true }, removed: bad.size };
+}

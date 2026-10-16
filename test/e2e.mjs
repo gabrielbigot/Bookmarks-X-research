@@ -103,20 +103,26 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       const body = JSON.parse(raw);
       const sys = body.messages[0].content, usr = body.messages.at(-1).content;
       llmLog.push({ sys: sys.slice(0, 40), auth: req.headers.authorization });
-      let out = 'ok';
+      let out = 'ok', ann;
       if (sys.includes('transformes une requête')) out = JSON.stringify({ topic: 'kubernetes', authors: ['devops'], sort: 'oldest', since: null, until: null, has: [] });
       else if (sys.includes('juges la pertinence')) out = JSON.stringify({ scores: [0, 9, 1] });
-      else if (sys.includes('journaliste pour un journal hebdomadaire') && sys.includes('Pour chaque entrée')) {
+      else if (sys.includes('recherche documentaire') && body.plugins) {
+        ann = [{ type: 'url_citation', url_citation: { url: 'https://ref.example/a', title: 'Page de référence', content: 'Extrait de la page de référence sur le sujet.' } }];
+        out = JSON.stringify({ findings: [{ fact: 'Un fait de contexte tiré de la page de référence.', url: 'https://ref.example/a' }, { fact: 'Un fait avec une adresse inventée.', url: 'https://made.up/x' }] });
+      } else if (sys.includes('vérificateur')) {
+        const ids = [...usr.matchAll(/^(\d+\.\d+) : /gm)].map((m) => m[1]);
+        out = JSON.stringify({ results: ids.map((id) => ({ id, supported: id !== '1.0' })) });
+      } else if (sys.includes('journaliste pour un journal hebdomadaire') && sys.includes('Pour chaque entrée')) {
         const ids = [...usr.matchAll(/ENTRÉE (B\d+) /g)].map((m) => m[1]);
         out = JSON.stringify({ briefs: ids.map((id) => ({ id, title: 'Brève ' + id, text: 'Une brève rédigée à partir du tweet source, avec sa citation [T1].' })) });
       } else if (sys.includes('journaliste pour un journal hebdomadaire')) {
-        const para = (n) => 'Paragraphe ' + n + ' : ' + 'le sujet est décrit à partir des tweets du dossier, avec ses chiffres et son contexte, pour que le lecteur comprenne ce qui change cette semaine. '.repeat(3) + '[T1]';
+        const para = (n) => 'Paragraphe ' + n + ' : ' + 'le sujet est décrit à partir des tweets du dossier, avec ses chiffres et son contexte, pour que le lecteur comprenne ce qui change cette semaine. '.repeat(3) + (n >= 3 && usr.includes('[W1]') ? '[W1]' : '[T1]');
         out = JSON.stringify({ title: 'Un grand titre informatif pour le sujet de la semaine', dek: 'Chapeau du sujet [T1]', paragraphs: [1, 2, 3, 4, 5, 6].map(para), pull_quote: '', pull_source: '', key_points: ['Premier point [T1]', 'Deuxième point', 'Troisième point'] });
       } else if (sys.includes('rédacteur en chef')) out = JSON.stringify({ title: 'Éditorial du test', paragraphs: ['Premier paragraphe de l’éditorial.', 'Deuxième paragraphe.'], ideas: ['Idée un', 'Idée deux', 'Idée trois'], week: [{ day: new Date().toISOString().slice(0, 10), text: 'Un fait du jour.' }], glossary: [{ term: 'VLM', def: 'Modèle qui comprend images et texte.' }] });
       else if (sys.includes('rédiges un résumé')) out = '**Infra**\nDu contenu sur le scheduler [1].';
       else if (usr.includes('Question :')) out = 'Réponse mock : le scheduler de tokio a été amélioré [1].';
       res.writeHead(200, { ...cors, 'content-type': 'application/json' });
-      res.end(JSON.stringify({ choices: [{ message: { content: out } }] }));
+      res.end(JSON.stringify({ choices: [{ message: { content: out, annotations: ann } }], usage: { prompt_tokens: 100, completion_tokens: 50 } }));
     });
     return;
   }
@@ -1082,6 +1088,7 @@ const journal = await ctx.newPage();
 await journal.goto(`chrome-extension://${extId}/journal.html`);
 await journal.waitForSelector('#j-go');
 await journal.evaluate(() => { document.getElementById('j-links').checked = false; document.getElementById('j-links').dispatchEvent(new Event('change')); });
+await journal.evaluate(() => { for (const id of ['j-search', 'j-verify']) { const c = document.getElementById(id); c.checked = true; c.dispatchEvent(new Event('change')); } });
 await journal.fill('#j-budget', '5');
 await journal.dispatchEvent('#j-budget', 'change');
 await journal.click('#j-est');
@@ -1090,6 +1097,12 @@ await journal.click('#j-go');
 await waitFor(async () => /Édition terminée/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /⚠/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'fin de la génération du journal', 120000);
 const jlog = await journal.locator('#j-log').innerText();
 assert.match(jlog, /Édition terminée : (\d+) pages/, jlog);
+assert.match(jlog, /Recherche web : [1-9]\d* sujet\(s\) complété/, jlog);
+assert.match(jlog, /fait\(s\) écarté\(s\) : adresse non consultée/, jlog);
+assert.match(jlog, /Relecture : [1-9]\d* phrase\(s\) non étayée\(s\) retirée\(s\)/, jlog);
+const paperText = await journal.locator('#paper').innerText();
+assert.match(paperText, /ref\.example/, 'la page web consultée figure dans l’index des sources');
+assert.ok(!/made\.up/.test(paperText), 'l’adresse inventée n’apparaît nulle part');
 const pagesN = await journal.locator('#paper .page').count();
 assert.ok(pagesN >= 4, 'au moins 4 pages : ' + pagesN);
 assert.match(await journal.locator('#paper .page').first().innerText(), /La Gazette IA & Robotique/);

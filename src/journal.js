@@ -10,7 +10,7 @@ import { isPublicUrl } from './lib/links.js';
 import { handleKey, OFFICIAL_DESC } from './lib/widgets.js';
 import {
   weekWindow, inWindow, dayLabel, buildSubjects, assignTiers, weekStats, extractPageText, evidenceFor, articleMessages, briefsMessages, editorialMessages,
-  parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
+  searchMessages, parseFindings, verifyMessages, applyVerification, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
 } from './lib/journal.js';
 
 const $ = (id) => document.getElementById(id);
@@ -30,20 +30,21 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
+  search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const sel = j.sections ?? detectors.map((d) => d.id);
   $('j-sections').innerHTML = detectors.length ? detectors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}"${sel.includes(d.id) ? ' checked' : ''}> ${esc(d.name)}</label>`).join('') : '<span class="hint">Aucun détecteur : le journal couvrira toute la semaine (crée des détecteurs dans « Mes stats » pour avoir des rubriques).</span>';
   const st = $('j-status');
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -87,6 +88,9 @@ function estimatePlan(plan, cfg) {
     add(estimateCall(grp.reduce((n, s) => n + evidenceFor(s).text.length, 0) + 800, grp.length * 90, prices));
   }
   add(estimateCall(plan.subjects.length * 220 + 900, 1000, prices));
+  const detailed = [...plan.tiers.leads, ...plan.tiers.articles];
+  if (cfg.search) for (let i = 0; i < Math.min(cfg.searchTop, detailed.length); i++) { add(estimateCall(1500, 900, prices)); usd += cfg.searchPrice; }
+  if (cfg.verify) for (const sub of detailed) add(estimateCall(evidenceFor(sub).text.length + (sub.links.length ? 4500 : 0) + (cfg.search ? 2500 : 0) + 1500, 400, prices));
   return { usd, calls, tin, tout };
 }
 
@@ -170,14 +174,37 @@ async function generate() {
     const pages = await loadPages(detailed, hasPerm);
     prog(0.1);
 
-    const ask = async (messages, { model, maxTokens }) => {
-      const e = estimateCall(JSON.stringify(messages).length, Math.round(maxTokens * 0.6), prices).dollars;
+    const ask = async (messages, { model, maxTokens, plugins, extra = 0, full = false }) => {
+      const e = estimateCall(JSON.stringify(messages).length, Math.round(maxTokens * 0.6), prices).dollars + extra;
       if (spent + e > cfg.budget) { budgetHit = true; throw new Error('budget'); }
-      const r = await chatFull(settings.llm, messages, { model, maxTokens, temperature: 0.3, signal: abort.signal });
-      spent += costOf(r.usage, prices);
-      return r.text;
+      const r = await chatFull(settings.llm, messages, { model, maxTokens, temperature: plugins ? 0.1 : 0.3, signal: abort.signal, plugins });
+      spent += r.usage.cost != null ? r.usage.cost : costOf(r.usage, prices) + extra;
+      return full ? r : r.text;
     };
-    const entries = detailed.map((subject, i) => ({ subject, tier: i < plan.tiers.leads.length ? 'lead' : 'article', pack: evidenceFor(subject, new Map(subject.links.map((l) => [l, pages.get(l)]).filter(([, p]) => p))) }));
+    const pagesOf = (subject) => new Map(subject.links.map((l) => [l, pages.get(l)]).filter(([, p]) => p));
+    const entries = detailed.map((subject, i) => ({ subject, tier: i < plan.tiers.leads.length ? 'lead' : 'article', pack: evidenceFor(subject, pagesOf(subject)) }));
+    // recherche web : les sujets les plus importants d'abord ; seules les adresses réellement consultées sont retenues
+    let webCount = 0, removedTotal = 0;
+    if (cfg.search) {
+      const targets = entries.slice(0, cfg.searchTop);
+      log(`Recherche web pour ${targets.length} sujet(s)…`);
+      let k = 0, warned = false;
+      const sw = async () => {
+        while (k < targets.length && !abort.signal.aborted && !budgetHit) {
+          const e = targets[k++];
+          try {
+            const r = await ask(searchMessages(e.subject), { model: assist, maxTokens: 1400, plugins: [{ id: 'web', max_results: 5 }], extra: cfg.searchPrice, full: true });
+            const pf = parseFindings(r.text, r.annotations);
+            if (pf.noAnnotations && !warned) { warned = true; log('⚠ Le fournisseur n’a pas renvoyé les pages consultées : résultats de recherche ignorés (impossible de vérifier les adresses).'); }
+            if (pf.sources.length) { webCount++; e.pack = evidenceFor(e.subject, pagesOf(e.subject), { web: pf.sources }); }
+            if (pf.rejected) log(`  ${pf.rejected} fait(s) écarté(s) : adresse non consultée.`);
+          } catch (err) { if (abort.signal.aborted) return; if (err.message !== 'budget') log(`⚠ Recherche web : ${err.message}`); }
+        }
+      };
+      await Promise.all([sw(), sw()]);
+      log(`Recherche web : ${webCount} sujet(s) complété(s).`);
+    }
+    prog(0.2);
     // articles : 2 en parallèle
     let next = 0, finished = 0;
     const work = async () => {
@@ -207,6 +234,27 @@ async function generate() {
     if (abort.signal.aborted) throw new Error('arrêté');
     if (budgetHit) log(`Plafond de ${fmtUsd(cfg.budget)} atteint : les sujets restants sont présentés sous forme simplifiée.`);
 
+    // relecture automatique : retire ce que les sources ne soutiennent pas
+    if (cfg.verify && !budgetHit) {
+      log('Relecture automatique…');
+      let k = 0;
+      const vw = async () => {
+        while (k < entries.length && !abort.signal.aborted && !budgetHit) {
+          const e = entries[k++];
+          if (e.article.fallback) continue;
+          const v = verifyMessages(e.article, e.pack);
+          if (!v.lines.length) continue;
+          try {
+            const r = applyVerification(e.article, v.lines, await ask(v.messages, { model: assist, maxTokens: Math.min(1800, 300 + v.lines.length * 14) }));
+            e.article = r.article; e.removed = r.removed; removedTotal += r.removed;
+          } catch (err) { if (abort.signal.aborted) return; if (err.message !== 'budget') log(`⚠ Relecture : ${err.message}`); }
+        }
+      };
+      await Promise.all([vw(), vw()]);
+      log(`Relecture : ${removedTotal} phrase(s) non étayée(s) retirée(s).`);
+    }
+    if (budgetHit) log(`Plafond de ${fmtUsd(cfg.budget)} atteint : étapes restantes allégées.`);
+
     // brèves
     const briefEntries = plan.tiers.briefs.map((subject) => ({ subject, tier: 'brief', pack: evidenceFor(subject, new Map(), { maxTweets: 3 }) }));
     log('Rédaction des brèves…');
@@ -229,7 +277,7 @@ async function generate() {
     let editorial = null;
     try {
       const summary = [...entries, ...briefEntries].map((e) => `- [${e.subject.sectionName}] ${e.subject.firstDay} : ${e.article.title}${e.article.dek ? ' — ' + e.article.dek : ''}`).join('\n');
-      editorial = parseEditorial(await ask(editorialMessages(summary.replace(/\[[TL]\d+(,[TL]\d+)*\]/g, '')), { model: assist, maxTokens: 1400 }));
+      editorial = parseEditorial(await ask(editorialMessages(summary.replace(/\[[TLW]\d+(,[TLW]\d+)*\]/g, '')), { model: assist, maxTokens: 1400 }));
     } catch (err) { if (abort.signal.aborted) throw err; log(`Éditorial non rédigé (${err.message === 'budget' ? 'plafond atteint' : err.message}).`); }
     prog(0.85);
 
@@ -237,7 +285,7 @@ async function generate() {
     log('Choix des images…');
     await pickImages(entries);
     log('Mise en pages…');
-    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit };
+    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal };
     await renderPaper(model);
     prog(0.97);
     const id = String(Date.now());
@@ -298,7 +346,7 @@ const figHtml = (im, wide, cap) => (im ? `<figure class="${wide ? 'wide' : ''}">
 function articleBlocks(e, bib) {
   const a = e.article, lead = e.tier === 'lead', ref = e.subject.id;
   const cite = (t) => citeHtml(t, e.pack, bib);
-  const by = `D’après ${e.pack.sources.filter((s) => s.kind === 'tweet').slice(0, 3).map((s) => '@' + esc(s.handle)).join(', ')} · ${esc(e.subject.firstDay.slice(8))}/${esc(e.subject.firstDay.slice(5, 7))}${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}`;
+  const by = `D’après ${e.pack.sources.filter((s) => s.kind === 'tweet').slice(0, 3).map((s) => '@' + esc(s.handle)).join(', ')} · ${esc(e.subject.firstDay.slice(8))}/${esc(e.subject.firstDay.slice(5, 7))}${e.pack.sources.some((x) => x.kind === 'web') ? ' · recherche web' : ''}${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}`;
   const head = `<div class="art-head${lead ? ' lead' : ''}"><p class="kick">${esc(e.subject.sectionName)}${lead ? ' · À la une' : ''}</p>${lead ? `<h2 class="t">${esc(a.title)}</h2>` : `<h3 class="t">${esc(a.title)}</h3>`}${a.dek ? `<p class="dek">${cite(a.dek)}</p>` : ''}<p class="by">${by}</p></div>`;
   const blocks = [];
   const img = e.image && !a.fallback ? figHtml(e.image, lead, e.image.card ? `Illustration : ${e.image.alt}` : null) : '';
@@ -385,7 +433,7 @@ async function renderPaper(model) {
   if (editorial?.glossary.length) { blocks.push({ html: '<h4 class="t" style="column-span:all">Lexique</h4>' }); editorial.glossary.forEach((g) => blocks.push({ html: `<p class="gloss"><b>${esc(g.term)}</b> — ${esc(g.def)}</p>` })); }
   blocks.push({ html: '<h4 class="t" style="column-span:all">Index des sources</h4>' });
   for (const s of bib.list) blocks.push({ html: `<p class="bibl"><b>${s.n}.</b> ${s.kind === 'tweet' ? `@${esc(s.handle)} (${esc(s.date)})` : esc(s.title)} — <a href="${esc(s.url)}">${esc(s.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 70))}</a></p>` });
-  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
+  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
   const lp = flow('Lexique et sources', blocks);
   secPage.set('sources', lp[0]);
 
@@ -398,9 +446,9 @@ async function renderPaper(model) {
   const numOf = (pg) => pages().indexOf(pg) + 1;
   const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Chiffres', secPage.get('stats')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
   const others = entries.filter((e) => e !== lead && e.tier === 'lead').concat(entries.filter((e) => e !== lead && e.tier === 'article')).slice(0, 3);
-  const leadWords = (n) => lead.article.paragraphs.join(' ').split(/\s+/).slice(0, n).join(' ').replace(/\s*\[[TL][\d,TL]*\]/g, '');
+  const leadWords = (n) => lead.article.paragraphs.join(' ').split(/\s+/).slice(0, n).join(' ').replace(/\s*\[[TLW][\d,TLW]*\]/g, '');
   const buildFront = (n) => `<h1 class="mast">${esc(NAME)}</h1><div class="tag">Ce que vous avez gardé cette semaine — rédigé d’après vos bookmarks X et YouTube</div><div class="dbl" style="margin:4px 0 0"></div>
-    <div class="g2" style="margin-top:12px"><div class="l"><p class="kick">${esc(lead.subject.sectionName)} · À la une</p><h2 class="t" style="font-size:40px">${esc(lead.article.title)}</h2>${lead.article.dek ? `<p class="dek">${esc(lead.article.dek.replace(/\s*\[[TL][\d,TL]*\]/g, ''))}</p>` : ''}${lead.image ? figHtml(lead.image, false, null).replace('class=""', 'style="column-span:none"') : ''}<div style="column-count:2;column-gap:20px;column-rule:1px solid var(--soft);text-align:justify;hyphens:auto"><p class="drop">${esc(leadWords(n))}…</p></div><p class="src">Suite page ${numOf(refs.get(lead.subject.id) || secPage.get(lead.subject.section))}.</p></div>
+    <div class="g2" style="margin-top:12px"><div class="l"><p class="kick">${esc(lead.subject.sectionName)} · À la une</p><h2 class="t" style="font-size:40px">${esc(lead.article.title)}</h2>${lead.article.dek ? `<p class="dek">${esc(lead.article.dek.replace(/\s*\[[TLW][\d,TLW]*\]/g, ''))}</p>` : ''}${lead.image ? figHtml(lead.image, false, null).replace('class=""', 'style="column-span:none"') : ''}<div style="column-count:2;column-gap:20px;column-rule:1px solid var(--soft);text-align:justify;hyphens:auto"><p class="drop">${esc(leadWords(n))}…</p></div><p class="src">Suite page ${numOf(refs.get(lead.subject.id) || secPage.get(lead.subject.section))}.</p></div>
     <div class="r"><div class="box"><h4 class="t">Dans ce numéro</h4>${toc.map(([l, pg]) => `<div class="fig"><span>${esc(l)}</span><b style="font-size:14px">${numOf(pg)}</b></div>`).join('')}</div>
     <div class="box"><h4 class="t">Cette semaine</h4><div class="fig"><span>Éléments retenus</span><b>${st.total}</b></div><div class="fig"><span>Sujets distincts</span><b>${plan.subjects.length}</b></div></div>
     ${others.map((e) => `<div style="margin-bottom:10px;text-align:left"><p class="kick">${esc(e.subject.sectionName)}</p><h3 class="t">${esc(e.article.title)}</h3><p class="src">page ${numOf(refs.get(e.subject.id) || secPage.get(e.subject.section))}</p></div>`).join('')}</div></div>`;

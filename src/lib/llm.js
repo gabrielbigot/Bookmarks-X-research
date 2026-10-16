@@ -8,10 +8,11 @@ export async function chat(llm, messages, opts = {}) {
 
 // Comme chat(), mais retourne aussi l'usage (tokens, et le coût réel si le fournisseur le donne : OpenRouter).
 // opts.model remplace le modèle configuré ; opts.maxTokens borne la sortie ; opts.temperature.
-export async function chatFull(llm, messages, { json = false, signal, model, maxTokens, temperature = 0.2 } = {}) {
+export async function chatFull(llm, messages, { json = false, signal, model, maxTokens, temperature = 0.2, plugins } = {}) {
   const url = llm.baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const body = { model: model || llm.model, messages, temperature, stream: false };
   if (maxTokens) body.max_tokens = maxTokens;
+  if (plugins) body.plugins = plugins; // ex. [{ id: 'web', max_results: 5 }] (recherche web OpenRouter)
   if (/openrouter\.ai/i.test(llm.baseUrl)) body.usage = { include: true }; // coût réel dans la réponse
   if (json) body.response_format = { type: 'json_object' };
   const res = await fetch(url, {
@@ -28,7 +29,7 @@ export async function chatFull(llm, messages, { json = false, signal, model, max
   const out = data?.choices?.[0]?.message?.content;
   if (typeof out !== 'string') throw new Error('API IA : réponse inattendue');
   const u = data.usage || {};
-  return { text: out, usage: { promptTokens: Number(u.prompt_tokens) || 0, completionTokens: Number(u.completion_tokens) || 0, cost: typeof u.cost === 'number' ? u.cost : null } };
+  return { text: out, annotations: data?.choices?.[0]?.message?.annotations || [], usage: { promptTokens: Number(u.prompt_tokens) || 0, completionTokens: Number(u.completion_tokens) || 0, cost: typeof u.cost === 'number' ? u.cost : null } };
 }
 
 export function parseJsonLoose(text) {

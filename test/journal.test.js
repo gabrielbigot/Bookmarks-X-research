@@ -87,3 +87,45 @@ test('coûts : estimation et coût réel', () => {
   assert.equal(costOf({ cost: 0.0123 }, prices), 0.0123);
   assert.ok(Math.abs(costOf({ promptTokens: 1e6, completionTokens: 2e5 }, prices) - 2) < 1e-9);
 });
+
+import { searchMessages, parseFindings, splitSentences, verifyMessages, applyVerification } from '../src/lib/journal.js';
+test('recherche web : seules les adresses réellement consultées sont retenues ; sources W dans le dossier', () => {
+  const ann = [{ type: 'url_citation', url_citation: { url: 'https://ref.example/a?utm_source=x', title: 'Page A', content: 'Le modèle accepte des images.' } }, { url_citation: { url: 'https://b.example/post/', title: 'Page B', content: '' } }];
+  const text = '```json\n{"findings":[{"fact":"Le modèle accepte des images.","url":"https://ref.example/a"},{"fact":"Un autre fait.","url":"https://ref.example/a?utm_medium=y"},{"fact":"Fait inventé.","url":"https://made.up/x"},{"fact":"Fait B.","url":"https://b.example/post"}]}\n```';
+  const r = parseFindings(text, ann);
+  assert.equal(r.sources.length, 2); assert.equal(r.rejected, 1);
+  assert.equal(r.sources[0].host, 'ref.example'); assert.ok(r.sources[0].text.includes('Un autre fait.') && r.sources[0].text.includes('Extrait de la page'));
+  assert.equal(parseFindings(text, []).noAnnotations, true);
+  assert.equal(parseFindings('pas du json', ann).sources.length, 0);
+  const rep = tw('1', 'we announced Jev 1.14 today', 1, { handle: 'typesafeai' });
+  const subject = { rep, members: [rep], links: [], sectionName: 'IA', firstDay: '2026-10-15', lastDay: '2026-10-15' };
+  assert.match(searchMessages(subject)[1].content, /@typesafeai/);
+  const pack = evidenceFor(subject, new Map(), { web: r.sources });
+  assert.deepEqual(pack.sources.map((s) => s.id), ['T1', 'W1', 'W2']);
+  assert.match(pack.text, /\[W1\] Page web trouvée par recherche \(ref\.example\)/);
+  assert.equal(cleanCitations('Fait [W1,W3] ok [W2].', new Set(['W1', 'W2'])), 'Fait [W1] ok [W2].');
+  const bib = makeBibliography();
+  assert.equal(citeHtml('Contexte [W1] et annonce [T1].', pack, bib), 'Contexte <sup class="c">1</sup> et annonce <sup class="c">2</sup>.');
+  assert.match(sourcesLine({ dek: '', paragraphs: ['a [W1]'], points: [] }, pack, bib), /1\. ref\.example/);
+});
+
+test('citation mise en exergue : doit figurer mot pour mot dans un tweet', () => {
+  const rep = tw('1', 'we announced Jev 1.14 today with image support', 1, { handle: 'typesafeai' });
+  const pack = evidenceFor({ rep, members: [rep], links: [] });
+  const art = (q) => parseArticle(JSON.stringify({ title: 'Titre assez long', dek: 'chapeau', paragraphs: ['Un paragraphe de plus de vingt caractères [T1].'], pull_quote: q, pull_source: 'T1' }), pack);
+  assert.equal(art('« we announced Jev 1.14 today »').pull, 'we announced Jev 1.14 today');
+  assert.equal(art('une citation inventée par le modèle').pull, '');
+});
+
+test('relecture : phrases non étayées retirées, réponse suspecte ignorée', () => {
+  const article = { title: 't', dek: '', paragraphs: ['Première phrase soutenue [T1]. Deuxième phrase inventée sans source.', 'Un second paragraphe tout à fait soutenu par le dossier [T1].'], pull: '', points: [] };
+  assert.deepEqual(splitSentences(article.paragraphs[0]), ['Première phrase soutenue [T1].', 'Deuxième phrase inventée sans source.']);
+  const rep = tw('1', 'x', 1);
+  const v = verifyMessages(article, evidenceFor({ rep, members: [rep], links: [] }));
+  assert.deepEqual(v.lines.map((l) => l.id), ['0.0', '0.1', '1.0']);
+  const r = applyVerification(article, v.lines, '{"results":[{"id":"0.1","supported":false},{"id":"0.0","supported":true}]}');
+  assert.equal(r.removed, 1); assert.equal(r.article.paragraphs[0], 'Première phrase soutenue [T1].'); assert.equal(r.article.paragraphs.length, 2);
+  const all = applyVerification(article, v.lines, '{"results":[{"id":"0.0","supported":false},{"id":"0.1","supported":false},{"id":"1.0","supported":false}]}');
+  assert.equal(all.removed, 0); assert.equal(all.article, article);
+  assert.equal(applyVerification(article, v.lines, 'n’importe quoi').removed, 0);
+});

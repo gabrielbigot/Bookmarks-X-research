@@ -29,6 +29,14 @@
         <label>Brèves<input id="j-briefs" type="number" min="0" max="80"></label>
       </div>
       <label class="chk"><input id="j-links" type="checkbox"> Lire les pages liées dans les tweets <small>(demande une autorisation d’accès aux sites, une seule fois)</small></label>
+      <div class="web">
+        <label class="chk"><input id="j-search" type="checkbox"> Recherche web sur les grands sujets <small>(OpenRouter : ajoute des sources et du contexte ; payant, voir le prix par recherche)</small></label>
+        <div class="grid">
+          <label>Sujets recherchés<input id="j-top" type="number" min="1" max="20"></label>
+          <label>Prix par recherche <small>$ (estimation)</small><input id="j-sprice" type="number" min="0" step="0.005"></label>
+        </div>
+        <label class="chk"><input id="j-verify" type="checkbox"> Relecture automatique <small>(retire les phrases que les sources ne soutiennent pas)</small></label>
+      </div>
       <div class="secs"><span class="lab">Rubriques <small>(un détecteur par rubrique ; un tweet n’apparaît que dans la première rubrique cochée ; aucun coché = toute la semaine)</small></span><div id="j-sections"></div></div>
       <div class="btns"><button id="j-est" type="button">Estimer le coût</button><button id="j-go" type="button" class="primary">Générer le journal</button><button id="j-stop" type="button" hidden>Arrêter</button></div>
       <progress id="j-prog" max="100" value="0" hidden></progress>
