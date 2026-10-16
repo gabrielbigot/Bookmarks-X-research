@@ -134,11 +134,20 @@ const browse = (body) => innertube('browse', body);
 const progress = (state, extra = {}) => post('sync', { state, runId: currentRun, ...extra });
 
 // Remonte une playlist page par page. Retourne { count, complete }.
-async function syncPlaylist(pid, title, label, incremental = false) {
+// Une page qui échoue (réseau, 5xx) est retentée deux fois ; une limite de débit (429) remonte tout de suite.
+async function browseRetry(body) {
+  for (let a = 0; ; a++) {
+    try { return await browse(body); } catch (e) {
+      if ((e instanceof HttpError && e.status === 429) || a >= 2 || stopFlag) throw e;
+      await sleep(2000 * (a + 1) ** 2);
+    }
+  }
+}
+async function syncPlaylist(pid, title, label, incremental = false, expected = 0) {
   let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false, stoppedEarly = false;
   titles.set(pid, title || titles.get(pid) || '');
   while (body && !stopFlag && pages < 400) {
-    const { json } = await browse(body);
+    const { json } = await browseRetry(body);
     const r = handle(json, body);
     pages++;
     if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
@@ -149,7 +158,9 @@ async function syncPlaylist(pid, title, label, incremental = false) {
     if (body) await sleep(1000 + Math.random() * 1500); // rythme « humain »
   }
   // « complète » seulement si on a bien lu quelque chose (une page d'erreur muette ne doit rien effacer)
-  return { count, complete: !stopFlag && gotAny && !body && !stoppedEarly };
+  // « courte » : YouTube a cessé de donner des pages alors que la playlist annonce nettement plus de vidéos
+  const short = !stopFlag && !body && !stoppedEarly && expected > 0 && count < expected * 0.9 && expected - count > 5;
+  return { count, short, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -339,6 +350,7 @@ async function runSync(mode, counts = {}, excluded = []) {
       lists = [{ id: 'WL', title: 'À regarder plus tard' }, { id: 'LL', title: 'Vidéos que j’aime' }, ...(await listUserPlaylists())];
     }
     let total = 0, doneLists = 0, incomplete = 0;
+    const problems = [];
     for (const l of lists) {
       if (stopFlag) break;
       progress('running', { playlist: l.title, pages: 0, count: total, lists: lists.length, listIndex: doneLists + 1 });
@@ -347,13 +359,17 @@ async function runSync(mode, counts = {}, excluded = []) {
       const recent = l.id === 'WL' || l.id === 'LL';
       // mise à jour : une playlist perso dont le nombre de vidéos n'a pas changé est ignorée
       if (isNew && !recent && l.count > 0 && counts[l.id] === l.count) { doneLists++; continue; }
-      const r = await syncPlaylist(l.id, l.title, l.title, isNew && recent);
+      let r;
+      try { r = await syncPlaylist(l.id, l.title, l.title, isNew && recent, l.count || 0); } catch (e) {
+        if (e instanceof HttpError && e.status === 429) throw e; // limite de débit : on arrête tout
+        r = { count: 0, complete: false, error: e.message }; // une playlist qui échoue ne bloque pas les suivantes
+      }
       total += r.count; doneLists++;
-      if (!r.complete) incomplete++;
+      if (!r.complete) { incomplete++; if (r.error || r.short) problems.push({ title: l.title, count: r.count, expected: l.count || 0, why: r.error || 'YouTube n’a pas renvoyé la suite' }); }
       post('sync', { state: 'playlist-done', runId: currentRun, playlistId: l.id, complete: r.complete, count: r.count });
       await sleep(500);
     }
-    progress(stopFlag ? 'stopped' : 'done', { total, lists: lists.length, incomplete });
+    progress(stopFlag ? 'stopped' : 'done', { total, lists: lists.length, incomplete, problems: problems.slice(0, 8) });
   } catch (e) {
     const forbidden = e instanceof HttpError && (e.status === 401 || e.status === 403);
     progress('error', { message: forbidden ? `YouTube a refusé la requête (${e.message}) : ouvre la playlist et défile jusqu’en bas, les vidéos seront capturées au passage.` : e.message });

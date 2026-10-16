@@ -301,3 +301,10 @@ test('transcriptions : les vidéos les plus récentes d’abord, jusqu’à la p
   // égalité de rang : la plus récemment vue puis la plus récemment capturée
   assert.deepEqual(transcriptOrder([v('a', { playlists: [{ pos: 0 }], addedAt: 1 }), v('b', { playlists: [{ pos: 0 }], addedAt: 9 })]), ['b', 'a']);
 });
+
+import { syncSummary } from '../src/lib/youtube.js';
+test('fin de synchro : playlists incomplètes nommées, avec lu / annoncé', () => {
+  assert.equal(syncSummary({ total: 120, lists: 3, incomplete: 0 }), '120 vidéos dans 3 playlists');
+  const s = syncSummary({ total: 220, lists: 4, incomplete: 2, problems: [{ title: '3', count: 100, expected: 549, why: 'YouTube n’a pas renvoyé la suite' }, { title: 'À regarder plus tard 2', count: 0, expected: 4995, why: 'HTTP 400' }] });
+  assert.match(s, /\(2 incomplète\(s\)\) — à reprendre : 3 \(100\/549 : YouTube n’a pas renvoyé la suite\) ; À regarder plus tard 2 \(0\/4995 : HTTP 400\)/);
+});

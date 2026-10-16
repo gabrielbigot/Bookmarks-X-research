@@ -12,7 +12,7 @@ import { jevIntent, jevRerank, jevJudge, estimateJudgeCost, fmtDollars, decide, 
 import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rerankMessages, themeNamesMessages, renderMd } from './lib/llm.js';
 import { kmeans, labelClusters } from './lib/cluster.js';
 import { bindThemeButton } from './lib/theme.js';
-import { isVideoItem } from './lib/youtube.js';
+import { isVideoItem, syncSummary } from './lib/youtube.js';
 import { encode, decodeFull, packVectors, unpackVectors } from './lib/backup.js';
 import { score as evalScore, summarize } from './lib/evalbench.js';
 
@@ -1444,7 +1444,7 @@ chrome.runtime.onMessage.addListener((m) => {
       if (!updatingUi) $('stop').hidden = !running;
       $('yt-sync').hidden = $('yt-hist').hidden = $('yt-tr').hidden = running;
       $('progress').textContent = { running: m.transcripts ? `YouTube : transcriptions ${m.done}/${m.total}${m.total - m.done > 30 ? ` · reste ≈ ${etaText((m.total - m.done) / (m.rate || 0.4))}` : ''} (${m.ok} récupérées${m.last ? ` ; dernier échec : ${m.last}` : ''})…` : m.history ? `YouTube : historique — ${m.count ?? 0} visionnages lus${m.day ? ` (jusqu’au ${m.day})` : ''}…` : `YouTube : ${m.playlist ? m.playlist + ' — ' : ''}${m.count ?? 0} vidéos${m.lists ? ` (${m.listIndex}/${m.lists} playlists)` : ''}…`,
-        done: m.transcripts ? `YouTube : transcriptions terminées — ${m.ok} récupérées, ${m.none} sans transcription${m.fail ? `, ${m.fail} en échec` : ''}${m.reasons ? ' — ' + m.reasons : ''}` : m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${m.total} vidéos dans ${m.lists} playlists${m.incomplete ? ` (${m.incomplete} incomplète(s))` : ''}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
+        done: m.transcripts ? `YouTube : transcriptions terminées — ${m.ok} récupérées, ${m.none} sans transcription${m.fail ? `, ${m.fail} en échec` : ''}${m.reasons ? ' — ' + m.reasons : ''}` : m.history ? `YouTube : historique terminé — ${m.total} visionnages lus, ${m.fresh ?? 0} nouveaux` : `YouTube : terminé — ${syncSummary(m)}`, stopped: 'YouTube : arrêté' }[m.state] || ('YouTube : ' + (m.message || m.state));
       break;
     }
     case 'backfillProgress': {

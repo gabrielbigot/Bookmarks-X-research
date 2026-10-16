@@ -302,3 +302,9 @@ export function transcriptOrder(videos) {
   };
   return videos.slice().sort((a, b) => rankOf(a) - rankOf(b) || String(b.lastWatched || '').localeCompare(String(a.lastWatched || '')) || (b.addedAt || 0) - (a.addedAt || 0) || (a.id < b.id ? -1 : 1)).map((v) => v.id);
 }
+
+// Message de fin d'une synchro de playlists : incomplètes et en échec, avec le nombre lu et le nombre annoncé par YouTube.
+export function syncSummary(d) {
+  const probs = (d.problems || []).slice(0, 4).map((p) => `${p.title} (${p.count}${p.expected ? '/' + p.expected : ''}${p.why ? ' : ' + p.why : ''})`);
+  return `${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}${probs.length ? ' — à reprendre : ' + probs.join(' ; ') + ((d.problems || []).length > 4 ? '…' : '') : ''}`;
+}

@@ -1,3 +1,4 @@
+import { syncSummary } from './lib/youtube.js';
 // Monde isolé de youtube.com : relaie vers l'extension et affiche une petite pastille de synchronisation.
 const TAG = 'xbs-yt';
 const send = (msg) => { try { chrome.runtime.sendMessage(msg).catch(() => {}); } catch {} };
@@ -27,7 +28,7 @@ function showStatus(d) {
   if (!statusEl) return;
   const t = {
     running: d.transcripts ? `Transcriptions : ${d.done}/${d.total} (${d.ok} récupérées${d.last ? ' ; ' + d.last : ''})…` : d.history ? `Historique : ${d.count ?? 0} visionnages lus${d.day ? ` (jusqu’au ${d.day})` : ''}…` : `${d.playlist ? d.playlist + ' — ' : ''}${d.count ?? 0} vidéos${d.lists ? ` (${d.listIndex}/${d.lists} playlists)` : ''}…`,
-    done: d.transcripts ? `Transcriptions terminées : ${d.ok} récupérées, ${d.none} sans transcription${d.fail ? `, ${d.fail} en échec` : ''}${d.reasons ? ' — ' + d.reasons : ''}` : d.history ? `Historique terminé : ${d.total} lus` : `Terminé : ${d.total} vidéos dans ${d.lists} playlists${d.incomplete ? ` (${d.incomplete} incomplète(s))` : ''}`,
+    done: d.transcripts ? `Transcriptions terminées : ${d.ok} récupérées, ${d.none} sans transcription${d.fail ? `, ${d.fail} en échec` : ''}${d.reasons ? ' — ' + d.reasons : ''}` : d.history ? `Historique terminé : ${d.total} lus` : `Terminé : ${syncSummary(d)}`,
     stopped: 'Synchro arrêtée', error: '⚠ ' + (d.message || 'erreur'),
   }[d.state];
   if (t) statusEl.textContent = t;
