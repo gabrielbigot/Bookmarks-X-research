@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>La Gazette IA &amp; Robotique — maquette 12 pages</title>
+<style>
+:root{--paper:#fbf8f1;--ink:#141210;--ink2:#4a4640;--soft:#d9d2c3;--accent:#8c1c13;--s1:#1f4e79;--s2:#b5532a;--s3:#2e7d5b;--s4:#b8860b;--s5:#8a4f7d}
+*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+html{background:#d8d2c4}
+body{margin:0;color:var(--ink);font:13.4px/1.45 Georgia,"Times New Roman",serif}
+.tools{position:sticky;top:0;z-index:9;display:flex;gap:12px;align-items:center;padding:10px 16px;background:#141210;color:#e9e4d8;font:13px system-ui,sans-serif}
+.tools button{font:600 13px system-ui;border:0;border-radius:999px;background:#fbf8f1;color:#141210;padding:7px 14px;cursor:pointer}
+.page{position:relative;width:210mm;height:297mm;margin:14px auto;background:var(--paper);padding:11mm 12mm 14mm;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.25);display:flex;flex-direction:column}
+.run{display:flex;justify-content:space-between;font:700 9.5px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase;border-bottom:1px solid var(--ink);padding-bottom:6px;margin-bottom:12px;color:var(--ink2)}
+.pn{position:absolute;left:12mm;right:12mm;bottom:6mm;display:flex;justify-content:space-between;font:10px/1 "Helvetica Neue",Arial,sans-serif;color:var(--ink2);border-top:1px solid var(--soft);padding-top:5px}
+.pn b{color:var(--ink)}
+.body{flex:1;min-height:0;display:flex;flex-direction:column}
+.kick{font:700 10px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 6px}
+h1.mast{margin:0;text-align:center;font:700 56px/1 "Didot","Bodoni 72","Playfair Display",Georgia,serif;letter-spacing:-.01em}
+h2{margin:0 0 6px;font:700 34px/1.05 "Didot","Bodoni 72","Playfair Display",Georgia,serif;letter-spacing:-.01em}
+h2.big{font-size:42px}h2.mid{font-size:26px}
+h3{margin:0 0 5px;font:700 19px/1.1 "Didot","Bodoni 72",Georgia,serif}
+h4{margin:0 0 6px;font:700 10.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase;border-bottom:2px solid var(--ink);padding-bottom:5px}
+.dek{font:italic 15.5px/1.32 Georgia,serif;color:var(--ink2);margin:0 0 8px}
+.by{font:600 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.09em;text-transform:uppercase;border-top:1px solid var(--soft);border-bottom:1px solid var(--soft);padding:5px 0;margin:0 0 10px;color:var(--ink2)}
+p{margin:0 0 .7em}
+.t{text-align:justify;hyphens:auto}
+.c2{column-count:2;column-gap:20px;column-rule:1px solid var(--soft)}
+.c3{column-count:3;column-gap:18px;column-rule:1px solid var(--soft)}
+.c2 p:first-child.drop::first-letter,.drop::first-letter{float:left;font:700 3.2em/.85 "Didot","Bodoni 72",Georgia,serif;padding:3px 7px 0 0}
+.src{font:600 9.5px/1.35 "Helvetica Neue",Arial,sans-serif;color:var(--ink2);letter-spacing:.03em}
+.dbl{border-top:3px double var(--ink);margin:10px 0}
+.rule{border-top:1px solid var(--ink);margin:10px 0}
+.vr{border-left:1px solid var(--ink)}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:0}
+.grid2e{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:0}
+.pad-r{padding-right:16px}.pad-l{padding-left:16px}.pad-lr{padding:0 14px}
+.box{border:1px solid var(--ink);padding:10px 12px;margin-bottom:12px}
+.box.dark{background:#141210;color:#f2ede1}.box.dark h4{border-color:#f2ede1}
+.fig{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px dotted var(--soft);padding:5px 0;font-size:12.5px}
+.fig b{font:700 24px/1 "Didot","Bodoni 72",Georgia,serif}
+.up{color:#1a6b3a;font:700 10.5px Arial}.dn{color:var(--accent);font:700 10.5px Arial}
+.ex{display:inline-block;font:700 8.5px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;background:#f2d34f;color:#141210;padding:3px 5px;margin-bottom:6px}
+.img{display:block;width:100%;background:#1d1b19;position:relative;overflow:hidden}
+.img svg{display:block;width:100%;height:100%}
+figure{margin:0 0 10px}
+figcaption{font:italic 11px/1.3 Georgia,serif;color:var(--ink2);margin-top:4px;border-bottom:1px solid var(--soft);padding-bottom:6px}
+.r169{aspect-ratio:16/9}.r32{aspect-ratio:3/2}.r43{aspect-ratio:4/3}.r21{aspect-ratio:2/1}.r11{aspect-ratio:1/1}
+blockquote.pull{break-inside:avoid;margin:.2em 0 .9em;padding:8px 0;border-top:3px solid var(--ink);border-bottom:1px solid var(--ink);font:italic 700 18px/1.25 "Didot","Bodoni 72",Georgia,serif;text-align:left}
+blockquote.pull cite{display:block;font:600 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;margin-top:6px;font-style:normal;color:var(--ink2)}
+table{border-collapse:collapse;width:100%;font:11.5px/1.3 "Helvetica Neue",Arial,sans-serif}
+th{font-weight:700;text-align:left;border-bottom:2px solid var(--ink);padding:5px 6px;font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+td{border-bottom:1px solid var(--soft);padding:6px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.chk{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--ink)}
+.chk.no{background:transparent;border:1.5px solid var(--ink2)}
+.tl{list-style:none;margin:0;padding:0}
+.tl li{display:grid;grid-template-columns:54px 1fr;gap:8px;padding:6px 0;border-bottom:1px dotted var(--soft);font-size:12.5px}
+.tl b{font:700 10px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font:10.5px Arial,sans-serif;color:var(--ink2);margin-top:4px}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:4px;vertical-align:-1px}
+.tag{display:inline-block;margin:0 8px 6px 0;font-family:"Didot","Bodoni 72",Georgia,serif;font-weight:700;line-height:1}
+.vid{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:10px 0;border-bottom:1px solid var(--soft)}
+.vid .ts{display:inline-block;font:700 10px Arial,sans-serif;background:var(--ink);color:#fff;padding:2px 5px;margin-right:6px}
+.brief{break-inside:avoid;padding:0 0 9px;font-size:12.5px}
+.brief b{display:block;font:700 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.words div{display:grid;grid-template-columns:96px 1fr 70px;align-items:center;gap:8px;font:12px Arial,sans-serif;padding:3px 0}
+.words i{display:block;height:11px;background:var(--ink)}
+@page{size:A4;margin:0}
+@media print{html{background:#fff}.tools{display:none}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page}}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <pattern id="dots" width="9" height="9" patternUnits="userSpaceOnUse"><circle cx="4.5" cy="4.5" r="2" fill="currentColor"/></pattern>
+    <radialGradient id="rg" cx="50%" cy="50%" r="60%"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/></radialGradient>
+    <mask id="rm"><rect width="640" height="360" fill="url(#rg)"/></mask>
+    <symbol id="eye" viewBox="0 0 640 360"><g fill="none" stroke="#2b1a24" stroke-width="3" stroke-linecap="round"><path d="M170 180q150-120 300 0q-150 120-300 0z"/><circle cx="320" cy="180" r="52"/><circle cx="320" cy="180" r="20" fill="#2b1a24"/><path d="M320 70v-30M320 290v30M200 95l-18-24M440 95l18-24M200 265l-18 24M440 265l18 24M130 90h40M130 90v40M510 90h-40M510 90v40M130 270h40M130 270v-40M510 270h-40M510 270v-40"/></g></symbol>
+    <symbol id="robot" viewBox="0 0 640 360"><g fill="none" stroke="#222" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="250" y="80" width="140" height="110" rx="16"/><circle cx="290" cy="130" r="13"/><circle cx="350" cy="130" r="13"/><path d="M285 164h70M320 80V50M305 50h30M250 130h-34M390 130h34M280 190v26M360 190v26M230 216h180v70H230zM270 286v44M370 286v44M250 330h46M344 330h46M230 232h-44l-14 50M410 232h44l14 50"/></g></symbol>
+    <symbol id="arm" viewBox="0 0 640 360"><g fill="none" stroke="#222" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M110 320h160M190 320v-40"/><rect x="160" y="250" width="60" height="30" rx="6"/><path d="M190 250l90-110"/><circle cx="280" cy="140" r="14"/><path d="M280 140l120 30"/><circle cx="400" cy="170" r="12"/><path d="M400 170l46 60M446 230l-22 14M446 230l24 12"/></g></symbol>
+    <symbol id="chip" viewBox="0 0 640 360"><g fill="none" stroke="#222" stroke-width="3" stroke-linecap="round"><rect x="230" y="90" width="180" height="180" rx="12"/><rect x="270" y="130" width="100" height="100" rx="8"/><path d="M260 90V60M300 90V60M340 90V60M380 90V60M260 270v30M300 270v30M340 270v30M380 270v30M230 130h-30M230 170h-30M230 210h-30M410 130h30M410 170h30M410 210h30"/></g></symbol>
+    <symbol id="wave" viewBox="0 0 640 360"><g fill="none" stroke="#222" stroke-width="3" stroke-linecap="round"><path d="M60 180h40l16-60 24 120 24-170 24 200 24-150 22 90 20-30h40l20-70 24 140 24-190 24 220 24-150 22 80 20-20h60"/></g></symbol>
+    <symbol id="play" viewBox="0 0 640 360"><g><circle cx="320" cy="180" r="56" fill="#fff" opacity=".85"/><path d="M302 148l50 32-50 32z" fill="#1d1b19"/></g></symbol>
+  </defs>
+</svg>
+
+<div class="tools"><button onclick="window.print()">Enregistrer en PDF</button><span>Maquette 12 pages — contenu d’exemple (les repères jaunes sont fictifs). Seuls Jev 1.14 (TypeSafe) et « Visual Thinking » (Runway) viennent de vrais tweets.</span></div>
+
+<!-- ===================== PAGE 1 : UNE ===================== -->
+<section class="page" id="p1">
+  <div class="run"><span>Édition du week-end</span><span>Semaine du 10 au 16 octobre 2026</span><span>Vol. 1 · n° 1</span></div>
+  <div class="body">
+    <h1 class="mast">La Gazette IA &amp; Robotique</h1>
+    <div style="text-align:center;font:italic 13px Georgia;color:var(--ink2);margin:4px 0 6px">Ce que vous avez gardé cette semaine — rédigé d’après vos bookmarks X et YouTube</div>
+    <div class="dbl" style="margin:4px 0 0"></div>
+    <div class="grid2" style="margin-top:12px;flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <p class="kick">Modèles d’IA · À la une</p>
+        <h2 class="big">Jev 1.14 : l’IA de décision de TypeSafe apprend à lire les images</h2>
+        <p class="dek">Nouveau modèle, nouveau type de boîte et contexte plus long : l’éditeur présente des fonctions expérimentales pour sa communauté.</p>
+        <p class="by">D’après @typesafeai, @dotpem · 14 octobre · suite page 3</p>
+        <figure><span class="img r169" style="background:#e9a8c4;color:#f6d3e2"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><rect width="640" height="360" fill="url(#dots)" mask="url(#rm)"/><use href="#eye" width="640" height="360"/></svg></span><figcaption>Illustration de l’annonce (emplacement : l’image d’origine du tweet).</figcaption></figure>
+        <div class="c2 t"><p class="drop">Le 14 octobre, TypeSafe AI a annoncé Jev 1.14, présenté comme un modèle « nouveau et amélioré ». L’annonce s’accompagne de fonctions expérimentales : la prise en charge des images, un nouveau type de boîte et un contexte plus long.</p><p>Parmi les comptes que vous suivez, @dotpem résume l’intérêt de la nouveauté : composer du texte, des images et de la structure de façon fluide, et répondre à des questions qui mêlent les deux modalités, rapidement et en parallèle.</p></div>
+        <div class="rule"></div>
+        <div class="grid2e">
+          <div class="pad-r" style="border-right:1px solid var(--soft)"><p class="kick">Modèles d’IA</p><h3>Runway montre le raisonnement de ses agents en vidéo</h3><p class="t" style="font-size:12.5px">« Visual Thinking » transforme le travail d’un agent en vidéo en temps réel. <span class="src">→ page 4</span></p></div>
+          <div class="pad-l"><span class="ex">Exemple</span><p class="kick">Robotique</p><h3>Titre du grand sujet robotique de la semaine</h3><p class="t" style="font-size:12.5px">Chapeau de deux lignes écrit à partir des tweets du groupe. <span class="src">→ page 7</span></p></div>
+        </div>
+      </div>
+      <div class="pad-l">
+        <div class="box"><h4>Dans ce numéro</h4>
+          <div class="fig"><span>Éditorial · la semaine en 60 s</span><b style="font-size:14px">2</b></div>
+          <div class="fig"><span>Modèles d’IA</span><b style="font-size:14px">3–4</b></div>
+          <div class="fig"><span>Dossier : quand les modèles voient</span><b style="font-size:14px">5</b></div>
+          <div class="fig"><span>Open source et comparatifs</span><b style="font-size:14px">6</b></div>
+          <div class="fig"><span>Robotique</span><b style="font-size:14px">7–8</b></div>
+          <div class="fig"><span>Chiffres et graphiques</span><b style="font-size:14px">9</b></div>
+          <div class="fig"><span>Ce qui monte · comptes à suivre</span><b style="font-size:14px">10</b></div>
+          <div class="fig"><span>À voir et à écouter</span><b style="font-size:14px">11</b></div>
+          <div class="fig"><span>Brèves · lexique · sources</span><b style="font-size:14px">12</b></div>
+        </div>
+        <div class="box dark"><h4>Le chiffre de la semaine</h4><div style="font:700 54px/1 'Didot','Bodoni 72',Georgia,serif">37</div><div style="font:12px Arial;opacity:.85">sujets d’IA distincts retenus dans vos bookmarks <span class="ex" style="margin:0 0 0 4px">exemple</span></div></div>
+        <figure><span class="img r43" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#robot" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Photo d’un tweet de robotique (emplacement).</figcaption></figure>
+        <p class="src">La Gazette est rédigée automatiquement d’après vos bookmarks. Chaque article renvoie à ses sources : vérifiez toujours les tweets d’origine.</p>
+      </div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>1</span></div>
+</section>
+
+<!-- ===================== PAGE 2 : ÉDITORIAL ===================== -->
+<section class="page" id="p2">
+  <div class="run"><span>Éditorial</span><span>Semaine du 10 au 16 octobre 2026</span><span>La semaine en 60 secondes</span></div>
+  <div class="body">
+    <div class="grid2" style="flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <span class="ex">Éditorial d’exemple</span>
+        <p class="kick">Éditorial</p>
+        <h2 class="big">Les modèles apprennent à voir — et à se justifier</h2>
+        <p class="by">Par la rédaction · d’après 112 éléments de votre semaine <span class="ex" style="margin:0 0 0 4px">exemple</span></p>
+        <div class="c2 t">
+          <p class="drop">Deux annonces de cette semaine, venues d’éditeurs différents, ont un point commun : elles rendent le travail d’un modèle plus visible. TypeSafe ajoute la lecture des images à Jev, son modèle de décision. Runway propose, avec « Visual Thinking », de montrer le raisonnement d’un agent sous forme de vidéo.</p>
+          <p>Dans les deux cas, la nouveauté ne tient pas seulement à une capacité de plus : elle change la manière dont on peut contrôler ce que fait la machine. Voir une étape plutôt que lire un résultat, c’est pouvoir vérifier plus vite.</p>
+          <p>Cette édition suit ce fil. Les pages 3 et 4 détaillent les deux annonces ; la page 5 prend du recul sur la multimodalité ; la page 6 compare les modèles ouverts ; les pages 7 et 8 font le point sur la robotique ; la page 9 chiffre votre veille.</p>
+          <blockquote class="pull">Voir une étape plutôt que lire un résultat : vérifier plus vite.<cite>La rédaction</cite></blockquote>
+          <p>Comme toujours, cette Gazette ne reflète que ce que vous avez choisi de garder. Ce qui n’est pas dans vos bookmarks n’y figure pas.</p>
+        </div>
+        <div class="dbl"></div>
+        <h4>Les trois idées à retenir</h4>
+        <div class="grid3">
+          <div class="pad-r"><b style="font:700 30px 'Didot',Georgia,serif">1</b><p class="t" style="font-size:12.5px"><span class="ex">Exemple</span> Une phrase qui résume la première idée de la semaine, tirée des sujets les plus commentés.</p></div>
+          <div class="pad-lr vr"><b style="font:700 30px 'Didot',Georgia,serif">2</b><p class="t" style="font-size:12.5px"><span class="ex">Exemple</span> La deuxième idée, avec le compte à la source.</p></div>
+          <div class="pad-l vr"><b style="font:700 30px 'Didot',Georgia,serif">3</b><p class="t" style="font-size:12.5px"><span class="ex">Exemple</span> La troisième : ce qu’il faudra surveiller la semaine prochaine.</p></div>
+        </div>
+        <div class="dbl"></div>
+        <h4>La semaine en images</h4>
+        <div class="grid3">
+          <div class="pad-r"><figure style="margin:0"><span class="img r32" style="background:#e9a8c4"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#eye" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Image de l’annonce du jour.</figcaption></figure></div>
+          <div class="pad-lr vr"><figure style="margin:0"><span class="img r32" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#robot" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Photo d’une démonstration.</figcaption></figure></div>
+          <div class="pad-l vr"><figure style="margin:0"><span class="img r32" style="background:#cfd9de"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#chip" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Schéma d’un modèle.</figcaption></figure></div>
+        </div>
+        <p class="src" style="margin-top:6px">Les images viennent des tweets de la semaine : photos d’annonces, captures de démonstrations, miniatures de vidéos.</p>
+      </div>
+      <div class="pad-l">
+        <div class="box"><h4>La semaine en 60 secondes</h4>
+          <ul class="tl">
+            <li><b>Sam 10</b><span><span class="ex">Exemple</span> Un fait court, avec le compte qui l’annonce.</span></li>
+            <li><b>Dim 11</b><span><span class="ex">Exemple</span> Un benchmark partagé par la communauté.</span></li>
+            <li><b>Lun 12</b><span><span class="ex">Exemple</span> Une démonstration robotique.</span></li>
+            <li><b>Mar 13</b><span><span class="ex">Exemple</span> Une levée de fonds.</span></li>
+            <li><b>Mer 14</b><span><strong>Jev 1.14</strong> annoncé par TypeSafe ; <strong>Visual Thinking</strong> présenté par Runway Labs.</span></li>
+            <li><b>Jeu 15</b><span><span class="ex">Exemple</span> Réactions et comparaisons.</span></li>
+            <li><b>Ven 16</b><span><span class="ex">Exemple</span> Un papier de recherche remarqué.</span></li>
+          </ul>
+        </div>
+        <figure><span class="img r43" style="background:#cfd9de;color:#9db3bd"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><rect width="640" height="360" fill="url(#dots)" mask="url(#rm)"/><use href="#chip" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Illustration d’éditorial.</figcaption></figure>
+        <div class="box"><h4>Cette semaine, en bref</h4>
+          <div class="fig"><span>Éléments gardés</span><b>112</b></div>
+          <div class="fig"><span>Sujets distincts</span><b>37</b></div>
+          <div class="fig"><span>Annonces officielles</span><b>8</b></div>
+          <div class="fig"><span>Vidéos ajoutées</span><b>6</b></div>
+          <p class="src" style="margin-top:6px">Valeurs d’exemple.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>2</span></div>
+</section>
+
+<!-- ===================== PAGE 3 : MODÈLES D'IA I ===================== -->
+<section class="page" id="p3">
+  <div class="run"><span>Modèles d’IA</span><span>Semaine du 10 au 16 octobre 2026</span><span>Annonce de la semaine</span></div>
+  <div class="body">
+    <p class="kick">Modèles d’IA · Annonce officielle</p>
+    <h2 class="big">Jev 1.14 : un modèle de décision qui comprend aussi les images</h2>
+    <p class="dek">TypeSafe AI présente une version « nouvelle et améliorée » avec des fonctions expérimentales : images, nouveau type de boîte, contexte plus long.</p>
+    <p class="by">D’après @typesafeai (annonce) et @dotpem (réaction) · 14 octobre · sources page 12</p>
+    <div class="grid2" style="flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <figure><span class="img r21" style="background:#e9a8c4;color:#f6d3e2"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><rect width="640" height="360" fill="url(#dots)" mask="url(#rm)"/><use href="#eye" width="640" height="360"/></svg></span><figcaption>L’image de l’annonce de @typesafeai (emplacement).</figcaption></figure>
+        <div class="c2 t">
+          <p class="drop">Le 14 octobre, TypeSafe AI a annoncé Jev 1.14, avec cette formule : « un modèle nouveau et amélioré, ainsi que des fonctions expérimentales pour nos rêveurs ». La liste est courte : des images, un nouveau type de boîte, un contexte plus long.</p>
+          <p>La nouveauté la plus visible est la lecture des images. Selon @dotpem, qui a relayé l’annonce, on peut maintenant composer du texte, des images et de la structure de façon fluide, et répondre à des questions qui font intervenir l’une ou l’autre modalité, rapidement et en parallèle.</p>
+          <blockquote class="pull">« Un modèle nouveau et amélioré, avec des fonctions expérimentales pour nos rêveurs. »<cite>@typesafeai · 14 octobre</cite></blockquote>
+          <p><span class="ex">Recherche ajoutée — exemple</span><br>Dans la vraie édition, ce passage s’appuie sur la page du fabricant et sur d’autres sources trouvées pour l’occasion : ce que contient exactement la version, ce qui est expérimental, la disponibilité, le prix. Chaque affirmation renvoie à sa source.</p>
+          <p>Un modèle de décision ne rédige pas : il classe et note. Ajouter les images élargit donc ce qu’il peut juger, par exemple « cette capture montre-t-elle une erreur ? ».</p>
+          <p>L’éditeur est aussi le compte qui annonce lui-même la sortie : c’est ce tweet, et non les commentaires qui l’ont suivi, qui sert de source principale.</p>
+        </div>
+      </div>
+      <div class="pad-l">
+        <div class="box"><h4>Ce que ça change</h4>
+          <p class="t" style="font-size:12.5px"><span class="ex">Exemple</span> Trois points, rédigés à partir de l’annonce : ce qui est nouveau, pour qui, et avec quelles limites.</p>
+          <div class="fig"><span>Images</span><span class="chk"></span></div>
+          <div class="fig"><span>Nouveau type de boîte</span><span class="chk"></span></div>
+          <div class="fig"><span>Contexte plus long</span><span class="chk"></span></div>
+          <div class="fig"><span>Poids ouverts</span><span class="chk no"></span></div>
+        </div>
+        <div class="box"><h4>Fiche</h4>
+          <table><tr><td>Éditeur</td><td>TypeSafe AI</td></tr><tr><td>Version</td><td>Jev 1.14</td></tr><tr><td>Annonce</td><td>14 oct., 13 h 14 (PT)</td></tr><tr><td>Statut</td><td>Fonctions expérimentales</td></tr></table>
+        </div>
+        <div class="box"><h4>Ils en parlent</h4>
+          <p class="t" style="font-size:12.5px"><b>@dotpem</b> — « une annonce massive, avec le support des images ».</p>
+          <p class="src">Réactions de tiers regroupées avec l’annonce : l’article n’en retient qu’une, la source primaire passe en premier.</p>
+        </div>
+        <figure><span class="img r21" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#wave" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Schéma explicatif (généré à partir des données de la page).</figcaption></figure>
+      </div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>3</span></div>
+</section>
+
+<!-- ===================== PAGE 4 : MODÈLES D'IA II ===================== -->
+<section class="page" id="p4">
+  <div class="run"><span>Modèles d’IA</span><span>Semaine du 10 au 16 octobre 2026</span><span>Agents</span></div>
+  <div class="body">
+    <div class="grid2" style="flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <p class="kick">Modèles d’IA · Recherche</p>
+        <h2 class="big">Runway : montrer le raisonnement d’un agent, pas seulement le décrire</h2>
+        <p class="dek">« Visual Thinking » est un cadre de recherche qui transforme le travail d’un agent en vidéo en temps réel.</p>
+        <p class="by">D’après @runwayml_labs · 14 octobre</p>
+        <figure><span class="img r21" style="background:#d9e4e8"><svg viewBox="0 0 300 169" preserveAspectRatio="xMidYMid slice"><rect width="300" height="169" fill="#d9e4e8"/><rect x="38" y="96" width="92" height="52" rx="6" fill="#7aa2b0"/><rect x="92" y="66" width="104" height="62" rx="6" fill="#e8b27a"/><rect x="160" y="92" width="98" height="56" rx="6" fill="#b79ad0"/><g transform="translate(110 40) scale(.22)"><use href="#play" width="640" height="360"/></g></svg></span><figcaption>Capture de la vidéo du tweet de @runwayml_labs (emplacement).</figcaption></figure>
+        <div class="c2 t">
+          <p class="drop">Runway Labs a présenté le 14 octobre « Visual Thinking », un nouveau cadre de recherche. L’idée : au lieu de décrire par écrit ce qu’un agent a fait, on montre son travail sous forme de vidéo en temps réel.</p>
+          <p>Selon le compte, chaque étape devient visible, donc plus facile à suivre, à vérifier et à croire. L’exemple de la vidéo montre un agent qui range un espace de travail : trier ses fichiers, ses ressources, ses documents et ses tests, et archiver ce qui n’a pas été touché depuis un an.</p>
+          <p><span class="ex">Recherche ajoutée — exemple</span><br>Ici viendraient le contexte (comment fonctionnent les agents actuels), les réserves éventuelles et d’autres réactions trouvées pour compléter l’annonce, chacune avec sa source.</p>
+          <blockquote class="pull">« Chaque étape est visible et plus facile à suivre, à vérifier et à croire. »<cite>@runwayml_labs · 14 octobre</cite></blockquote>
+          <p>Le tweet reçoit une attention notable parmi vos bookmarks : 571 mentions « j’aime » et plus de 45 000 vues au moment de l’édition.</p>
+        </div>
+      </div>
+      <div class="pad-l">
+        <div class="box"><h4>L’agent, étape par étape</h4>
+          <ul class="tl"><li><b>1</b><span><span class="ex">Exemple</span> L’agent reçoit une tâche.</span></li><li><b>2</b><span>Il explore et décide.</span></li><li><b>3</b><span>Chaque action est montrée en vidéo.</span></li><li><b>4</b><span>L’utilisateur vérifie d’un coup d’œil.</span></li></ul>
+        </div>
+        <div class="box"><h4>Attention reçue</h4>
+          <div class="fig"><span>Mentions « j’aime »</span><b>571</b></div>
+          <div class="fig"><span>Reposts</span><b>40</b></div>
+          <div class="fig"><span>Vues</span><b>45 k</b></div>
+          <div class="fig"><span>Enregistrements</span><b>519</b></div>
+        </div>
+        <figure><span class="img r43" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#chip" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Illustration de la recherche.</figcaption></figure>
+        <div class="box"><h4>Pour aller plus loin</h4><p class="src">Le tweet d’origine et la page du projet (si une page est liée dans le tweet) sont listés ici avec un lien.</p></div>
+      </div>
+    </div>
+    <div class="dbl"></div>
+    <div class="grid3">
+      <div class="pad-r"><span class="ex">Exemple</span><p class="kick">En deux mots</p><h3>Un autre modèle de la semaine</h3><p class="t" style="font-size:12.5px">Court résumé d’un sujet moins important de la rubrique, avec le compte qui l’annonce.</p></div>
+      <div class="pad-lr vr"><span class="ex">Exemple</span><p class="kick">En deux mots</p><h3>Un papier de recherche remarqué</h3><p class="t" style="font-size:12.5px">Ce que le papier montre, en trois lignes, avec le lien.</p></div>
+      <div class="pad-l vr"><span class="ex">Exemple</span><p class="kick">En deux mots</p><h3>Une mise à jour d’outil</h3><p class="t" style="font-size:12.5px">Ce qui change pour l’utilisateur.</p></div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>4</span></div>
+</section>
+
+<!-- ===================== PAGE 5 : DOSSIER ===================== -->
+<section class="page" id="p5">
+  <div class="run"><span>Dossier</span><span>Semaine du 10 au 16 octobre 2026</span><span>Recherche approfondie</span></div>
+  <div class="body">
+    <span class="ex">Dossier d’exemple — texte de fond</span>
+    <p class="kick">Dossier · Multimodalité</p>
+    <h2 class="big">Quand les modèles voient : comprendre la multimodalité en cinq questions</h2>
+    <p class="dek">Texte, image, son, vidéo : comment un même modèle peut traiter plusieurs types de contenus, et ce que cela change pour l’utilisateur.</p>
+    <p class="by">Dossier réalisé à partir de vos bookmarks et de sources complémentaires · sources page 12</p>
+    <div class="grid2">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <div class="c2 t">
+          <h3>1. Qu’est-ce qu’un modèle multimodal ?</h3>
+          <p>Un modèle multimodal accepte, et parfois produit, plusieurs types de contenus : du texte, des images, du son ou de la vidéo. La différence avec un assemblage de modèles séparés est qu’un seul système relie ces contenus.</p>
+          <h3>2. Comment une image devient-elle lisible par un modèle ?</h3>
+          <p>L’image est découpée en petits morceaux, chacun transformé en une suite de nombres, comme le texte l’est en « jetons ». Le modèle manipule ensuite ces suites sans distinguer, à ce niveau, un mot d’un morceau d’image.</p>
+          <blockquote class="pull">Au fond, une image est une phrase écrite avec un autre alphabet.<cite>La rédaction</cite></blockquote>
+          <h3>3. À quoi cela sert-il concrètement ?</h3>
+          <p>Lire une capture d’écran, décrire une photo, extraire un tableau d’un document, suivre une démonstration vidéo. Pour un modèle de décision comme Jev, cela permet de juger un contenu qui n’est pas du texte.</p>
+          <h3>4. Quelles limites ?</h3>
+          <p>Lecture imparfaite des petits caractères, difficulté à compter ou à situer des objets, et coût de calcul plus élevé : une image compte pour beaucoup de jetons.</p>
+          <h3>5. Et la suite ?</h3>
+          <p>Contexte plus long, vidéo en continu, agents qui montrent leur travail : les annonces de cette semaine vont dans ce sens.</p>
+        </div>
+      </div>
+      <div class="pad-l">
+        <figure><span class="img r43" style="background:#cfd9de;color:#9db3bd"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><rect width="640" height="360" fill="url(#dots)" mask="url(#rm)"/><use href="#eye" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Schéma : de l’image aux jetons.</figcaption></figure>
+        <div class="box"><h4>Sources consultées</h4>
+          <p class="src"><span class="ex">Exemple</span><br>[Titre de la page lue] — domaine.tld<br>[Titre de l’article] — domaine.tld<br>[Papier de recherche] — arxiv.org<br>[Page du fabricant] — domaine.tld</p>
+          <p class="src">Dans la vraie édition : les pages liées dans vos tweets, puis quelques sources trouvées par la recherche web.</p>
+        </div>
+      </div>
+    </div>
+    <div class="dbl"></div>
+    <h4>Ce qu’en disent les comptes que vous suivez</h4>
+    <div class="grid3" style="flex:1;min-height:0">
+      <div class="pad-r"><span class="ex">Exemple</span><blockquote class="pull" style="font-size:16px">« Citation d’un tweet enregistré qui éclaire le sujet du dossier. »<cite>@compte1 · date</cite></blockquote><p class="t" style="font-size:12.5px">Une phrase de contexte sur l’auteur et sur la raison pour laquelle sa remarque compte.</p></div>
+      <div class="pad-lr vr"><span class="ex">Exemple</span><blockquote class="pull" style="font-size:16px">« Une deuxième voix, plus critique, pour équilibrer. »<cite>@compte2 · date</cite></blockquote><p class="t" style="font-size:12.5px">Le désaccord est signalé : le dossier ne retient pas que les avis favorables.</p></div>
+      <div class="pad-l vr"><figure style="margin:0"><span class="img r32" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#wave" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Illustration du dossier.</figcaption></figure><p class="t" style="font-size:12.5px;margin-top:6px"><span class="ex">Exemple</span> « À lire ensuite » : le lien le plus utile trouvé pour approfondir.</p></div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>5</span></div>
+</section>
+
+<!-- ===================== PAGE 6 : OPEN SOURCE & COMPARATIFS ===================== -->
+<section class="page" id="p6">
+  <div class="run"><span>Open source &amp; comparatifs</span><span>Semaine du 10 au 16 octobre 2026</span><span>Benchmarks</span></div>
+  <div class="body">
+    <span class="ex">Page d’exemple — données fictives</span>
+    <p class="kick">Modèles ouverts</p>
+    <h2 class="big">Poids ouverts et benchmarks : ce que la communauté a comparé</h2>
+    <p class="dek">Les modèles discutés cette semaine, leurs caractéristiques et les scores partagés dans vos bookmarks.</p>
+    <p class="by">Compilation d’après les tweets de la semaine · valeurs d’exemple</p>
+    <div class="grid2">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <h4>Tableau comparatif</h4>
+        <table>
+          <tr><th>Modèle</th><th>Éditeur</th><th class="n">Contexte</th><th>Images</th><th>Poids</th></tr>
+          <tr><td>Modèle A</td><td>Éditeur 1</td><td class="n">128 k</td><td><span class="chk"></span></td><td><span class="chk no"></span></td></tr>
+          <tr><td>Modèle B</td><td>Éditeur 2</td><td class="n">32 k</td><td><span class="chk"></span></td><td><span class="chk"></span></td></tr>
+          <tr><td>Modèle C</td><td>Éditeur 3</td><td class="n">1 M</td><td><span class="chk no"></span></td><td><span class="chk"></span></td></tr>
+          <tr><td>Modèle D</td><td>Éditeur 4</td><td class="n">200 k</td><td><span class="chk"></span></td><td><span class="chk no"></span></td></tr>
+          <tr><td>Modèle E</td><td>Éditeur 5</td><td class="n">64 k</td><td><span class="chk no"></span></td><td><span class="chk"></span></td></tr>
+        </table>
+        <div class="dbl"></div>
+        <h4>Scores partagés sur un benchmark (exemple)</h4>
+        <div id="benchBars"></div>
+        <p class="src" style="margin-top:8px">Les scores viennent des tweets qui les citent ; la rédaction ne les a pas vérifiés indépendamment.</p>
+        <div class="dbl"></div>
+        <div class="c2 t"><p class="drop">Texte d’analyse rédigé à partir des tweets de comparaison : quels modèles reviennent le plus, ce que les utilisateurs en disent, et les réserves exprimées. Chaque affirmation renvoie à son tweet.</p><p>Un second paragraphe peut donner le contexte : conditions de test, limites d’un benchmark, ou ce qu’un score ne dit pas.</p></div>
+      </div>
+      <div class="pad-l">
+        <figure><span class="img r43" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#chip" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Illustration.</figcaption></figure>
+        <div class="box"><h4>Le saviez-vous ?</h4><p class="t" style="font-size:12.5px">« Poids ouverts » signifie que les paramètres du modèle sont téléchargeables. Cela ne dit rien de la licence ni des données d’entraînement.</p></div>
+        <div class="box"><h4>Les plus discutés</h4><div class="words" id="mostTalked"></div></div>
+      </div>
+    </div>
+    <div class="dbl"></div>
+    <h4>Ce que dit la communauté</h4>
+    <div class="grid3" style="flex:1;min-height:0">
+      <div class="pad-r"><span class="ex">Exemple</span><p class="t" style="font-size:12.5px"><b>@compte1</b> — « Retour d’usage sur le modèle A : ce qui marche, ce qui déçoit. »</p></div>
+      <div class="pad-lr vr"><span class="ex">Exemple</span><p class="t" style="font-size:12.5px"><b>@compte2</b> — « Comparaison du modèle B et du modèle C sur une tâche précise. »</p></div>
+      <div class="pad-l vr"><span class="ex">Exemple</span><p class="t" style="font-size:12.5px"><b>@compte3</b> — « Un test de contexte long, avec ses limites. »</p></div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>6</span></div>
+</section>
+
+<!-- ===================== PAGE 7 : ROBOTIQUE I ===================== -->
+<section class="page" id="p7">
+  <div class="run"><span>Robotique</span><span>Semaine du 10 au 16 octobre 2026</span><span>Le grand sujet</span></div>
+  <div class="body">
+    <span class="ex">Article d’exemple — contenu fictif</span>
+    <p class="kick">Robotique · À la une de la rubrique</p>
+    <h2 class="big">Titre du grand sujet robotique de la semaine, sur deux ou trois lignes</h2>
+    <p class="dek">Chapeau en une phrase : ce qui est annoncé, par qui, et pourquoi cela compte.</p>
+    <p class="by">D’après @compte1, @compte2 · date · sources page 12</p>
+    <div class="grid2">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <figure><span class="img r21" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#robot" width="640" height="360"/></svg></span><figcaption>Photo du tweet d’annonce (emplacement).</figcaption></figure>
+        <div class="c2 t">
+          <p class="drop">Premier paragraphe : l’annonce telle que le compte officiel la formule, avec les chiffres qu’il donne. Les tweets de commentateurs sont regroupés avec l’annonce, qui reste la source principale.</p>
+          <p>Deuxième paragraphe : le contexte, tiré des pages liées dans les tweets et de la recherche complémentaire (concurrents, historique du projet, enjeux industriels).</p>
+          <blockquote class="pull">Une citation courte du compte officiel, choisie pour son intérêt.<cite>@compte1 · date</cite></blockquote>
+          <p>Troisième paragraphe : ce que disent les spécialistes que vous suivez, et les réserves éventuelles.</p>
+          <p>Quatrième paragraphe : ce qui est attendu ensuite (démonstration publique, livraison, prix annoncé), avec la source de chaque date.</p>
+        </div>
+      </div>
+      <div class="pad-l">
+        <div class="box"><h4>Fiche technique</h4><table><tr><td>Fabricant</td><td>Éditeur 1</td></tr><tr><td>Type</td><td>Humanoïde</td></tr><tr><td>Taille</td><td>1,7 m</td></tr><tr><td>Charge utile</td><td>20 kg</td></tr><tr><td>Statut</td><td>Prototype</td></tr></table><p class="src" style="margin-top:6px"><span class="ex">Exemple</span> Valeurs fictives.</p></div>
+        
+        <div class="box"><h4>À retenir</h4><ul class="tl"><li><b>1</b><span><span class="ex">Exemple</span> Point clé numéro un.</span></li><li><b>2</b><span>Point clé numéro deux.</span></li><li><b>3</b><span>Point clé numéro trois.</span></li></ul></div>
+      </div>
+    </div>
+    <div class="dbl"></div>
+    <h4>Le secteur en quelques chiffres <span class="ex" style="margin:0 0 0 6px">exemple</span></h4>
+    <div class="grid3" style="margin-bottom:8px">
+      <div class="pad-r"><div class="fig"><span>Levées de fonds de la semaine</span><b>4</b></div><div class="fig"><span>Nouveaux robots annoncés</span><b>6</b></div></div>
+      <div class="pad-lr vr"><div class="fig"><span>Démonstrations vidéo</span><b>11</b></div><div class="fig"><span>Tweets sur l’humanoïde</span><b>58</b></div></div>
+      <div class="pad-l vr"><div class="fig"><span>Sujets distincts</span><b>221</b></div><div class="fig"><span>Variation</span><span class="up">▲ 9 %</span></div></div>
+    </div>
+    <div class="grid2e" style="flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--soft)"><h4>Qui d’autre ?</h4><span class="ex">Exemple</span><p class="t" style="font-size:12.5px">Les concurrents cités dans les tweets et dans la recherche complémentaire, avec une ligne sur chacun.</p></div>
+      <div class="pad-l"><h4>Ce qui reste à prouver</h4><span class="ex">Exemple</span><p class="t" style="font-size:12.5px">Les réserves des spécialistes que vous suivez : autonomie, coût, fiabilité en conditions réelles.</p></div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>7</span></div>
+</section>
+
+<!-- ===================== PAGE 8 : ROBOTIQUE II ===================== -->
+<section class="page" id="p8">
+  <div class="run"><span>Robotique</span><span>Semaine du 10 au 16 octobre 2026</span><span>Tour d’horizon</span></div>
+  <div class="body">
+    <span class="ex">Page d’exemple — contenu fictif</span>
+    <div class="grid3">
+      <article class="pad-r" style="border-right:1px solid var(--ink)">
+        <p class="kick">Robotique</p><h3 style="font-size:24px">Titre d’un deuxième sujet robotique</h3>
+        <figure><span class="img r32" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#arm" width="640" height="360"/></svg></span><figcaption>Image (emplacement).</figcaption></figure>
+        <p class="t drop">Texte de 120 à 160 mots écrit à partir du groupe de tweets et de la page liée. Il dit ce qui est annoncé et par qui, donne les chiffres cités et renvoie à la source.</p><p class="t">Une seconde phrase met le sujet en perspective par rapport à ce que fait le reste du secteur.</p><p class="src">Sources : @compte3 · lien</p>
+      </article>
+      <article class="pad-lr" style="border-right:1px solid var(--ink)">
+        <p class="kick">Robotique</p><h3 style="font-size:24px">Titre d’un troisième sujet, robot domestique</h3>
+        <figure><span class="img r32" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#robot" width="640" height="360"/></svg></span><figcaption>Image (emplacement).</figcaption></figure>
+        <p class="t drop">Texte du même type pour un sujet de taille moyenne. Les sujets sont ordonnés par importance : nombre de tweets, compte officiel à la source, attention reçue.</p><p class="t">Les articles sans image gardent un texte plus dense et laissent la place aux photos des sujets forts.</p><p class="src">Sources : @compte4</p>
+      </article>
+      <article class="pad-l">
+        <div class="box dark"><h4>Le robot de la semaine</h4>
+          <figure style="margin-bottom:8px"><span class="img r43" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#robot" width="640" height="360"/></svg></span></figure>
+          <div style="font:700 17px 'Didot',Georgia,serif">Nom du robot (exemple)</div>
+          <table style="color:#f2ede1"><tr><td style="border-color:#444">Fabricant</td><td style="border-color:#444">Éditeur 2</td></tr><tr><td style="border-color:#444">Annonce</td><td style="border-color:#444">date</td></tr><tr><td style="border-color:#444">Tweets</td><td style="border-color:#444">14</td></tr></table>
+        </div>
+        <h4>Sur le terrain</h4>
+        <ul class="tl"><li><b>Usine</b><span><span class="ex">Exemple</span> Une ligne sur un déploiement industriel.</span></li><li><b>Maison</b><span>Un robot domestique.</span></li><li><b>Labo</b><span>Un résultat de recherche.</span></li><li><b>Argent</b><span>Une levée de fonds.</span></li></ul>
+      </article>
+    </div>
+    <div class="dbl"></div>
+    <div class="grid2" style="flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <p class="kick">Zoom</p><h2 class="mid">Titre d’un reportage sur un sujet de fond</h2>
+        <p class="by">D’après @compte5, @compte6 <span class="ex" style="margin:0 0 0 6px">exemple</span></p>
+        <div class="c2 t"><p class="drop">Un article intermédiaire, d’environ 250 mots, rédigé à partir d’un groupe de tweets et de la page liée. Il détaille un sujet qui ne mérite pas une page entière mais plus qu’une brève.</p><p>Il cite ses sources, signale les réserves et renvoie aux tweets d’origine pour que vous puissiez vérifier.</p><p>La mise en page garde un texte dense sur deux colonnes, comme dans un quotidien.</p></div>
+      </div>
+      <div class="pad-l"><figure style="margin:0"><span class="img r43" style="background:#e6e2d6"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#arm" width="640" height="360"/></svg></span><figcaption><span class="ex" style="margin:0 4px 0 0">Exemple</span>Image du reportage.</figcaption></figure><p class="src">Sources : @compte5 · @compte6</p></div>
+    </div>
+    <div class="dbl"></div>
+    <h4>Brèves robotique</h4>
+    <div class="c3"><div class="brief"><b>Exemple · Humanoïde</b>Une phrase résume le sujet, avec le compte à la source.</div><div class="brief"><b>Exemple · Drone</b>Deuxième brève, une ou deux lignes.</div><div class="brief"><b>Exemple · Chirurgie</b>Troisième brève.</div><div class="brief"><b>Exemple · Logistique</b>Quatrième brève.</div><div class="brief"><b>Exemple · Recherche</b>Cinquième brève.</div><div class="brief"><b>Exemple · Financement</b>Sixième brève.</div></div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>8</span></div>
+</section>
+
+<!-- ===================== PAGE 9 : CHIFFRES ===================== -->
+<section class="page" id="p9">
+  <div class="run"><span>Chiffres &amp; graphiques</span><span>Semaine du 10 au 16 octobre 2026</span><span>Votre veille en données</span></div>
+  <div class="body">
+    <span class="ex">Page d’exemple — dans la vraie édition, graphiques tirés de vos stats</span>
+    <p class="kick">Chiffres</p>
+    <h2 class="big">Votre veille en chiffres</h2>
+    <p class="dek">Ce que vous avez gardé, quand, et de quels sujets : les stats de la semaine, comparées à la précédente.</p>
+    <div class="grid2e" style="margin-top:6px">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <h4>IA et robotique, jour par jour</h4>
+        <div id="lineChart"></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Modèles d’IA</span><span><i style="background:var(--s2)"></i>Robotique</span><span><i style="background:none;border-top:2px dashed #888;height:0;margin-top:5px"></i>semaine précédente</span></div>
+      </div>
+      <div class="pad-l">
+        <h4>Par source (barres empilées)</h4>
+        <div id="stackChart"></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>X</span><span><i style="background:var(--s3)"></i>YouTube</span></div>
+      </div>
+    </div>
+    <div class="dbl"></div>
+    <div class="grid3" style="flex:1;min-height:0">
+      <div class="pad-r"><h4>Langues</h4><div id="donut"></div></div>
+      <div class="pad-lr vr"><h4>Quand vous enregistrez</h4><div id="heat"></div><p class="src" style="margin-top:4px">Jour × heure.</p></div>
+      <div class="pad-l vr"><h4>Les chiffres</h4>
+        <div class="fig"><span>Sujets IA</span><span><b>37</b> <span class="up">▲ 12 %</span></span></div>
+        <div class="fig"><span>Sujets robotique</span><span><b>221</b> <span class="up">▲ 9 %</span></span></div>
+        <div class="fig"><span>Lancements</span><span><b>15</b> <span class="up">▲ 50 %</span></span></div>
+        <div class="fig"><span>Officiel (Jev)</span><span><b>8</b> <span class="dn">▼ 25 %</span></span></div>
+        <p class="src" style="margin-top:6px">Valeurs d’exemple.</p>
+      </div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>9</span></div>
+</section>
+
+<!-- ===================== PAGE 10 : CE QUI MONTE ===================== -->
+<section class="page" id="p10">
+  <div class="run"><span>Tendances</span><span>Semaine du 10 au 16 octobre 2026</span><span>Comptes à suivre</span></div>
+  <div class="body">
+    <span class="ex">Page d’exemple — données fictives</span>
+    <p class="kick">Tendances</p>
+    <h2 class="big">Ce qui monte, ce qui retombe, et qui suivre</h2>
+    <p class="dek">Les mots, les comptes et les sites qui progressent le plus par rapport à la semaine précédente.</p>
+    <div class="grid2e" style="margin-top:8px">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <h4>Les mots qui montent</h4>
+        <div class="words" id="rising"></div>
+        <div class="dbl"></div>
+        <h4>Nuage de la semaine</h4>
+        <div id="cloud" style="line-height:1.15"></div>
+      </div>
+      <div class="pad-l">
+        <h4>Les comptes les plus enregistrés</h4>
+        <table><tr><th>Compte</th><th class="n">Éléments</th><th class="n">Évolution</th></tr>
+          <tr><td>@typesafeai</td><td class="n">9</td><td class="n up">▲ 4</td></tr>
+          <tr><td>@runwayml_labs</td><td class="n">6</td><td class="n up">▲ 2</td></tr>
+          <tr><td>@compte1 <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td class="n">5</td><td class="n dn">▼ 1</td></tr>
+          <tr><td>@compte2 <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td class="n">5</td><td class="n up">▲ 3</td></tr>
+          <tr><td>@compte3 <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td class="n">4</td><td class="n">=</td></tr>
+        </table>
+        <div class="dbl"></div>
+        <h4>Les sites les plus cités</h4>
+        <table><tr><th>Site</th><th class="n">Liens</th></tr><tr><td>arxiv.org <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td class="n">12</td></tr><tr><td>github.com</td><td class="n">9</td></tr><tr><td>huggingface.co</td><td class="n">7</td></tr><tr><td>blog d’éditeur</td><td class="n">5</td></tr></table>
+      </div>
+    </div>
+    <div class="dbl"></div>
+    <div class="grid3">
+      <div class="pad-r"><h4>Portrait d’un compte</h4><span class="ex">Exemple</span><p class="t" style="font-size:12.5px">Un compte qui revient souvent cette semaine : qui il est, ce qu’il a publié, pourquoi il compte. Rédigé à partir de ses tweets enregistrés.</p></div>
+      <div class="pad-lr vr"><h4>Le tweet le plus enregistré</h4><span class="ex">Exemple</span><p class="t" style="font-size:12.5px">« Citation du tweet le plus gardé de la semaine. »<br><span class="src">@compte · 519 enregistrements</span></p></div>
+      <div class="pad-l vr"><h4>À surveiller</h4><span class="ex">Exemple</span><p class="t" style="font-size:12.5px">Deux ou trois sujets qui gagnent de l’élan et pourraient peser la semaine prochaine.</p></div>
+    </div>
+    <div class="dbl"></div>
+    <h4>Le palmarès des tweets les plus enregistrés</h4>
+    <table style="margin-top:4px"><tr><th>#</th><th>Compte</th><th>Tweet</th><th class="n">Enreg.</th><th class="n">J’aime</th></tr>
+      <tr><td>1</td><td>@runwayml_labs</td><td>« Agents can now show their reasoning, not just describe it… »</td><td class="n">519</td><td class="n">571</td></tr>
+      <tr><td>2</td><td>@typesafeai</td><td>« we announced Jev 1.14 on 10.14 at 1:14pm PT »</td><td class="n">676</td><td class="n">2,7 k</td></tr>
+      <tr><td>3 <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td>@compte1</td><td>« Tweet fictif pour illustrer le palmarès »</td><td class="n">310</td><td class="n">980</td></tr>
+      <tr><td>4 <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td>@compte2</td><td>« Un autre tweet d’exemple »</td><td class="n">244</td><td class="n">720</td></tr>
+      <tr><td>5 <span class="ex" style="margin:0 0 0 4px">exemple</span></td><td>@compte3</td><td>« Encore un exemple »</td><td class="n">198</td><td class="n">410</td></tr>
+    </table>
+    <p class="src" style="margin-top:6px">Les nombres des deux premières lignes sont ceux affichés sur les tweets d’origine lors de la capture.</p>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>10</span></div>
+</section>
+
+<!-- ===================== PAGE 11 : À VOIR ET À ÉCOUTER ===================== -->
+<section class="page" id="p11">
+  <div class="run"><span>À voir &amp; à écouter</span><span>Semaine du 10 au 16 octobre 2026</span><span>Vidéos</span></div>
+  <div class="body">
+    <span class="ex">Page d’exemple — contenu fictif</span>
+    <p class="kick">Vidéos</p>
+    <h2 class="big">À voir et à écouter cette semaine</h2>
+    <p class="dek">Les vidéos ajoutées à vos playlists, avec le passage de la transcription le plus pertinent.</p>
+    <div style="flex:1;min-height:0">
+      <div class="vid"><span class="img r169" style="background:#2b2a28"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#wave" width="640" height="360" style="color:#fff"/><g transform="translate(0 0)"><use href="#play" width="640" height="360"/></g></svg></span>
+        <div><p class="kick">Conférence · 48 min</p><h3>Titre de la vidéo la plus pertinente de la semaine</h3><p class="src">Chaîne (exemple) · ajoutée à « À regarder plus tard »</p><p class="t" style="font-size:12.5px"><span class="ts">12:40</span>« Passage de la transcription le plus proche de vos sujets, affiché avec son horodatage. »</p></div></div>
+      <div class="vid"><span class="img r169" style="background:#2b2a28"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#robot" width="640" height="360" style="color:#fff"/><use href="#play" width="640" height="360"/></svg></span>
+        <div><p class="kick">Entretien · 1 h 05</p><h3>Titre d’un entretien sur la robotique</h3><p class="src">Chaîne (exemple) · ajoutée cette semaine</p><p class="t" style="font-size:12.5px"><span class="ts">31:05</span>« Un autre extrait de transcription, choisi par similarité avec le sujet de la semaine. »</p></div></div>
+      <div class="vid"><span class="img r169" style="background:#2b2a28"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#chip" width="640" height="360" style="color:#fff"/><use href="#play" width="640" height="360"/></svg></span>
+        <div><p class="kick">Démonstration · 14 min</p><h3>Titre d’une démonstration de modèle</h3><p class="src">Chaîne (exemple) · regardée cette semaine</p><p class="t" style="font-size:12.5px"><span class="ts">04:20</span>« Extrait de la démonstration, avec l’horodatage pour y revenir directement. »</p></div></div>
+      <div class="vid"><span class="img r169" style="background:#2b2a28"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#arm" width="640" height="360" style="color:#fff"/><use href="#play" width="640" height="360"/></svg></span>
+        <div><p class="kick">Cours · 22 min</p><h3>Titre d’un cours à garder</h3><p class="src">Chaîne (exemple)</p><p class="t" style="font-size:12.5px"><span class="ts">00:55</span>« Extrait d’introduction. »</p></div></div>
+      <div class="vid"><span class="img r169" style="background:#2b2a28"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#eye" width="640" height="360" style="color:#fff"/><use href="#play" width="640" height="360"/></svg></span>
+        <div><p class="kick">Analyse · 31 min</p><h3>Titre d’une analyse d’un modèle de vision</h3><p class="src">Chaîne (exemple) · ajoutée cette semaine</p><p class="t" style="font-size:12.5px"><span class="ts">18:20</span>« Extrait sur les images et la lecture de documents. »</p></div></div>
+      <div class="vid"><span class="img r169" style="background:#2b2a28"><svg viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice"><use href="#wave" width="640" height="360" style="color:#fff"/><use href="#play" width="640" height="360"/></svg></span>
+        <div><p class="kick">Podcast · 52 min</p><h3>Titre d’un épisode sur les agents</h3><p class="src">Chaîne (exemple)</p><p class="t" style="font-size:12.5px"><span class="ts">09:10</span>« Extrait sur la vérification du travail d’un agent. »</p></div></div>
+    </div>
+    <div class="dbl"></div>
+    <div class="grid2e"><div class="pad-r"><h4>Écouter</h4><p class="t" style="font-size:12.5px"><span class="ex">Exemple</span> Un épisode de podcast ou d’entretien sauvegardé cette semaine.</p></div><div class="pad-l"><h4>Pour la semaine prochaine</h4><p class="t" style="font-size:12.5px"><span class="ex">Exemple</span> Les vidéos de votre liste « à regarder » les plus liées à vos sujets du moment.</p></div></div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>11</span></div>
+</section>
+
+<!-- ===================== PAGE 12 : BRÈVES, LEXIQUE, SOURCES ===================== -->
+<section class="page" id="p12">
+  <div class="run"><span>Brèves, lexique &amp; sources</span><span>Semaine du 10 au 16 octobre 2026</span><span>Fin d’édition</span></div>
+  <div class="body">
+    <h4>Brèves</h4>
+    <div class="c3" style="margin-top:6px">
+      <div class="brief"><b>Exemple · Modèles</b>Une phrase résume un sujet moins important, avec le compte à la source.</div>
+      <div class="brief"><b>Exemple · Outils</b>Une mise à jour d’outil, en une ou deux lignes.</div>
+      <div class="brief"><b>Exemple · Recherche</b>Un papier remarqué.</div>
+      <div class="brief"><b>Exemple · Open source</b>Une nouvelle version publiée.</div>
+      <div class="brief"><b>Exemple · Robotique</b>Une démonstration.</div>
+      <div class="brief"><b>Exemple · Financement</b>Une levée de fonds.</div>
+      <div class="brief"><b>Exemple · Régulation</b>Un texte ou une décision.</div>
+      <div class="brief"><b>Exemple · Matériel</b>Une puce ou un serveur.</div>
+      <div class="brief"><b>Exemple · Vidéo</b>Une conférence à regarder.</div>
+    </div>
+    <div class="dbl"></div>
+    <div class="grid2e" style="flex:1;min-height:0">
+      <div class="pad-r" style="border-right:1px solid var(--ink)">
+        <h4>Lexique</h4>
+        <p class="t" style="font-size:12.5px"><b>VLM (modèle vision-langage)</b> — modèle qui comprend à la fois des images et du texte.</p>
+        <p class="t" style="font-size:12.5px"><b>Fenêtre de contexte</b> — quantité de texte (ou d’images) qu’un modèle peut garder en tête en une seule fois.</p>
+        <p class="t" style="font-size:12.5px"><b>Poids ouverts</b> — les paramètres du modèle sont téléchargeables ; cela ne dit rien de la licence ni des données d’entraînement.</p>
+        <p class="t" style="font-size:12.5px"><b>Embedding</b> — représentation d’un contenu par une liste de nombres, qui permet de mesurer sa ressemblance avec un autre.</p>
+        <p class="t" style="font-size:12.5px"><b>Agent</b> — programme qui enchaîne des actions pour accomplir une tâche, en s’appuyant sur un modèle.</p>
+        <div class="dbl"></div>
+        <h4>Il y a un an, cette semaine</h4>
+        <span class="ex">Exemple</span>
+        <p class="t" style="font-size:12.5px">Un tweet que vous aviez gardé à la même période l’an dernier, avec son compte et sa date. Utile pour mesurer le chemin parcouru.</p>
+      </div>
+      <div class="pad-l">
+        <h4>Index des sources</h4>
+        <table style="font-size:10.5px"><tr><th>Page</th><th>Source</th></tr>
+          <tr><td>1, 3</td><td>@typesafeai — annonce de Jev 1.14</td></tr>
+          <tr><td>3</td><td>@dotpem — réaction</td></tr>
+          <tr><td>4</td><td>@runwayml_labs — Visual Thinking</td></tr>
+          <tr><td>5</td><td><span class="ex" style="margin:0">exemple</span> pages consultées</td></tr>
+          <tr><td>7–8</td><td><span class="ex" style="margin:0">exemple</span> @compte1 à @compte4</td></tr>
+        </table>
+        <div class="dbl"></div>
+        <h4>Colophon</h4>
+        <p class="src" style="display:none">x</p><p class="src">Édition générée le 16 octobre 2026 à partir de 112 éléments (X et YouTube) de la période du 10 au 16 octobre. Articles rédigés automatiquement d’après vos bookmarks et, pour certains sujets, des sources complémentaires citées. Les informations ne sont pas vérifiées indépendamment : consultez les sources d’origine.</p>
+        <div class="dbl"></div>
+        <h4>Dans le prochain numéro</h4>
+        <span class="ex">Exemple</span>
+        <ul class="tl"><li><b>Suite</b><span>Le sujet à suivre, tiré de la rubrique « À surveiller ».</span></li><li><b>Dossier</b><span>Le thème approfondi la semaine prochaine.</span></li><li><b>Stats</b><span>Votre comparaison de la semaine.</span></li></ul>
+        <div class="dbl"></div>
+        <h4>Pour aller plus loin</h4>
+        <span class="ex">Exemple</span>
+        <p class="src">Une sélection de liens trouvés pendant la recherche, que vous n’aviez pas encore gardés.</p>
+      </div>
+    </div>
+  </div>
+  <div class="pn"><b>La Gazette IA &amp; Robotique</b><span>12</span></div>
+</section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const C = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)'];
+// barres horizontales (benchmarks / mots)
+function hbars(el, rows, unit = '') {
+  const max = Math.max(...rows.map((r) => r[1]));
+  el.innerHTML = rows.map(([l, v], i) => `<div><span>${l}</span><i style="width:${(v / max) * 100}%;background:${C[i % 5]}"></i><span style="text-align:right">${v}${unit}</span></div>`).join('');
+}
+hbars($('benchBars'), [['Modèle A', 82], ['Modèle B', 78], ['Modèle C', 74], ['Modèle D', 69], ['Modèle E', 61]], ' %');
+$('benchBars').classList.add('words');
+hbars($('mostTalked'), [['Modèle A', 31], ['Modèle B', 22], ['Modèle C', 14], ['Modèle D', 9]]);
+hbars($('rising'), [['multimodal', 24], ['agent', 19], ['humanoïde', 16], ['contexte long', 12], ['open source', 9], ['benchmark', 8]]);
+// nuage de mots
+const words = [['agents', 34], ['multimodal', 30], ['humanoïde', 26], ['modèle', 24], ['vidéo', 20], ['robot', 20], ['benchmark', 16], ['open source', 15], ['contexte', 13], ['images', 13], ['raisonnement', 12], ['voix', 10], ['puce', 9], ['entraînement', 9]];
+$('cloud').innerHTML = words.map(([w, n], i) => `<span class="tag" style="font-size:${12 + n * 0.7}px;color:${C[i % 5]}">${w}</span>`).join(' ');
+
+const W = 300, H = 150, m = { l: 26, r: 6, t: 8, b: 20 };
+const days = ['S', 'D', 'L', 'M', 'M', 'J', 'V'];
+function axes(max) {
+  let g = '';
+  for (let t = 0; t <= 4; t++) { const v = (max / 4) * t, y = H - m.b - (v / max) * (H - m.t - m.b); g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y}" y2="${y}" stroke="#d9d2c3"/><text x="${m.l - 4}" y="${y + 3}" font-size="9" text-anchor="end" fill="#4a4640" font-family="Arial">${Math.round(v)}</text>`; }
+  days.forEach((d, i) => { g += `<text x="${m.l + ((W - m.l - m.r) / 6) * i}" y="${H - 6}" font-size="9" text-anchor="middle" fill="#4a4640" font-family="Arial">${d}</text>`; });
+  return g;
+}
+// courbes comparées + semaine précédente
+(function () {
+  const a = [3, 4, 3, 5, 9, 6, 7], b = [2, 2, 5, 3, 4, 5, 3], pa = [2, 3, 3, 4, 5, 4, 4], pb = [3, 2, 3, 2, 3, 3, 2], max = 10;
+  const x = (i) => m.l + ((W - m.l - m.r) / 6) * i, y = (v) => H - m.b - (v / max) * (H - m.t - m.b);
+  const path = (s) => s.map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`).join('');
+  $('lineChart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${axes(max)}
+    <path d="${path(pa)}" fill="none" stroke="var(--s1)" stroke-width="1.4" stroke-dasharray="4 3" opacity=".55"/><path d="${path(pb)}" fill="none" stroke="var(--s2)" stroke-width="1.4" stroke-dasharray="4 3" opacity=".55"/>
+    <path d="${path(a)}" fill="none" stroke="var(--s1)" stroke-width="2.2"/><path d="${path(b)}" fill="none" stroke="var(--s2)" stroke-width="2.2"/></svg>`;
+})();
+// barres empilées
+(function () {
+  const xs = [4, 6, 5, 7, 11, 8, 9], yt = [1, 0, 2, 1, 3, 1, 2], max = 14, bw = 22;
+  const y = (v) => H - m.b - (v / max) * (H - m.t - m.b);
+  let g = axes(max);
+  xs.forEach((v, i) => { const cx = m.l + ((W - m.l - m.r) / 6) * i - bw / 2; g += `<rect x="${cx}" y="${y(v)}" width="${bw}" height="${y(0) - y(v)}" fill="var(--s1)"/><rect x="${cx}" y="${y(v + yt[i])}" width="${bw}" height="${y(v) - y(v + yt[i])}" fill="var(--s3)"/>`; });
+  $('stackChart').innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
+})();
+// anneau
+(function () {
+  const rows = [['en', 71], ['fr', 18], ['ja', 6], ['autres', 5]], tot = 100, R = 60, r = 38, c = 70;
+  let a0 = 0, g = '', leg = '';
+  const pt = (a, rad) => `${(c + rad * Math.sin(a)).toFixed(1)},${(c - rad * Math.cos(a)).toFixed(1)}`;
+  rows.forEach(([l, v], i) => { const da = (v / tot) * Math.PI * 2, a1 = a0 + da, big = da > Math.PI ? 1 : 0; g += `<path d="M${pt(a0, R)}A${R},${R} 0 ${big} 1 ${pt(a1, R)}L${pt(a1, r)}A${r},${r} 0 ${big} 0 ${pt(a0, r)}Z" fill="${C[i]}"/>`; a0 = a1; leg += `<div style="display:flex;justify-content:space-between;font:11px Arial;border-bottom:1px dotted #d9d2c3;padding:2px 0"><span><i style="display:inline-block;width:9px;height:9px;background:${C[i]};margin-right:5px"></i>${l}</span><b>${v} %</b></div>`; });
+  $('donut').innerHTML = `<svg viewBox="0 0 140 140" style="width:78%;display:block;margin:0 auto 6px">${g}<text x="70" y="74" text-anchor="middle" font-size="16" font-weight="700" font-family="Georgia">112</text></svg>${leg}`;
+})();
+// carte de chaleur
+(function () {
+  const wd = ['L', 'M', 'M', 'J', 'V', 'S', 'D'], cw = 9.5, ch = 11;
+  let g = '', seed = 7;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let d = 0; d < 7; d++) { g += `<text x="0" y="${d * (ch + 1) + 9}" font-size="8" fill="#4a4640" font-family="Arial">${wd[d]}</text>`; for (let h = 0; h < 24; h++) { const peak = Math.exp(-Math.pow((h - 20) / 3, 2)) + 0.5 * Math.exp(-Math.pow((h - 12) / 2, 2)), v = Math.max(0, peak * (0.4 + rnd() * 0.7) - 0.08), lv = v > 0.8 ? 5 : v > 0.6 ? 4 : v > 0.4 ? 3 : v > 0.2 ? 2 : v > 0.05 ? 1 : 0, col = ['#e1e0d9', '#c9d8ea', '#9dbbe0', '#5f93cf', '#2a67ad', '#123f7a'][lv]; g += `<rect x="${12 + h * cw}" y="${d * (ch + 1)}" width="${cw - 1}" height="${ch}" rx="1.5" fill="${col}"/>`; } }
+  [0, 6, 12, 18].forEach((h) => { g += `<text x="${12 + h * cw}" y="${7 * (ch + 1) + 9}" font-size="8" fill="#4a4640" font-family="Arial">${h} h</text>`; });
+  $('heat').innerHTML = `<svg viewBox="0 0 244 100" style="width:100%">${g}</svg>`;
+})();
+</script>
+</body>
+</html>
