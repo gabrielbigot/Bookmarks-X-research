@@ -686,7 +686,9 @@ await panel.click('#yt-tr');
 await panel.waitForFunction(() => /transcriptions terminées/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
 assert.match(await panel.locator('#progress').innerText(), /3 récupérées, 3 sans transcription/);
 const nextIds = ytLog.filter((l) => l.body.ep === 'next').map((l) => l.body.videoId);
-for (const id of ['c1', 'l1', 'm1', 'p2']) assert.ok(nextIds.includes(id), 'next pour ' + id + ' (sans transcription via le modèle : jamais conclu sans « next ») : ' + nextIds);
+for (const id of ['c1', 'l1', 'm1']) assert.ok(nextIds.includes(id), 'next pour ' + id + ' (sans transcription via le modèle : jamais conclu sans « next ») : ' + nextIds);
+// ordre : les plus récentes d'abord (w1 est en haut de « À regarder plus tard » et de PL1)
+assert.equal(ytLog.find((l) => l.body.ep === 'next')?.body.videoId, 'w1', 'la vidéo la plus récente est traitée en premier');
 const gtIds = ytLog.filter((l) => l.body.ep === 'get_transcript').map((l) => Buffer.from(l.body.params, 'base64').toString().slice(2, 4));
 assert.ok(gtIds.includes('w1') && gtIds.includes('w3'), 'transcriptions récupérées : ' + gtIds);
 assert.ok(!(nextIds.includes('w1') && nextIds.includes('w3')), 'le jeton appris sur une vidéo sert pour l’autre : une seule requête « next » parmi w1/w3 : ' + nextIds);

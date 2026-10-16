@@ -288,3 +288,17 @@ export function playlistFate(t, pid, alsoWatched = false) {
   if (!others.length && (!(t.watched || []).length || alsoWatched)) return 'delete';
   return 'detach';
 }
+
+// Ordre de récupération des transcriptions : les plus récentes d'abord. Rang d'une vidéo = sa position dans la playlist
+// (0 = tout en haut = ajoutée en dernier) ; une vidéo vue sans playlist prend le rang de sa date de visionnage
+// (0 = vue en dernier). On entrelace ensuite par rang croissant (égalité : vue le plus récemment, puis capturée le plus récemment).
+export function transcriptOrder(videos) {
+  const watchedDesc = videos.filter((v) => !(v.playlists || []).length && v.lastWatched).sort((a, b) => String(b.lastWatched).localeCompare(String(a.lastWatched)));
+  const wRank = new Map(watchedDesc.map((v, i) => [v.id, i]));
+  const rankOf = (v) => {
+    const pos = (v.playlists || []).map((p) => p.pos).filter((n) => Number.isFinite(n));
+    if (pos.length) return Math.min(...pos);
+    return wRank.has(v.id) ? wRank.get(v.id) : Number.MAX_SAFE_INTEGER;
+  };
+  return videos.slice().sort((a, b) => rankOf(a) - rankOf(b) || String(b.lastWatched || '').localeCompare(String(a.lastWatched || '')) || (b.addedAt || 0) - (a.addedAt || 0) || (a.id < b.id ? -1 : 1)).map((v) => v.id);
+}

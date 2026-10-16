@@ -285,3 +285,19 @@ test('suppression d’une playlist : qui est supprimé, qui est seulement détac
   assert.equal(playlistFate(v(['B']), 'A'), 'skip');
   assert.equal(playlistFate({ id: 'yt:y' }, 'A'), 'skip');
 });
+
+import { transcriptOrder } from '../src/lib/youtube.js';
+test('transcriptions : les vidéos les plus récentes d’abord, jusqu’à la plus ancienne', () => {
+  const v = (id, extra = {}) => ({ id, playlists: [], lastWatched: '', addedAt: 0, ...extra });
+  const vids = [
+    v('old', { playlists: [{ pos: 900 }], addedAt: 5 }),                       // en bas d'une grande playlist
+    v('new', { playlists: [{ pos: 0 }], addedAt: 1 }),                         // tout en haut : ajoutée en dernier
+    v('mid', { playlists: [{ pos: 40 }, { pos: 3 }], addedAt: 2 }),            // plusieurs playlists : le meilleur rang compte
+    v('w1', { lastWatched: '2026-10-15' }), v('w2', { lastWatched: '2026-10-01' }), // vues, sans playlist
+    v('none'),                                                                  // ni playlist ni visionnage : en dernier
+    v('p2', { playlists: [{ pos: 1 }] }),
+  ];
+  assert.deepEqual(transcriptOrder(vids), ['w1', 'new', 'w2', 'p2', 'mid', 'old', 'none']);
+  // égalité de rang : la plus récemment vue puis la plus récemment capturée
+  assert.deepEqual(transcriptOrder([v('a', { playlists: [{ pos: 0 }], addedAt: 1 }), v('b', { playlists: [{ pos: 0 }], addedAt: 9 })]), ['b', 'a']);
+});

@@ -3,7 +3,7 @@ const DB_NAME = 'xbs';
 const VERSION = 4;
 
 import { MODELS } from './models.js';
-import { mergeVideo, isVideoItem, videoOff, playlistFate } from './youtube.js';
+import { mergeVideo, isVideoItem, videoOff, playlistFate, transcriptOrder } from './youtube.js';
 
 // Chaque modèle a son propre magasin de vecteurs : changer de modèle n'écrase jamais les vecteurs de l'autre.
 const VSTORES = ['vectors', 'vectors_gemma2'];
@@ -298,10 +298,14 @@ export async function putTranscriptRows(rows) {
 }
 
 // Vidéos à transcrire. scope : 'playlists' (dans au moins une playlist) | 'all' (+ historique).
+// Les plus récentes d'abord (voir transcriptOrder), jusqu'à la plus ancienne.
 export async function pendingTranscriptIds(scope = 'playlists', limit = 400, now = Date.now()) {
-  const ids = await scanTweets((t) => isVideoItem(t) && !t.off && !t.unavailable && (scope === 'all' || (t.playlists || []).length > 0)
-    && (!t.trState || (t.trState === 'none' && (t.trV !== TR_VERSION || now - (t.trAt || 0) > TR_RETRY))));
-  return ids.slice(0, limit);
+  const cand = [];
+  await eachTweet((t) => {
+    if (isVideoItem(t) && !t.off && !t.unavailable && (scope === 'all' || (t.playlists || []).length > 0)
+      && (!t.trState || (t.trState === 'none' && (t.trV !== TR_VERSION || now - (t.trAt || 0) > TR_RETRY)))) cand.push({ id: t.id, playlists: (t.playlists || []).map((p) => ({ pos: p.pos })), lastWatched: t.lastWatched || '', addedAt: t.addedAt || 0 });
+  });
+  return transcriptOrder(cand).slice(0, limit);
 }
 
 // Vecteurs des passages (par modèle) : une ligne par vidéo { id: 'yt:x@modelId', vid, model, k, vecs (k × dim, concaténés) }.
