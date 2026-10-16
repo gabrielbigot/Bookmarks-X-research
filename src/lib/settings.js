@@ -7,6 +7,7 @@ export const DEFAULTS = {
   imageSearch: false, // recherche d'images (CLIP, expérimental)
   embedModel: 'gemma1', // 'gemma1' (300 M, texte) | 'gemma2' (multimodal)
   decision: { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: '', priceInPerM: 0.042 }, // priceInPerM : $ par million de tokens d'entrée (estimation du coût) // modèle de décision (Jev)
+  journal: { writerModel: '', assistModel: '', budget: 1, priceInPerM: 0.3, priceOutPerM: 1.2, sections: null, readLinks: true, leads: 4, articles: 14, briefs: 30 }, // journal hebdomadaire : modèles (vide = modèle de l'IA), plafond en $, prix indicatifs par million de tokens, rubriques = détecteurs (null = tous)
   autoJev: { on: false, dailyCap: 0.1 }, // jugement automatique des nouveaux éléments par Jev (désactivé ; plafond en $ par jour)
   decisionIntent: false, // tri / période / type compris par le modèle de décision
   decisionRerank: false, // reclassement par le modèle de décision
@@ -42,12 +43,12 @@ export async function getSettings() {
     settings = { ...settings, indexMode: settings.indexMode === 'manual' ? 'soft' : settings.indexMode, settingsVersion: 4 };
     await chrome.storage.local.set({ settings });
   }
-  return { ...DEFAULTS, ...settings, llm: { ...DEFAULTS.llm, ...settings?.llm }, decision: { ...DEFAULTS.decision, ...settings?.decision }, autoJev: { ...DEFAULTS.autoJev, ...settings?.autoJev } };
+  return { ...DEFAULTS, ...settings, llm: { ...DEFAULTS.llm, ...settings?.llm }, decision: { ...DEFAULTS.decision, ...settings?.decision }, autoJev: { ...DEFAULTS.autoJev, ...settings?.autoJev }, journal: { ...DEFAULTS.journal, ...settings?.journal } };
 }
 
 export async function setSettings(patch) {
   const cur = await getSettings();
-  const next = { ...cur, ...patch, llm: { ...cur.llm, ...patch.llm }, decision: { ...cur.decision, ...patch.decision }, autoJev: { ...cur.autoJev, ...patch.autoJev } };
+  const next = { ...cur, ...patch, llm: { ...cur.llm, ...patch.llm }, decision: { ...cur.decision, ...patch.decision }, autoJev: { ...cur.autoJev, ...patch.autoJev }, journal: { ...cur.journal, ...patch.journal } };
   await chrome.storage.local.set({ settings: next });
   return next;
 }

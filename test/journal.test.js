@@ -1,0 +1,89 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { weekWindow, buildSubjects, assignTiers, weekStats, extractPageText, evidenceFor, parseArticle, parseBriefs, parseEditorial, cleanCitations, fallbackArticle, estimateCall, costOf, makeBibliography, citeHtml, sourcesLine, imagesOf, externalLinks } from '../src/lib/journal.js';
+import { makeSnowflake, savedInfo } from '../src/lib/time.js';
+
+const NOW = new Date(2026, 9, 16, 15).getTime();
+const DAY = 86_400_000;
+const tw = (id, text, daysAgo, extra = {}) => ({ id, name: 'N' + id, handle: extra.handle || 'h' + id, text, lang: 'en', createdAt: new Date(NOW - (daysAgo + 1) * DAY).toISOString(), sortIndex: makeSnowflake(NOW - daysAgo * DAY), links: extra.links || [], media: extra.media || [], stats: { likes: extra.likes || 0 }, ...extra });
+
+test('fenêtre de la semaine : libellé, numéro, période précédente', () => {
+  const w = weekWindow(NOW, 7);
+  assert.equal(w.from, '2026-10-10'); assert.equal(w.to, '2026-10-16');
+  assert.equal(w.label, 'du 10 au 16 octobre 2026');
+  assert.equal(w.week, 42);
+  assert.equal(w.prevFrom, '2026-10-03'); assert.equal(w.prevTo, '2026-10-09');
+  assert.match(weekWindow(Date.UTC(2026, 10, 3, 12), 7).label, /^du 28 octobre au 3 novembre 2026$/);
+});
+
+test('sujets : regroupement, source principale en tête, rubriques sans doublon, paliers', () => {
+  const items = [
+    tw('1', 'we announced Jev 1.14 today', 1, { handle: 'typesafeai', likes: 100, media: [{ type: 'photo', url: 'https://img/1.jpg' }], links: ['https://typesafe.example/blog/jev-114', 'https://x.com/a/status/1'] }),
+    tw('2', 'the @typesafeai team shipped Jev 1.14 with image support', 1, { handle: 'dotpem', likes: 900 }),
+    tw('3', 'a robot arm demo', 2, { likes: 5 }),
+    tw('4', 'old tweet', 20),
+    tw('5', 'cooking pasta', 1),
+  ];
+  const sv = savedInfo(items, NOW);
+  const o = (v) => Float32Array.from(v);
+  const vecs = new Map([['1', o([1, 0.45, 0])], ['2', o([1, 0, 0])], ['3', o([0, 0, 1])], ['4', o([0, 1, 0])]]);
+  const win = weekWindow(NOW, 7);
+  const sections = [{ id: 'ia', name: 'Modèles d’IA', set: new Set(['1', '2', '4']) }, { id: 'robot', name: 'Robotique', set: new Set(['3', '1']) }];
+  const subs = buildSubjects(items, { sv, sections, vecs, win, sim: 0.95, days: 7 });
+  assert.equal(subs.length, 2, 'le tweet 1 n’apparaît que dans la première rubrique ; le tweet hors période est ignoré');
+  const ia = subs.find((s) => s.section === 'ia');
+  assert.equal(ia.members.length, 2);
+  assert.equal(ia.rep.id, '1', 'l’annonce de la source (nommée par l’autre) passe devant le commentaire plus liké');
+  assert.deepEqual(ia.images.map((i) => i.url), ['https://img/1.jpg']);
+  assert.deepEqual(ia.links, ['https://typesafe.example/blog/jev-114']);
+  const tiers = assignTiers(subs, { leads: 1, articles: 1, briefs: 5 });
+  assert.equal(tiers.leads.length, 1); assert.equal(tiers.articles.length, 1); assert.equal(tiers.briefs.length, 0);
+  assert.equal(tiers.leads[0].section, 'ia');
+  const st = weekStats(items, { sv, sections, win });
+  assert.equal(st.total, 4 - 1 + 0 === 3 ? 3 : st.total);
+  assert.equal(st.dayKeys.length, 7);
+  assert.ok(st.topAccounts.length > 0);
+  assert.deepEqual(imagesOf({ media: [{ type: 'video', url: 'p.jpg', video: 'v.mp4' }] }).map((i) => i.video), [true]);
+  assert.deepEqual(externalLinks({ links: ['https://t.co/x', 'https://blog.io/p/?a=1'], quoted: { links: ['https://x.com/q'] } }), ['https://blog.io/p/?a=1']);
+});
+
+test('page liée : texte principal, titre, image, coupe', () => {
+  const html = '<html><head><title>Jev 1.14 — notes</title><meta property="og:image" content="https://i/x.png"></head><body><nav><p>Menu menu menu menu menu menu menu menu menu menu</p></nav><article><h2>Ce qui change dans cette version du modèle</h2><p>Le modèle accepte maintenant des images en entrée, en plus du texte et de la structure.</p><p>court</p><script>var x=1</script><p>Un contexte plus long est disponible pour les requêtes les plus volumineuses des utilisateurs.</p></article></body></html>';
+  const p = extractPageText(html, { max: 120 });
+  assert.equal(p.title, 'Jev 1.14 — notes'); assert.equal(p.image, 'https://i/x.png');
+  assert.ok(p.text.includes('images en entrée') && !p.text.includes('Menu') && !p.text.includes('var x'));
+  assert.equal(p.text.length <= 120, true); assert.equal(p.cut, true);
+});
+
+test('dossier de preuves, citations validées, sources numérotées', () => {
+  const rep = tw('1', 'we announced Jev 1.14 today with image support', 1, { handle: 'typesafeai' });
+  const other = tw('2', 'nice release', 1, { handle: 'dotpem', quoted: { handle: 'typesafeai', text: 'orig' } });
+  const subject = { rep, members: [rep, other], links: ['https://blog.io/p', 'https://none.io/x'], sectionName: 'IA', firstDay: '2026-10-15', lastDay: '2026-10-15' };
+  const pages = new Map([['https://blog.io/p', { title: 'Le billet', text: 'Le modèle lit les images.' }]]);
+  const pack = evidenceFor(subject, pages);
+  assert.deepEqual(pack.sources.map((s) => s.id), ['T1', 'T2', 'L1']);
+  assert.match(pack.text, /\[T1\] @typesafeai.*COMPTE SOURCE PRINCIPALE/);
+  assert.match(pack.text, /\[L1\] Page liée \(blog\.io\)/);
+  assert.equal(cleanCitations('Phrase [T1,T9] et [L7] fin [L1].', new Set(['T1', 'L1'])), 'Phrase [T1] et fin [L1].');
+  const a = parseArticle('```json\n{"title":"Jev 1.14 lit les images","dek":"Le modèle évolue [T1]","paragraphs":["TypeSafe annonce la version 1.14 avec la prise en charge des images [T1,L1].","Un second paragraphe suffisamment long pour être gardé [T2] [T9]."],"pull_quote":"we announced Jev 1.14 today","pull_source":"T1","key_points":["Images [L1]"]}\n```', pack);
+  assert.equal(a.paragraphs.length, 2); assert.ok(!a.paragraphs[1].includes('T9')); assert.equal(a.pullSource, 'T1');
+  assert.throws(() => parseArticle('{"title":"x","paragraphs":[]}', pack));
+  const bib = makeBibliography();
+  assert.equal(citeHtml('Fait [T1,L1] et [T2].', pack, bib), 'Fait <sup class="c">1,2</sup> et <sup class="c">3</sup>.');
+  assert.match(sourcesLine({ dek: '', paragraphs: ['a [T1]'], points: [] }, pack, bib), /1\. @typesafeai/);
+  assert.equal(bib.list.length, 3);
+  const fb = fallbackArticle(subject, pack);
+  assert.ok(fb.fallback && fb.paragraphs[0].includes('@typesafeai') && fb.paragraphs[0].includes('[T1]'));
+  const bs = parseBriefs('{"briefs":[{"id":"a","title":"T","text":"Brève [T1] [T5]"},{"id":"zzz","text":"inconnue"}]}', new Map([['a', new Set(['T1'])]]));
+  assert.equal(bs.size, 1); assert.equal(bs.get('a').text, 'Brève [T1]');
+  const ed = parseEditorial('{"title":"Éd","paragraphs":["a","b"],"ideas":["1","2","3","4"],"week":[{"day":"2026-10-14","text":"x"},{"day":"mauvais","text":"y"}],"glossary":[{"term":"VLM","def":"modèle vision-langage"}]}');
+  assert.equal(ed.ideas.length, 3); assert.equal(ed.week.length, 1); assert.equal(ed.glossary[0].term, 'VLM');
+});
+
+test('coûts : estimation et coût réel', () => {
+  const prices = { priceInPerM: 1, priceOutPerM: 5 };
+  const e = estimateCall(7000, 1000, prices);
+  assert.equal(e.tin, 2300); assert.ok(Math.abs(e.dollars - (2300 / 1e6 + 5000 / 1e6)) < 1e-9);
+  assert.equal(costOf({ cost: 0.0123 }, prices), 0.0123);
+  assert.ok(Math.abs(costOf({ promptTokens: 1e6, completionTokens: 2e5 }, prices) - 2) < 1e-9);
+});

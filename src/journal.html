@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Journal</title>
+  <link rel="stylesheet" href="journal.css">
+</head>
+<body>
+  <header class="jbar noprint">
+    <a class="back" href="panel.html" title="Retour à la recherche">← Recherche</a>
+    <h1>Journal de la semaine</h1>
+    <span class="sp"></span>
+    <button id="j-print" type="button" hidden>Enregistrer en PDF</button>
+  </header>
+  <main>
+    <section class="card noprint" id="ctl">
+      <h2>Générer l’édition</h2>
+      <p class="hint">Le journal reprend ce que tu as gardé ces 7 derniers jours, regroupé par sujet, et le fait rédiger par ton modèle d’IA à partir des tweets et des pages liées. Chaque article cite ses sources. Un plafond de dépense arrête la génération avant de le dépasser.</p>
+      <p id="j-status" class="warn" hidden></p>
+      <div class="grid">
+        <label>Modèle de rédaction <small>grands sujets</small><input id="j-writer" placeholder="vide = modèle de l’IA (⚙)"></label>
+        <label>Modèle assistant <small>articles, brèves, éditorial</small><input id="j-assist" placeholder="vide = modèle de l’IA (⚙)"></label>
+        <label>Prix entrée <small>$ par million de tokens</small><input id="j-pin" type="number" min="0" step="0.01"></label>
+        <label>Prix sortie <small>$ par million de tokens</small><input id="j-pout" type="number" min="0" step="0.01"></label>
+        <label>Plafond par édition <small>$</small><input id="j-budget" type="number" min="0" step="0.05"></label>
+        <label>Grands sujets<input id="j-leads" type="number" min="0" max="8"></label>
+        <label>Articles<input id="j-articles" type="number" min="0" max="40"></label>
+        <label>Brèves<input id="j-briefs" type="number" min="0" max="80"></label>
+      </div>
+      <label class="chk"><input id="j-links" type="checkbox"> Lire les pages liées dans les tweets <small>(demande une autorisation d’accès aux sites, une seule fois)</small></label>
+      <div class="secs"><span class="lab">Rubriques <small>(un détecteur par rubrique ; un tweet n’apparaît que dans la première rubrique cochée ; aucun coché = toute la semaine)</small></span><div id="j-sections"></div></div>
+      <div class="btns"><button id="j-est" type="button">Estimer le coût</button><button id="j-go" type="button" class="primary">Générer le journal</button><button id="j-stop" type="button" hidden>Arrêter</button></div>
+      <progress id="j-prog" max="100" value="0" hidden></progress>
+      <pre id="j-log" class="log" hidden></pre>
+    </section>
+    <section class="card noprint" id="eds"><h2>Éditions</h2><div id="j-list"><p class="hint">Aucune édition pour l’instant.</p></div></section>
+    <div id="paper"></div>
+  </main>
+  <script type="module" src="journal.js"></script>
+</body>
+</html>

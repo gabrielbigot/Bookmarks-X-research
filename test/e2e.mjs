@@ -106,6 +106,13 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       let out = 'ok';
       if (sys.includes('transformes une requête')) out = JSON.stringify({ topic: 'kubernetes', authors: ['devops'], sort: 'oldest', since: null, until: null, has: [] });
       else if (sys.includes('juges la pertinence')) out = JSON.stringify({ scores: [0, 9, 1] });
+      else if (sys.includes('journaliste pour un journal hebdomadaire') && sys.includes('Pour chaque entrée')) {
+        const ids = [...usr.matchAll(/ENTRÉE (B\d+) /g)].map((m) => m[1]);
+        out = JSON.stringify({ briefs: ids.map((id) => ({ id, title: 'Brève ' + id, text: 'Une brève rédigée à partir du tweet source, avec sa citation [T1].' })) });
+      } else if (sys.includes('journaliste pour un journal hebdomadaire')) {
+        const para = (n) => 'Paragraphe ' + n + ' : ' + 'le sujet est décrit à partir des tweets du dossier, avec ses chiffres et son contexte, pour que le lecteur comprenne ce qui change cette semaine. '.repeat(3) + '[T1]';
+        out = JSON.stringify({ title: 'Un grand titre informatif pour le sujet de la semaine', dek: 'Chapeau du sujet [T1]', paragraphs: [1, 2, 3, 4, 5, 6].map(para), pull_quote: '', pull_source: '', key_points: ['Premier point [T1]', 'Deuxième point', 'Troisième point'] });
+      } else if (sys.includes('rédacteur en chef')) out = JSON.stringify({ title: 'Éditorial du test', paragraphs: ['Premier paragraphe de l’éditorial.', 'Deuxième paragraphe.'], ideas: ['Idée un', 'Idée deux', 'Idée trois'], week: [{ day: new Date().toISOString().slice(0, 10), text: 'Un fait du jour.' }], glossary: [{ term: 'VLM', def: 'Modèle qui comprend images et texte.' }] });
       else if (sys.includes('rédiges un résumé')) out = '**Infra**\nDu contenu sur le scheduler [1].';
       else if (usr.includes('Question :')) out = 'Réponse mock : le scheduler de tokio a été amélioré [1].';
       res.writeHead(200, { ...cors, 'content-type': 'application/json' });
@@ -1067,6 +1074,27 @@ try {
   await waitFor(async () => (await panel.locator('.dups:not([hidden]) .dup').count()) > 0, 'les similaires se déplient', 6000);
 } catch (e) { console.log('DUPS:', await panel.locator('.dupbtn').count(), await panel.locator('.dups').count(), await panel.locator('#mode').innerText()); throw e; }
 await panel.fill('#q', '');
+
+// ---- journal : estimation puis génération avec le faux modèle, pages A4 sans débordement
+const journal = await ctx.newPage();
+await journal.goto(`chrome-extension://${extId}/journal.html`);
+await journal.waitForSelector('#j-go');
+await journal.evaluate(() => { document.getElementById('j-links').checked = false; document.getElementById('j-links').dispatchEvent(new Event('change')); });
+await journal.fill('#j-budget', '5');
+await journal.dispatchEvent('#j-budget', 'change');
+await journal.click('#j-est');
+await waitFor(async () => /Coût estimé :/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'estimation du coût du journal', 60000);
+await journal.click('#j-go');
+await waitFor(async () => /Édition terminée/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /⚠/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'fin de la génération du journal', 120000);
+const jlog = await journal.locator('#j-log').innerText();
+assert.match(jlog, /Édition terminée : (\d+) pages/, jlog);
+const pagesN = await journal.locator('#paper .page').count();
+assert.ok(pagesN >= 4, 'au moins 4 pages : ' + pagesN);
+assert.match(await journal.locator('#paper .page').first().innerText(), /La Gazette IA & Robotique/);
+const bad = await journal.evaluate(() => [...document.querySelectorAll('#paper .page .body.flow')].filter((b) => b.scrollWidth > b.clientWidth + 2).length);
+assert.ok(bad <= 2, 'pages qui débordent : ' + bad);
+for (let i = 0; i < Math.min(pagesN, 4); i++) await journal.locator('#paper .page').nth(i).screenshot({ path: `${process.env.TMPDIR || '/tmp'}/journal-e2e-p${i + 1}.png` });
+assert.ok(await journal.locator('#j-list .ed').count() >= 1, 'l’édition est enregistrée');
 
 console.log('E2E OK');
 await ctx.close();

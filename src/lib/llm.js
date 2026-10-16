@@ -2,9 +2,17 @@
 // Rien n'est envoyé tant que l'utilisateur n'a pas configuré une URL + un modèle.
 import { decodeEntities } from './text.js';
 
-export async function chat(llm, messages, { json = false, signal } = {}) {
+export async function chat(llm, messages, opts = {}) {
+  return (await chatFull(llm, messages, opts)).text;
+}
+
+// Comme chat(), mais retourne aussi l'usage (tokens, et le coût réel si le fournisseur le donne : OpenRouter).
+// opts.model remplace le modèle configuré ; opts.maxTokens borne la sortie ; opts.temperature.
+export async function chatFull(llm, messages, { json = false, signal, model, maxTokens, temperature = 0.2 } = {}) {
   const url = llm.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-  const body = { model: llm.model, messages, temperature: 0.2, stream: false };
+  const body = { model: model || llm.model, messages, temperature, stream: false };
+  if (maxTokens) body.max_tokens = maxTokens;
+  if (/openrouter\.ai/i.test(llm.baseUrl)) body.usage = { include: true }; // coût réel dans la réponse
   if (json) body.response_format = { type: 'json_object' };
   const res = await fetch(url, {
     method: 'POST',
@@ -19,7 +27,8 @@ export async function chat(llm, messages, { json = false, signal } = {}) {
   const data = await res.json();
   const out = data?.choices?.[0]?.message?.content;
   if (typeof out !== 'string') throw new Error('API IA : réponse inattendue');
-  return out;
+  const u = data.usage || {};
+  return { text: out, usage: { promptTokens: Number(u.prompt_tokens) || 0, completionTokens: Number(u.completion_tokens) || 0, cost: typeof u.cost === 'number' ? u.cost : null } };
 }
 
 export function parseJsonLoose(text) {
