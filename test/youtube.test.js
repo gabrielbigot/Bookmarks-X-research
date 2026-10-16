@@ -348,3 +348,17 @@ test('diagnostic : la forme d’une réponse ne contient aucun texte, seulement 
   assert.ok(!/responseContext/.test(shape));
   assert.ok(jsonShape({ a: 'x'.repeat(10000) }, { max: 100 }).length <= 101);
 });
+
+import { allContinuations } from '../src/lib/youtube.js';
+test('pagination : le jeton de la liste de vidéos prime sur un autre jeton de la page', () => {
+  const list = { playlistVideoListRenderer: { contents: [pvr('aaaaaaaaaaa', 'Une'), contItem('TOKEN_THE_REAL_LIST_AAAAAAAAAAAAAAAA')] } };
+  const decoyAfter = { secondaryContents: { sidebar: [contItem('TOKEN_DECOY_AFTER_THE_LIST_BBBBBBBBBB')] } };
+  const decoyBefore = { header: { menu: [contItem('TOKEN_DECOY_BEFORE_THE_LIST_CCCCCCCCC')] } };
+  assert.equal(parseYoutube({ a: decoyBefore, b: { contents: list }, c: decoyAfter }).continuation, 'TOKEN_THE_REAL_LIST_AAAAAAAAAAAAAAAA');
+  // page de suite : les éléments ajoutés finissent par le jeton suivant
+  const cont = { onResponseReceivedActions: [{ appendContinuationItemsAction: { continuationItems: [pvr('bbbbbbbbbbb', 'Deux'), contItem('TOKEN_NEXT_PAGE_DDDDDDDDDDDDDDDDDDDDD')] } }], other: contItem('TOKEN_OTHER_EEEEEEEEEEEEEEEEEEEEEEE') };
+  assert.equal(parseYoutube(cont).continuation, 'TOKEN_NEXT_PAGE_DDDDDDDDDDDDDDDDDDDDD');
+  // sans liste reconnue : comportement d'avant (dernier jeton rencontré)
+  assert.equal(parseYoutube({ a: [pvr('ccccccccccc', 'Trois'), contItem('TOKEN_ONLY_ONE_FFFFFFFFFFFFFFFFFFFFFF')] }).continuation, 'TOKEN_ONLY_ONE_FFFFFFFFFFFFFFFFFFFFFF');
+  assert.deepEqual(allContinuations({ a: decoyBefore, b: { contents: list }, c: decoyAfter }), ['TOKEN_DECOY_BEFORE_THE_LIST_CCCCCCCCC', 'TOKEN_THE_REAL_LIST_AAAAAAAAAAAAAAAA', 'TOKEN_DECOY_AFTER_THE_LIST_BBBBBBBBBB']);
+});

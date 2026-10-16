@@ -130,7 +130,7 @@ const countOf = (s) => { const m = /(\d[\d\s.,  ]*)/.exec(s || ''); return m 
 // opts.history : lit aussi les videoRenderer / shorts, en retenant l'en-tête de jour de chaque section (`label`).
 export function parseYoutube(json, opts = {}) {
   const videos = [], playlists = [], seenV = new Set(), seenP = new Set();
-  let continuation = null, contViaRenderer = null, header = null, unparsed = 0;
+  let continuation = null, contViaRenderer = null, primaryCont = null, header = null, unparsed = 0;
   const visitor = (label) => (n) => {
     if (opts.history && n.itemSectionRenderer) { // une section = un jour ; on lit ses vidéos avec l'étiquette du jour
       const h = n.itemSectionRenderer.header;
@@ -147,6 +147,13 @@ export function parseYoutube(json, opts = {}) {
       const v = fromShortsLockup(n.shortsLockupViewModel);
       if (v) { const k = v.videoId + '|' + (label || ''); if (!seenV.has(k)) { seenV.add(k); videos.push({ ...v, label: label || '' }); } } else unparsed++;
       return true;
+    }
+    // le jeton de la LISTE de vidéos elle-même (dernier élément de son tableau) prime sur tout autre jeton de la page (menus, recommandations…)
+    const listItems = n.playlistVideoListRenderer?.contents || n.appendContinuationItemsAction?.continuationItems || n.playlistVideoListContinuation?.contents;
+    if (Array.isArray(listItems) && listItems.some((x) => x?.playlistVideoRenderer || x?.lockupViewModel)) {
+      const lastC = [...listItems].reverse().find((x) => x?.continuationItemRenderer);
+      const t = lastC && (lastC.continuationItemRenderer.continuationEndpoint?.continuationCommand?.token || deepFindString(lastC.continuationItemRenderer, 'token'));
+      if (t) primaryCont = t;
     }
     if (n.playlistVideoRenderer) {
       const v = fromPlaylistVideoRenderer(n.playlistVideoRenderer);
@@ -198,7 +205,7 @@ export function parseYoutube(json, opts = {}) {
     return false;
   };
   walk(json, visitor(null));
-  continuation = contViaRenderer;
+  continuation = primaryCont || contViaRenderer;
   return { videos, playlists, continuation, header, unparsed };
 }
 
@@ -360,4 +367,18 @@ export function jsonShape(json, { depth = 9, max = 6000 } = {}) {
   };
   const out = one(json, '', depth);
   return out.length > max ? out.slice(0, max) + '…' : out;
+}
+
+// Tous les jetons de page suivante d'une réponse, dans l'ordre du document (pour essayer les autres si le premier ne donne rien).
+export function allContinuations(json) {
+  const out = [];
+  const walkAll = (n, d = 0) => {
+    if (!n || typeof n !== 'object' || d > 40) return;
+    if (Array.isArray(n)) { for (const x of n) walkAll(x, d + 1); return; }
+    const t = n.continuationCommand?.token || n.nextContinuationData?.continuation || n.reloadContinuationData?.continuation;
+    if (typeof t === 'string' && t.length > 20 && !out.includes(t)) out.push(t);
+    for (const v of Object.values(n)) walkAll(v, d + 1);
+  };
+  walkAll(json);
+  return out;
 }

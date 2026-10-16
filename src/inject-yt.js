@@ -1,6 +1,6 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
-import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findAnyContinuation, jsonShape } from './lib/youtube.js';
+import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findAnyContinuation, allContinuations, jsonShape } from './lib/youtube.js';
 import { findTranscriptParams, learnTemplate, deriveParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
@@ -146,13 +146,21 @@ async function browseRetry(body) {
 async function syncPlaylist(pid, title, label, incremental = false, expected = 0) {
   let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false, stoppedEarly = false;
   const incState = {};
-  let altTokens = 0, lastJson = null;
+  let altTokens = 0, lastJson = null, lastPageJson = null, altQueue = [], altTries = 0;
   titles.set(pid, title || titles.get(pid) || '');
   while (body && !stopFlag && pages < 400) {
     const { json } = await browseRetry(body);
     lastJson = json;
     const r = handle(json, body);
+    // réponse vide à une requête de page suivante alors qu'il manque des vidéos : on essaie les AUTRES jetons de la page précédente
+    if (r && !r.videos.length && !r.continuation && altQueue.length && expected > count + 5 && altTries < 4 && !stopFlag) {
+      altTries++;
+      body = { continuation: altQueue.shift() };
+      await sleep(800);
+      continue;
+    }
     pages++;
+    if (r?.videos.length) { lastPageJson = json; altQueue = allContinuations(json).filter((t) => t !== r.continuation); if (pid) for (const t of altQueue) contMap.set(t, pid); }
     if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
     // la page n'indique pas de suite alors que la playlist en annonce nettement plus : on cherche un jeton ailleurs dans la réponse
     if (r && !r.continuation && r.videos.length && expected > count + 5 && !stopFlag) {
@@ -168,7 +176,7 @@ async function syncPlaylist(pid, title, label, incremental = false, expected = 0
   // « complète » seulement si on a bien lu quelque chose (une page d'erreur muette ne doit rien effacer)
   // « courte » : YouTube a cessé de donner des pages alors que la playlist annonce nettement plus de vidéos
   const short = !stopFlag && !body && !stoppedEarly && expected > 0 && count < expected * 0.9 && expected - count > 5;
-  return { count, short, altTokens, shape: short && lastJson ? jsonShape(lastJson) : '', pages, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
+  return { count, short, altTokens, shape: short ? JSON.stringify({ derniere: lastJson ? jsonShape(lastJson, { max: 800 }) : '', premiere: lastPageJson ? jsonShape(lastPageJson, { max: 5000 }) : '', essais: altTries }) : '', pages, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
