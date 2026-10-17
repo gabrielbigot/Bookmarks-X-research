@@ -392,3 +392,24 @@ test('tri par date : publication et ajout, vidéos et tweets mélangés', () => 
   assert.deepEqual(ids('addednew'), ['yt:c', 'yt:a', 'yt:b', 't1']);
   assert.deepEqual(ids('addedold'), ['t1', 'yt:b', 'yt:a', 'yt:c']);
 });
+
+import { findSortBody } from '../src/lib/youtube.js';
+test('menu de tri : jeton « Date d\'ajout (plus récentes) »', () => {
+  const menu = (items) => ({ header: { playlistHeaderRenderer: {} }, sortFilterSubMenuRenderer: { subMenuItems: items } });
+  const item = (title, token) => ({ title, serviceEndpoint: { continuationCommand: { token } } });
+  const j = menu([item('Manuel', 'M'.repeat(30)), item('Date d’ajout (plus récentes)', 'A'.repeat(30)), item('Date d’ajout (plus anciennes)', 'B'.repeat(30))]);
+  assert.deepEqual(findSortBody(j, 'PL1'), { continuation: 'A'.repeat(30) });
+  const en = menu([item('Date added (newest)', 'N'.repeat(30))]);
+  assert.deepEqual(findSortBody(en, 'PL1'), { continuation: 'N'.repeat(30) });
+  const old = menu([{ title: 'Date d\'ajout (plus récentes)', navigationEndpoint: { browseEndpoint: { browseId: 'VLPL1', params: 'sp=xyz' } } }]);
+  assert.deepEqual(findSortBody(old, 'PL1'), { browseId: 'VLPL1', params: 'sp=xyz' });
+  assert.equal(findSortBody(menu([item('Manuel', 'M'.repeat(30))]), 'PL1'), null);
+  assert.equal(findSortBody({}, 'PL1'), null);
+});
+test('ordre d\'ajout : une vidéo lue dans la liste triée garde sa date estimée', () => {
+  const a = toItem({ videoId: 'a', title: 'A', addAt: 1000 }, { id: 'P' }, 5);
+  assert.equal(a.addedAt, 1000);
+  const old = toItem({ videoId: 'a', title: 'A' }, { id: 'P' }, 7);
+  assert.equal(mergeVideo(old, a).addedAt, 1000);
+  assert.equal(mergeVideo(a, toItem({ videoId: 'a', title: 'A' }, { id: 'P' }, 9)).addedAt, 1000);
+});

@@ -1,6 +1,6 @@
 // Monde « MAIN » de youtube.com : capture les réponses « youtubei/v1/browse » des playlists (passif) et sait remonter
 // toute une playlist (WL = « À regarder plus tard », LL = « J'aime », et celles de l'utilisateur) par pagination.
-import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findAnyContinuation, allContinuations, jsonShape } from './lib/youtube.js';
+import { parseYoutube, parseHistoryHeader, orderLists, incrementalStop, findSortBody, findAnyContinuation, allContinuations, jsonShape } from './lib/youtube.js';
 import { findTranscriptParams, learnTemplate, deriveParams, parseTranscript, captionTracks, pickTrack, parseJson3, parseTimedTextXml, chunkSegments } from './lib/transcript.js';
 
 const TAG = 'xbs-yt';
@@ -21,7 +21,9 @@ const safeJson = (s) => { try { return JSON.parse(s); } catch { return null; } }
 const listParam = () => new URLSearchParams(location.search).get('list');
 
 // Interprète une réponse. `body` = corps de la requête (browseId / continuation) ou null.
-function handle(json, body) {
+// `ord` = { start, base } : la liste lue est triée par date d'ajout (récent d'abord) ; chaque vidéo reçoit une date d'ajout
+// estimée « début de la lecture − rang » (le rang suffit à ordonner, la date absolue est approximative).
+function handle(json, body, ord) {
   let r;
   const hist = body?.browseId === 'FEhistory' || (body?.continuation && histConts.has(body.continuation)) || (!body && location.pathname === '/feed/history');
   if (hist) return handleHistory(json);
@@ -40,7 +42,7 @@ function handle(json, body) {
   }
   // On ne garde les vidéos QUE dans le contexte d'une playlist connue (jamais les recommandations de l'accueil).
   const vnonce = ++nonceN;
-  if (r.videos.length && pid) post('videos', { videos: r.videos, playlist: { id: pid, title: titles.get(pid) || '' }, runId: currentRun, nonce: vnonce });
+  if (r.videos.length && pid) post('videos', { videos: ord ? r.videos.map((v, i) => ({ ...v, addAt: ord.start - (ord.base + i) })) : r.videos, playlist: { id: pid, title: titles.get(pid) || '' }, runId: currentRun, nonce: vnonce });
   if (r.unparsed && !r.videos.length) post('warn', { unparsed: r.unparsed });
   return { ...r, pid, nonce: vnonce };
 }
@@ -143,40 +145,66 @@ async function browseRetry(body) {
     }
   }
 }
-async function syncPlaylist(pid, title, label, incremental = false, expected = 0) {
+async function syncPlaylist(pid, title, label, incremental = false, expected = 0, ordered = false) {
+  const ord = { start: Date.now(), base: 0 }; // ordered : WL et J'aime sont déjà listées par date d'ajout décroissante
+  let firstJson = null, sortTried = ordered, sorted = ordered, firstCont = null, sortedBy = ordered ? 'défaut' : '';
   let body = { browseId: 'VL' + pid }, count = 0, pages = 0, gotAny = false, stoppedEarly = false;
   const incState = {};
   let altTokens = 0, lastJson = null, lastPageJson = null, altQueue = [], altTries = 0;
   titles.set(pid, title || titles.get(pid) || '');
-  while (body && !stopFlag && pages < 400) {
-    const { json } = await browseRetry(body);
-    lastJson = json;
-    const r = handle(json, body);
-    // réponse vide à une requête de page suivante alors qu'il manque des vidéos : on essaie les AUTRES jetons de la page précédente
-    if (r && !r.videos.length && !r.continuation && altQueue.length && expected > count + 5 && altTries < 4 && !stopFlag) {
-      altTries++;
-      body = { continuation: altQueue.shift() };
-      await sleep(800);
-      continue;
+  for (let phase = 0; phase < 2; phase++) {
+    while (body && !stopFlag && pages < 400) {
+      let { json } = await browseRetry(body);
+      lastJson = json;
+      if (!firstJson) firstJson = json;
+      let r = handle(json, body, sorted ? ord : undefined);
+      // première page d'une playlist perso (tri « Manuel » par défaut) : on la relit triée par « Date d'ajout (plus récentes) »
+      if (!sortTried && pages === 0 && r?.videos.length && !stopFlag) {
+        sortTried = true;
+        const sb = findSortBody(json, pid);
+        if (sb) {
+          try {
+            if (sb.continuation && pid) contMap.set(sb.continuation, pid);
+            const res = await browseRetry(sb);
+            const r2 = handle(res.json, sb, { start: ord.start, base: 0 });
+            if (r2?.videos.length) { firstCont = r.continuation; json = res.json; r = r2; sorted = true; sortedBy = 'date d’ajout'; ord.base = 0; count = 0; lastJson = res.json; }
+            else sortedBy = 'échec : liste vide';
+          } catch (e) { if (e instanceof HttpError && e.status === 429) throw e; sortedBy = 'échec : ' + e.message; }
+        } else sortedBy = 'menu de tri introuvable';
+      }
+      if (sorted && r?.videos.length) ord.base += r.videos.length;
+      // réponse vide à une requête de page suivante alors qu'il manque des vidéos : on essaie les AUTRES jetons de la page précédente
+      if (r && !r.videos.length && !r.continuation && altQueue.length && expected > count + 5 && altTries < 4 && !stopFlag) {
+        altTries++;
+        body = { continuation: altQueue.shift() };
+        await sleep(800);
+        continue;
+      }
+      pages++;
+      if (r?.videos.length) { lastPageJson = json; altQueue = allContinuations(json).filter((t) => t !== r.continuation); if (pid) for (const t of altQueue) contMap.set(t, pid); }
+      if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
+      // la page n'indique pas de suite alors que la playlist en annonce nettement plus : on cherche un jeton ailleurs dans la réponse
+      if (r && !r.continuation && r.videos.length && expected > count + 5 && !stopFlag) {
+        const alt = findAnyContinuation(json);
+        if (alt) { r.continuation = alt; if (pid) contMap.set(alt, pid); altTokens++; }
+      }
+      progress('running', { playlist: label, pages, count });
+      // mise à jour : « À regarder plus tard » et « J'aime » listent le plus récent en premier -> on s'arrête dès qu'une page n'apporte rien de nouveau
+      if (incremental && r?.videos.length && incrementalStop(await ackP(r.nonce), incState)) { stoppedEarly = true; body = null; break; }
+      body = r?.continuation ? { continuation: r.continuation } : null;
+      if (body) await sleep(1000 + Math.random() * 1500); // rythme « humain »
     }
-    pages++;
-    if (r?.videos.length) { lastPageJson = json; altQueue = allContinuations(json).filter((t) => t !== r.continuation); if (pid) for (const t of altQueue) contMap.set(t, pid); }
-    if (r) { count += r.videos.length; if (r.videos.length || r.header) gotAny = true; }
-    // la page n'indique pas de suite alors que la playlist en annonce nettement plus : on cherche un jeton ailleurs dans la réponse
-    if (r && !r.continuation && r.videos.length && expected > count + 5 && !stopFlag) {
-      const alt = findAnyContinuation(json);
-      if (alt) { r.continuation = alt; if (pid) contMap.set(alt, pid); altTokens++; }
+    // la lecture triée s'est arrêtée trop tôt : on reprend la lecture d'origine (ordre manuel) là où la première page la laissait
+    if (phase === 0 && sorted && !ordered && firstCont && !stopFlag && !body && !stoppedEarly && expected > 0 && count < expected * 0.9 && expected - count > 5) {
+      sorted = false; sortedBy += ' puis ordre manuel (secours)'; body = { continuation: firstCont }; if (pid) contMap.set(firstCont, pid); continue;
     }
-    progress('running', { playlist: label, pages, count });
-    // mise à jour : « À regarder plus tard » et « J'aime » listent le plus récent en premier -> on s'arrête dès qu'une page n'apporte rien de nouveau
-    if (incremental && r?.videos.length && incrementalStop(await ackP(r.nonce), incState)) { stoppedEarly = true; body = null; break; }
-    body = r?.continuation ? { continuation: r.continuation } : null;
-    if (body) await sleep(1000 + Math.random() * 1500); // rythme « humain »
+    break;
   }
   // « complète » seulement si on a bien lu quelque chose (une page d'erreur muette ne doit rien effacer)
   // « courte » : YouTube a cessé de donner des pages alors que la playlist annonce nettement plus de vidéos
   const short = !stopFlag && !body && !stoppedEarly && expected > 0 && count < expected * 0.9 && expected - count > 5;
-  return { count, short, altTokens, shape: short ? JSON.stringify({ derniere: lastJson ? jsonShape(lastJson, { max: 800 }) : '', premiere: lastPageJson ? jsonShape(lastPageJson, { max: 5000 }) : '', essais: altTries }) : '', pages, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
+  const sortDiag = !ordered && sortedBy !== 'date d’ajout' && firstJson ? JSON.stringify({ tri: sortedBy, premiere: jsonShape(firstJson, { max: 4000 }) }) : '';
+  return { count, short, altTokens, sortedBy, sortDiag, shape: short ? JSON.stringify({ derniere: lastJson ? jsonShape(lastJson, { max: 800 }) : '', premiere: lastPageJson ? jsonShape(lastPageJson, { max: 5000 }) : '', essais: altTries }) : '', pages, complete: !stopFlag && gotAny && !body && !stoppedEarly && !short };
 }
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -376,11 +404,12 @@ async function runSync(mode, counts = {}, excluded = []) {
       // mise à jour : une playlist perso dont le nombre de vidéos n'a pas changé est ignorée
       if (isNew && !recent && l.count > 0 && counts[l.id] === l.count) { doneLists++; continue; }
       let r;
-      try { r = await syncPlaylist(l.id, l.title, l.title, isNew && recent, l.count || 0); } catch (e) {
+      try { r = await syncPlaylist(l.id, l.title, l.title, isNew && recent, l.count || 0, recent); } catch (e) {
         if (e instanceof HttpError && e.status === 429) throw e; // limite de débit : on arrête tout
         r = { count: 0, complete: false, error: e.message }; // une playlist qui échoue ne bloque pas les suivantes
       }
       total += r.count; doneLists++;
+      if (!r.shape && r.sortDiag) post('diag', { playlistId: l.id, title: l.title, count: r.count, expected: l.count || 0, pages: r.pages, alt: 0, shape: r.sortDiag });
       if (r.shape) post('diag', { playlistId: l.id, title: l.title, count: r.count, expected: l.count || 0, pages: r.pages, alt: r.altTokens, shape: r.shape });
       if (!r.complete) { incomplete++; if (r.error || r.short) problems.push({ title: l.title, count: r.count, expected: l.count || 0, diag: !!r.shape, why: r.error || (r.altTokens ? 'la suite renvoyée par YouTube était vide' : 'YouTube n’a pas renvoyé de page suivante') }); }
       post('sync', { state: 'playlist-done', runId: currentRun, playlistId: l.id, complete: r.complete, count: r.count });

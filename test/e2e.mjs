@@ -73,10 +73,12 @@ const ytBrowse = (b) => {
   const hp = histPage(b); if (hp) return hp;
   if (b.continuation === 'LISTCONT') return { contents: [grid('PL3', 'Musique', 1)] };
   if (b.continuation === 'WLC') return { contents: ytItems('WL').slice(2) };
+  if (b.continuation === 'SORTADDED' + 'x'.repeat(20)) return { onResponseReceivedActions: [{ reloadContinuationItemsCommand: { continuationItems: ytItems('PL1').reverse() } }] };
   const pid = (b.browseId || '').slice(2);
   if (!PLAYLISTS[pid]) return {};
   const header = { playlistHeaderRenderer: { playlistId: pid, title: run({ WL: 'À regarder plus tard', LL: 'Vidéos que j’aime', PL1: 'Neurosciences', PL2: 'Cuisine', PL3: 'Musique' }[pid]) } };
   if (pid === 'WL') return { header, contents: [...ytItems('WL').slice(0, 2), cont('WLC')] };
+  if (pid === 'PL1') return { header, contents: ytItems(pid), sortFilterSubMenuRenderer: { subMenuItems: [{ title: 'Manuel', serviceEndpoint: { continuationCommand: { token: 'SORTMANUAL' + 'x'.repeat(20) } } }, { title: 'Date d’ajout (plus récentes)', serviceEndpoint: { continuationCommand: { token: 'SORTADDED' + 'x'.repeat(20) } } }] } };
   return { header, contents: ytItems(pid) };
 };
 const ytPage = () => `<!doctype html><title>Playlists - YouTube</title><body><script>
@@ -609,6 +611,8 @@ assert.ok(ytLog.length >= 6, 'requêtes browse : ' + ytLog.length);
 assert.ok(ytLog.every((l) => /^SAPISIDHASH \d+_[0-9a-f]{40}$/.test(l.auth)), 'en-tête Authorization signé (SAPISIDHASH) : ' + ytLog[0].auth);
 assert.ok(ytLog.every((l) => l.key === 'KEY123' && l.ctx && l.client === '2.20261014'), 'clé, contexte et version client transmis');
 assert.deepEqual(ytLog.map((l) => l.body.browseId || 'cont:' + l.body.continuation).filter((x) => x.startsWith('VL')).sort(), ['VLLL', 'VLPL1', 'VLPL2', 'VLPL3', 'VLWL']);
+assert.ok(ytLog.some((l) => l.body.continuation === 'SORTADDED' + 'x'.repeat(20)), 'la playlist perso est relue triée par date d’ajout');
+assert.equal(await panel.evaluate(() => new Promise((res) => { const r = indexedDB.open('xbs'); r.onsuccess = () => { const g = r.result.transaction('tweets').objectStore('tweets').get('yt:p2'); g.onsuccess = () => res(g.result?.addedExact); }; })), true, 'p2 a une date d’ajout issue du tri');
 assert.equal(await panel.locator('#stats').innerText().then((t) => Number(t.match(/^([\d\s\u202f\u00a0]+) bookmarks/)[1].replace(/\D/g, ''))), before, 'les vidéos ne comptent pas comme des bookmarks X');
 // l'onglet YouTube ouvert en arrière-plan est refermé tout seul
 await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglet YouTube refermé', 15000);

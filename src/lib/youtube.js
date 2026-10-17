@@ -150,7 +150,7 @@ export function parseYoutube(json, opts = {}) {
       return true;
     }
     // le jeton de la LISTE de vidéos elle-même (dernier élément de son tableau) prime sur tout autre jeton de la page (menus, recommandations…)
-    const listItems = n.playlistVideoListRenderer?.contents || n.appendContinuationItemsAction?.continuationItems || n.playlistVideoListContinuation?.contents;
+    const listItems = n.playlistVideoListRenderer?.contents || n.appendContinuationItemsAction?.continuationItems || n.reloadContinuationItemsCommand?.continuationItems || n.playlistVideoListContinuation?.contents;
     if (Array.isArray(listItems) && listItems.some((x) => x?.playlistVideoRenderer || x?.lockupViewModel)) {
       const lastC = [...listItems].reverse().find((x) => x?.continuationItemRenderer);
       const t = lastC && (lastC.continuationItemRenderer.continuationEndpoint?.continuationCommand?.token || deepFindString(lastC.continuationItemRenderer, 'token'));
@@ -249,7 +249,7 @@ export function toItem(v, playlist, now = Date.now()) {
     playlists: playlist?.id ? [{ id: playlist.id, title: playlist.title || '', pos: v.pos || 0 }] : [],
     links: [], media: [], stats: { views: parseViews(v.views) }, lang: '', createdAt: null,
     sortIndex: String(1_000_000 - (v.pos || 0)), // sous tous les tweets dans « récents » ; ordre de la playlist entre vidéos
-    addedAt: now,
+    addedAt: v.addAt || now, addedExact: !!v.addAt, // addAt : rang dans la liste triée par date d'ajout (voir inject-yt.js)
   };
 }
 
@@ -273,7 +273,8 @@ export function mergeVideo(old, neu) {
   out.progress = Math.max(old.progress || 0, neu.progress || 0);
   if (!neu.desc && old.desc) out.desc = old.desc;
   if (BigInt(old.sortIndex || 0) > BigInt(neu.sortIndex || 0)) out.sortIndex = old.sortIndex;
-  out.addedAt = old.addedAt ?? neu.addedAt;
+  out.addedAt = neu.addedExact ? neu.addedAt : (old.addedAt ?? neu.addedAt);
+  out.addedExact = !!(neu.addedExact || (old.addedExact && !neu.addedExact));
   return out;
 }
 
@@ -338,6 +339,34 @@ export function incrementalStop(fresh, state, { maxPages = 6 } = {}) {
   if (fresh === 0) return true;
   state.low = fresh !== null && fresh <= 2 ? (state.low || 0) + 1 : 0;
   return state.low >= 2 || state.pages >= maxPages;
+}
+
+// Menu de tri d'une playlist (« Manuel », « Date d'ajout (plus récentes) »…) : corps de requête qui relit la playlist triée
+// par date d'ajout, du plus récent au plus ancien. null si le menu est introuvable.
+const ADDED_NEWEST = /date d.?ajout.*recent|date added.*newest|recently added|added.*newest/;
+export function findSortBody(json, pid) {
+  let found = null;
+  const tokenIn = (n, d = 0) => {
+    if (!n || typeof n !== 'object' || d > 12) return null;
+    const t = n.continuationCommand?.token || n.reloadContinuationData?.continuation || n.nextContinuationData?.continuation;
+    if (typeof t === 'string' && t.length > 20) return { continuation: t };
+    const b = n.browseEndpoint;
+    if (b?.params && typeof b.params === 'string') return { browseId: b.browseId || 'VL' + pid, params: b.params };
+    for (const v of Object.values(n)) { const r = tokenIn(v, d + 1); if (r) return r; }
+    return null;
+  };
+  const walkAll = (n, d = 0) => {
+    if (found || !n || typeof n !== 'object' || d > 40) return;
+    if (Array.isArray(n)) { for (const x of n) walkAll(x, d + 1); return; }
+    const title = txt(n.title) || txt(n.text) || (typeof n.title === 'string' ? n.title : '');
+    if (title && ADDED_NEWEST.test(title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''))) {
+      const b = tokenIn(n);
+      if (b) { found = b; return; }
+    }
+    for (const v of Object.values(n)) walkAll(v, d + 1);
+  };
+  walkAll(json);
+  return found;
 }
 
 // Dernier recours : tout jeton de page suivante présent dans la réponse (le dernier rencontré). À n'utiliser que si l'on SAIT qu'il manque des vidéos.
