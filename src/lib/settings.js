@@ -7,7 +7,7 @@ export const DEFAULTS = {
   imageSearch: false, // recherche d'images (CLIP, expérimental)
   embedModel: 'gemma1', // 'gemma1' (300 M, texte) | 'gemma2' (multimodal)
   decision: { url: 'https://openrouter.ai/api/alpha/decisions', model: 'typesafe/jev-1.13', apiKey: '', priceInPerM: 0.042 }, // priceInPerM : $ par million de tokens d'entrée (estimation du coût) // modèle de décision (Jev)
-  journal: { writerModel: '', assistModel: '', budget: 1, priceInPerM: 0.3, priceOutPerM: 1.2, sections: null, readLinks: true, useTranscripts: true, reportages: 2, priority: '', reportDepth: 'detailed', search: false, searchTop: 6, searchPrice: 0.02, verify: true, leads: 4, articles: 14, briefs: 30 }, // journal hebdomadaire : modèles (vide = modèle de l'IA), plafond en $, prix indicatifs par million de tokens, rubriques = détecteurs (null = tous)
+  journal: { writerModel: '', assistModel: '', budget: 1, priceInPerM: 0.3, priceOutPerM: 1.2, sections: null, readLinks: true, useTranscripts: true, reportages: 2, maxAge: 45, priority: '', reportDepth: 'detailed', search: false, searchTop: 6, searchPrice: 0.02, verify: true, leads: 4, articles: 14, briefs: 30 }, // journal hebdomadaire : modèles (vide = modèle de l'IA), plafond en $, prix indicatifs par million de tokens, rubriques = détecteurs (null = tous)
   autoJev: { on: false, dailyCap: 0.1 }, // jugement automatique des nouveaux éléments par Jev (désactivé ; plafond en $ par jour)
   decisionIntent: false, // tri / période / type compris par le modèle de décision
   decisionRerank: false, // reclassement par le modèle de décision

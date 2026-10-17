@@ -429,3 +429,11 @@ test('dates d\'ajout en masse : non comptées dans la période', () => {
   assert.deepEqual(eventDays({ ...bulk[5], watched: ['2026-10-12'] }, null), ['2026-10-12'], 'un visionnage reste une vraie date');
   assert.equal(all.at(-1).addedBulk, undefined);
 });
+
+test('dates relatives abrégées de YouTube FR (mois « m. », ans « a. »)', () => {
+  const ref = Date.UTC(2026, 9, 17, 12);
+  assert.ok(Math.abs(parsePublished('il y a 11 m.', ref) - (ref - 11 * 30.44 * 86_400_000)) < 1000);
+  assert.ok(Math.abs(parsePublished('18 k • il y a 2 a.', ref) - (ref - 2 * 365.25 * 86_400_000)) < 1000);
+  assert.equal(parsePublished('il y a 5 min', ref), ref - 5 * 60_000);
+  assert.equal(parsePublished('il y a 3 sem.', ref), ref - 21 * 86_400_000);
+});

@@ -8,7 +8,7 @@ import { videoPubMs } from './lib/ytdate.js';
 import { detectorSetFor } from './lib/detsets.js';
 import { chatFull } from './lib/llm.js';
 import { isPublicUrl } from './lib/links.js';
-import { handleKey, OFFICIAL_DESC } from './lib/widgets.js';
+import { handleKey, OFFICIAL_DESC, eventDays } from './lib/widgets.js';
 import {
   weekWindow, inWindow, dayLabel, buildSubjects, assignTiers, weekStats, extractPageText, evidenceFor, articleMessages, briefsMessages, editorialMessages,
   searchMessages, parseFindings, verifyMessages, applyVerification, meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportagePlan, splitPoints, reportageIntroMessages, reportageSectionMessages, parseSection, parseIntro, videoUrl, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
@@ -31,14 +31,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -48,7 +48,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -60,6 +60,8 @@ async function prepare(s, offset = 0) {
   const [vecs, chunks] = await Promise.all([getAllVectors(mid), getAllChunkVecs(mid)]);
   const sv = savedInfo(items.filter((t) => !isVideoItem(t)), Date.now());
   const win = weekWindow(Date.now() - offset * 7 * DAY);
+  const maxAge = s.journal.maxAge ?? 45;
+  const minPub = maxAge > 0 ? dayKey(Date.parse(win.to + 'T12:00:00') - maxAge * DAY) : '';
   const selIds = s.journal.sections ?? (dets || []).map((d) => d.id);
   let sections = [];
   for (const id of selIds) {
@@ -72,7 +74,7 @@ async function prepare(s, offset = 0) {
   if (!sections.length) sections = [{ id: 'all', name: 'À la une', set: new Set(items.filter((t) => !isVideoItem(t)).map((t) => t.id)) }];
   const primarySet = new Set((primary || []).map(handleKey));
   const official = offStore?.v === OFFICIAL_DESC ? offStore.m : {};
-  const subjects = buildSubjects(items, { sv, sections, vecs, primary: primarySet, official, win });
+  const subjects = buildSubjects(items, { sv, sections, vecs, primary: primarySet, official, win, minPub });
   const tiers = assignTiers(subjects, { leads: s.journal.leads, articles: s.journal.articles, briefs: s.journal.briefs });
   const stats = weekStats(items, { sv, sections, win });
   // jour de référence d'une vidéo, au plus tard à la fin de la période : dernier visionnage, sinon ajout (si fiable), sinon publication
@@ -83,10 +85,13 @@ async function prepare(s, offset = 0) {
   const withTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState === 'ok');
   const prio = String(s.journal.priority || '').split(/[,;\n]/).map((x) => x.trim().replace(/^@/, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')).filter(Boolean);
   const prioOf = (v) => { const h = [v.name, v.handle].map((x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')); const i = prio.findIndex((p) => h.some((x) => x && (x === p || x.includes(p)))); return i < 0 ? 99 : i; };
-  const reportVideos = withTr.filter(inWeek).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
+  const tooOld = (v) => { if (!minPub) return false; const pm = videoPubMs(v); return !!pm && dayKey(pm) < minPub; };
+  const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v)).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
   const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
-  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, eligible };
+  const oldTweets = minPub ? items.filter((t) => !isVideoItem(t) && t.createdAt && t.createdAt.slice(0, 10) < minPub && eventDays(t, sv).some((d) => inWindow(d, win))).length : 0;
+  const oldVideos = withTr.filter((v) => inWeek(v) && tooOld(v)).length;
+  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, eligible, minPub, oldTweets, oldVideos };
 }
 
 function estimatePlan(plan, cfg) {
@@ -154,6 +159,14 @@ async function loadPages(subjects, hasPerm) {
   return pages;
 }
 
+// Pourquoi une vidéo est retenue pour la période (visible dans le journal de génération)
+function videoWhy(v, win) {
+  const w = (v.watched || []).filter((d) => inWindow(d, win)).sort().pop();
+  const pm = videoPubMs(v);
+  const f = (d) => d.split('-').reverse().slice(0, 2).join('/');
+  return [w ? `regardée le ${f(w)}` : v.addedAt ? `ajoutée le ${f(dayKey(v.addedAt))}` : '', pm ? `publiée ≈ ${dayKey(pm).split('-').reverse().join('/')}` : 'date de publication inconnue'].filter(Boolean).join(' · ');
+}
+
 // ---------- images ----------
 const probe = (url) => new Promise((res) => { const im = new Image(); const t = setTimeout(() => res(false), 7000); im.onload = () => { clearTimeout(t); res(true); }; im.onerror = () => { clearTimeout(t); res(false); }; im.referrerPolicy = 'no-referrer'; im.src = url; });
 async function pickImages(entries) {
@@ -183,6 +196,7 @@ async function generate() {
   try {
     const plan = await prepare(settings, Number($('j-week').value) || 0);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets (${plan.tiers.leads.length} grands sujets, ${plan.tiers.articles.length} articles, ${plan.tiers.briefs.length} brèves).`);
+    if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
     if (!plan.subjects.length) { log('Rien à publier : aucun élément retenu cette semaine.'); return; }
     if (!plan.tiers.leads.length && !plan.tiers.articles.length && !plan.tiers.briefs.length) { log('Rien à publier : les nombres de grands sujets, d’articles et de brèves sont à 0.'); return; }
     const est = estimatePlan(plan, cfg);
@@ -308,7 +322,7 @@ async function generate() {
           const pack = reportageEvidence(video, sums);
           if (pack.points < 3) { log(`  « ${video.text.slice(0, 50)} » : transcription trop pauvre, ignorée.`); continue; }
           const rp = reportagePlan(video, cfg.reportDepth);
-          log(`  « ${video.text.slice(0, 50)} » : ${pack.points} points, reportage d’environ ${rp.words} mots en ${rp.sections} partie(s)…`);
+          log(`  « ${video.text.slice(0, 50)} » (${videoWhy(video, plan.win)}) : ${pack.points} points, reportage d’environ ${rp.words} mots en ${rp.sections} partie(s)…`);
           const groups = splitPoints(sums, rp.sections);
           // ouverture (titre, chapeau, introduction, citation, points à retenir), puis une partie après l'autre
           let intro = null;

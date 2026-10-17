@@ -19,6 +19,7 @@
       <p class="hint">Le journal reprend ce que tu as gardé ces 7 derniers jours, regroupé par sujet, et le fait rédiger par ton modèle d’IA à partir des tweets et des pages liées. Chaque article cite ses sources. Un plafond de dépense arrête la génération avant de le dépasser.</p>
       <p id="j-status" class="warn" hidden></p>
       <label class="wk">Période <small>(7 jours consécutifs ; les éléments retenus et les vidéos regardées ou ajoutées ces jours-là)</small><select id="j-week"></select></label>
+      <label class="wk">Ancienneté maximale <small>(éléments publiés plus de N jours avant la fin de la période : écartés des sujets et des reportages ; une vidéo ancienne regardée cette semaine figure seulement dans « À voir et à écouter »)</small><select id="j-age"><option value="14">14 jours</option><option value="45">45 jours</option><option value="120">120 jours</option><option value="0">Aucune limite</option></select></label>
       <div class="grid">
         <label>Modèle de rédaction <small>grands sujets</small><input id="j-writer" placeholder="vide = modèle de l’IA (⚙)"></label>
         <label>Modèle assistant <small>articles, brèves, éditorial</small><input id="j-assist" placeholder="vide = modèle de l’IA (⚙)"></label>

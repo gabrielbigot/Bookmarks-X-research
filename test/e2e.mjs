@@ -1129,6 +1129,7 @@ await journal.goto(`chrome-extension://${extId}/journal.html`);
 await journal.waitForSelector('#j-go');
 await journal.evaluate(() => { document.getElementById('j-links').checked = false; document.getElementById('j-links').dispatchEvent(new Event('change')); });
 await journal.evaluate(() => { for (const id of ['j-search', 'j-verify']) { const c = document.getElementById(id); c.checked = true; c.dispatchEvent(new Event('change')); } });
+await journal.selectOption('#j-age', '0'); // les tweets de test sont anciens
 await journal.fill('#j-budget', '5');
 await journal.dispatchEvent('#j-budget', 'change');
 await journal.evaluate(async () => { // une vidéo regardée cette semaine, avec sa transcription

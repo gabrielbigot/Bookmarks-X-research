@@ -50,12 +50,13 @@ export const tweetUrl = (t) => t.url || `https://x.com/${t.handle}/status/${t.id
 // ---------- sujets ----------
 // sections : [{ id, name, set: Set(ids) }] — chacune correspond à un détecteur. Un tweet n'apparaît que dans la première rubrique qui le retient.
 // Retourne [{ id, section, rep, members, score, firstDay, lastDay, likes, images, links }] triés par importance.
-export function buildSubjects(items, { sv, sections, vecs = null, primary = new Set(), official = {}, win, sim = 0.9, days = 7 }) {
+export function buildSubjects(items, { sv, sections, vecs = null, primary = new Set(), official = {}, win, sim = 0.9, days = 7, minPub = '' }) {
   const taken = new Set(), out = [];
   for (const sec of sections) {
     const cand = [];
     for (const t of items) {
       if (isVideoItem(t) || t.off || taken.has(t.id) || !sec.set.has(t.id)) continue;
+      if (minPub && t.createdAt && t.createdAt.slice(0, 10) < minPub) continue; // publié trop longtemps avant la période
       const ds = eventDays(t, sv);
       if (ds.some((d) => inWindow(d, win))) cand.push({ t, days: ds });
     }
