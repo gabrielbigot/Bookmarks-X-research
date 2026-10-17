@@ -4,6 +4,7 @@ import { getSettings, setSettings, llmReady } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
 import { isVideoItem } from './lib/youtube.js';
+import { videoPubMs } from './lib/ytdate.js';
 import { detectorSetFor } from './lib/detsets.js';
 import { chatFull } from './lib/llm.js';
 import { isPublicUrl } from './lib/links.js';
@@ -38,6 +39,9 @@ async function loadUi() {
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
   $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  const cur = $('j-week').value || '0';
+  $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
+  $('j-week').value = cur;
   const sel = j.sections ?? detectors.map((d) => d.id);
   $('j-sections').innerHTML = detectors.length ? detectors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}"${sel.includes(d.id) ? ' checked' : ''}> ${esc(d.name)}</label>`).join('') : '<span class="hint">Aucun détecteur : le journal couvrira toute la semaine (crée des détecteurs dans « Mes stats » pour avoir des rubriques).</span>';
   const st = $('j-status');
@@ -48,14 +52,14 @@ for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-prio', 'j-search', 'j-top',
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
-async function prepare(s) {
+async function prepare(s, offset = 0) {
   log('Lecture de la base…');
   const [all, dets, verdicts, primary, offStore] = await Promise.all([getAllTweets(), getMeta('dashDetectors'), getMeta('detVerdicts'), getMeta('primarySources'), getMeta('officialVerdicts')]);
   const items = all.filter((t) => !t.off);
   const mid = modelOf(s.embedModel).id;
   const [vecs, chunks] = await Promise.all([getAllVectors(mid), getAllChunkVecs(mid)]);
   const sv = savedInfo(items.filter((t) => !isVideoItem(t)), Date.now());
-  const win = weekWindow();
+  const win = weekWindow(Date.now() - offset * 7 * DAY);
   const selIds = s.journal.sections ?? (dets || []).map((d) => d.id);
   let sections = [];
   for (const id of selIds) {
@@ -71,16 +75,17 @@ async function prepare(s) {
   const subjects = buildSubjects(items, { sv, sections, vecs, primary: primarySet, official, win });
   const tiers = assignTiers(subjects, { leads: s.journal.leads, articles: s.journal.articles, briefs: s.journal.briefs });
   const stats = weekStats(items, { sv, sections, win });
-  const videos = items.filter(isVideoItem).filter((v) => (v.watched || []).some((d) => inWindow(d, win)) || (v.addedAt && inWindow(dayKey(v.addedAt), win)))
-    .sort((a, b) => String(b.lastWatched || dayKey(b.addedAt || 0)).localeCompare(String(a.lastWatched || dayKey(a.addedAt || 0)))).slice(0, 8);
-  const day = (v) => String(v.lastWatched || dayKey(v.addedAt || 0));
-  const inWeek = (v) => (v.watched || []).some((d) => inWindow(d, win)) || (v.addedAt && inWindow(dayKey(v.addedAt), win));
+  // jour de référence d'une vidéo, au plus tard à la fin de la période : dernier visionnage, sinon ajout (si fiable), sinon publication
+  const videos = items.filter(isVideoItem).filter((v) => (v.watched || []).some((d) => inWindow(d, win)) || (!v.addedBulk && v.addedAt && inWindow(dayKey(v.addedAt), win)))
+    .sort((a, b) => day(b).localeCompare(day(a))).slice(0, 8);
+  const day = (v) => { const w = (v.watched || []).filter((d) => d <= win.to).sort().pop(); if (w) return w; if (!v.addedBulk && v.addedAt && dayKey(v.addedAt) <= win.to) return dayKey(v.addedAt); const pm = videoPubMs(v); return pm ? dayKey(pm) : ''; };
+  const inWeek = (v) => (v.watched || []).some((d) => inWindow(d, win)) || (!v.addedBulk && v.addedAt && inWindow(dayKey(v.addedAt), win));
   const withTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState === 'ok');
   const prio = String(s.journal.priority || '').split(/[,;\n]/).map((x) => x.trim().replace(/^@/, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')).filter(Boolean);
   const prioOf = (v) => { const h = [v.name, v.handle].map((x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')); const i = prio.findIndex((p) => h.some((x) => x && (x === p || x.includes(p)))); return i < 0 ? 99 : i; };
   const reportVideos = withTr.filter(inWeek).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
-  const recent = dayKey(Date.now() - 60 * DAY);
-  const eligible = new Set(withTr.filter((v) => day(v) >= recent).map((v) => v.id));
+  const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
+  const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
   return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, eligible };
 }
 
@@ -176,7 +181,7 @@ async function generate() {
   const prices = { priceInPerM: cfg.priceInPerM, priceOutPerM: cfg.priceOutPerM };
   let spent = 0, fallbacks = 0, budgetHit = false;
   try {
-    const plan = await prepare(settings);
+    const plan = await prepare(settings, Number($('j-week').value) || 0);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets (${plan.tiers.leads.length} grands sujets, ${plan.tiers.articles.length} articles, ${plan.tiers.briefs.length} brèves).`);
     if (!plan.subjects.length) { log('Rien à publier : aucun élément retenu cette semaine.'); return; }
     if (!plan.tiers.leads.length && !plan.tiers.articles.length && !plan.tiers.briefs.length) { log('Rien à publier : les nombres de grands sujets, d’articles et de brèves sont à 0.'); return; }
@@ -596,7 +601,7 @@ $('j-est').onclick = async () => {
   settings = await setSettings({ journal: cfg });
   $('j-go').disabled = true; $('j-est').disabled = true; logEl.textContent = '';
   try {
-    const plan = await prepare(settings);
+    const plan = await prepare(settings, Number($('j-week').value) || 0);
     const est = estimatePlan(plan, cfg);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets.`);
     log(`Grands sujets : ${plan.tiers.leads.length} · articles : ${plan.tiers.articles.length} · brèves : ${plan.tiers.briefs.length}.`);

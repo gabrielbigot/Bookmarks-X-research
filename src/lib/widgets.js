@@ -56,7 +56,7 @@ export function matchItem(t, cq) {
 export function eventDays(t, sv) {
   if (isVideoItem(t)) {
     if ((t.watched || []).length) return t.watched;
-    const ms = t.addedAt || t.capturedAt;
+    const ms = t.addedBulk ? null : t.addedAt || t.capturedAt; // date d'ajout noyée dans une synchronisation en masse : inconnue
     return ms ? [dayKey(ms)] : [];
   }
   const ms = sv?.valid ? sv.at(t) : t.createdAt ? Date.parse(t.createdAt) : null;

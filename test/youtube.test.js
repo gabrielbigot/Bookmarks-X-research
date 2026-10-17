@@ -413,3 +413,19 @@ test('ordre d\'ajout : une vidéo lue dans la liste triée garde sa date estimé
   assert.equal(mergeVideo(old, a).addedAt, 1000);
   assert.equal(mergeVideo(a, toItem({ videoId: 'a', title: 'A' }, { id: 'P' }, 9)).addedAt, 1000);
 });
+
+import { markBulkAdded } from '../src/lib/ytdate.js';
+import { eventDays } from '../src/lib/widgets.js';
+test('dates d\'ajout en masse : non comptées dans la période', () => {
+  const base = Date.UTC(2026, 9, 15, 10);
+  const bulk = Array.from({ length: 100 }, (_, i) => ({ id: 'yt:b' + i, addedAt: base - i })); // synchro complète : 100 vidéos à la même seconde
+  const fresh = [{ id: 'yt:f1', addedAt: Date.UTC(2026, 9, 17, 9) }, { id: 'yt:f2', addedAt: Date.UTC(2026, 9, 17, 9, 0, 3) }];
+  const all = [...bulk, ...fresh, { id: 'tweet1', createdAt: '2026-10-01' }];
+  markBulkAdded(all);
+  assert.equal(bulk[0].addedBulk, true);
+  assert.equal(fresh[0].addedBulk, false);
+  assert.deepEqual(eventDays(bulk[5], null), [], 'ajout en masse : jour inconnu');
+  assert.deepEqual(eventDays(fresh[0], null), ['2026-10-17']);
+  assert.deepEqual(eventDays({ ...bulk[5], watched: ['2026-10-12'] }, null), ['2026-10-12'], 'un visionnage reste une vraie date');
+  assert.equal(all.at(-1).addedBulk, undefined);
+});

@@ -13,7 +13,7 @@ import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rera
 import { kmeans, labelClusters } from './lib/cluster.js';
 import { bindThemeButton } from './lib/theme.js';
 import { isVideoItem, syncSummary } from './lib/youtube.js';
-import { videoPubMs } from './lib/ytdate.js';
+import { videoPubMs, markBulkAdded } from './lib/ytdate.js';
 import { encode, decodeFull, packVectors, unpackVectors } from './lib/backup.js';
 import { score as evalScore, summarize } from './lib/evalbench.js';
 
@@ -46,6 +46,7 @@ async function load(full = false) {
   const mid = modelOf(settings.embedModel).id;
   if (full || !index.tweets.length) await fullLoad(index, mid);
   else await refresh(index, mid);
+  markBulkAdded(index.tweets);
   updateStats();
 }
 

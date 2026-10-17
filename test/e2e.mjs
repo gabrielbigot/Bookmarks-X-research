@@ -1163,6 +1163,15 @@ const bad = await journal.evaluate(() => [...document.querySelectorAll('#paper .
 assert.ok(bad <= 2, 'pages qui débordent : ' + bad);
 for (let i = 0; i < Math.min(pagesN, 4); i++) await journal.locator('#paper .page').nth(i).screenshot({ path: `${process.env.TMPDIR || '/tmp'}/journal-e2e-p${i + 1}.png` });
 assert.ok(await journal.locator('#j-list .ed').count() >= 1, 'l’édition est enregistrée');
+// semaine précédente : la période change (et la vidéo regardée aujourd'hui n'y figure pas)
+const weekLabel0 = (jlog.match(/Semaine (du [^:]+) :/) || [])[1];
+await journal.selectOption('#j-week', '1');
+await journal.click('#j-est');
+await waitFor(async () => /Semaine du .* : \d+ sujets/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /Rien à publier/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'estimation de la semaine précédente', 60000);
+const estLog = await journal.locator('#j-log').innerText();
+const weekLabel1 = (estLog.match(/Semaine (du [^:]+) :/) || [])[1];
+assert.ok(!weekLabel0 || !weekLabel1 || weekLabel0 !== weekLabel1, 'la semaine précédente a une autre période : ' + weekLabel0 + ' / ' + weekLabel1);
+assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine précédente (la vidéo a été regardée aujourd’hui)');
 
 console.log('E2E OK');
 await ctx.close();

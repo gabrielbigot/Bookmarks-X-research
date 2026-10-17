@@ -45,9 +45,10 @@ export async function putTweets(tweets) {
   return added;
 }
 
+import { markBulkAdded } from './ytdate.js';
 export async function getAllTweets() {
   const db = await openDb();
-  return wrap(db.transaction('tweets').objectStore('tweets').getAll());
+  return markBulkAdded(await wrap(db.transaction('tweets').objectStore('tweets').getAll()));
 }
 
 export async function getTweets(ids) {

@@ -31,3 +31,22 @@ export function parsePublished(text, ref = Date.now()) {
 
 // Date de publication estimée d'une vidéo (ms) : valeur enregistrée à la capture, sinon déduite du texte relatif.
 export const videoPubMs = (t) => t.pubMs || parsePublished(t.publishedText, t.addedAt || Date.now()) || null;
+
+// Dates d'ajout peu fiables : la date d'ajout d'une vidéo est celle où l'extension l'a vue pour la première fois. Quand des dizaines de
+// vidéos portent la même date à quelques secondes près (première synchronisation, synchronisation complète, retard important), ce n'est
+// pas une vraie date d'ajout : on marque ces vidéos (`addedBulk`, non enregistré) pour ne pas les compter dans « ajoutées cette semaine ».
+export function markBulkAdded(items, { windowMs = 15_000, limit = 40 } = {}) {
+  const vids = items.filter((t) => typeof t.id === 'string' && t.id.startsWith('yt:'));
+  const times = vids.map((t) => t.addedAt || 0).filter(Boolean).sort((a, b) => a - b);
+  // nombre de vidéos ajoutées à ± windowMs de chaque instant (fenêtre glissante, sans effet de bord de seau)
+  const near = new Map();
+  let lo = 0, hi = 0;
+  for (let i = 0; i < times.length; i++) {
+    while (times[lo] < times[i] - windowMs) lo++;
+    if (hi < i) hi = i;
+    while (hi + 1 < times.length && times[hi + 1] <= times[i] + windowMs) hi++;
+    near.set(times[i], hi - lo + 1);
+  }
+  for (const t of vids) t.addedBulk = !!t.addedAt && (near.get(t.addedAt) || 0) > limit;
+  return items;
+}
