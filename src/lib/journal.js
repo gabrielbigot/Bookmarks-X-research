@@ -283,11 +283,11 @@ export function reportagePlan(video, depth = 'detailed', cap = 0) {
 }
 // Budget de pages : combien de mots de reportage tiennent dans `maxPages` une fois le reste de l'édition compté (estimation prudente,
 // texte à ≈ 90 %). Renvoie { reports, reportWords } : nombre de reportages gardés et mots maximum par reportage (0 = pas de limite).
-export function pageBudget({ maxPages, leads = 0, articles = 0, briefs = 0, reportages = 0, sections = 1 }) {
+export function pageBudget({ maxPages, leads = 0, articles = 0, briefs = 0, reportages = 0, sections = 1, extra = 0 }) {
   if (!maxPages || !reportages) return { reports: reportages, reportWords: 0, mainPages: 0 };
   const mainWords = leads * TIER.lead.words + articles * TIER.article.words + briefs * 45 + 450;
   const mainPages = Math.ceil(mainWords / 480) + Math.ceil(sections / 2); // + débuts de rubrique
-  const fixed = 5; // une, chiffres, vidéos, lexique et sources (≈ 2)
+  const fixed = 5 + extra; // une, chiffres, vidéos, lexique et sources (≈ 2) + pages de classements
   const free = Math.max(0, maxPages - fixed - mainPages);
   const total = free * 560; // mots de reportage par page (3 colonnes)
   let reports = reportages;

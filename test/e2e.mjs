@@ -99,6 +99,13 @@ const jevLog = [];
 const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: readFileSync(`${tmp}/c.pem`) }, (req, res) => {
   const url = new URL(req.url, 'https://x.com');
   // --- faux fournisseur d'IA (compatible OpenAI), avec CORS ---
+  if (url.pathname === '/api/v1/benchmarks' || url.pathname === '/api/v1/models') { // classements : benchmarks Artificial Analysis et catalogue d'OpenRouter
+    const hdr = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'content-type': 'application/json' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, hdr); return res.end(); }
+    res.writeHead(200, hdr);
+    if (url.pathname === '/api/v1/models') return res.end(JSON.stringify({ data: [{ id: 'lab/fresh-1', name: 'Lab: Fresh 1', created: Math.floor(Date.now() / 1000) - 3600, context_length: 200000, pricing: { prompt: '0.0000005', completion: '0.000002' } }, { id: 'lab/old', name: 'Old', created: 1700000000 }] }));
+    return res.end(JSON.stringify({ data: Array.from({ length: 14 }, (_, i) => ({ source: 'artificial-analysis', model_permaslug: 'lab/m' + i, display_name: 'Modèle test ' + i, intelligence_index: 70 - i * 3, coding_index: 60 - i * 2, agentic_index: 55 - i * 2, pricing: { price_1m_input_tokens: 1 + i, price_1m_output_tokens: 4 + 2 * i } })), meta: { as_of: '2026-10-16', source: 'artificial-analysis' } }));
+  }
   if (url.pathname === '/v1/chat/completions') {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST,OPTIONS' };
     if (req.method === 'OPTIONS') { res.writeHead(204, cors); return res.end(); }
@@ -1136,6 +1143,8 @@ await panel.fill('#q', '');
 
 // ---- journal : estimation puis génération avec le faux modèle, pages A4 sans débordement
 const journal = await ctx.newPage();
+journal.on('pageerror', (e) => console.log('PAGEERROR journal :', e.message));
+journal.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE journal :', m.text()); });
 await journal.goto(`chrome-extension://${extId}/journal.html`);
 await journal.waitForSelector('#j-go');
 await journal.evaluate(() => { document.getElementById('j-links').checked = false; document.getElementById('j-links').dispatchEvent(new Event('change')); });
@@ -1159,7 +1168,7 @@ await waitFor(async () => /Coût estimé :/.test(await journal.locator('#j-log')
 assert.match(await journal.locator('#j-log').innerText(), /vidéo\(s\) de la semaine écartée\(s\) des reportages : hors des rubriques/, 'la vidéo hors rubriques est écartée des reportages');
 await journal.evaluate(() => { const c = document.getElementById('j-topic'); c.checked = false; c.dispatchEvent(new Event('change')); });
 await journal.click('#j-go');
-await waitFor(async () => /Édition terminée/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /⚠/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'fin de la génération du journal', 120000);
+await waitFor(async () => /Édition terminée/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /⚠/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'fin de la génération du journal', 200000);
 const jlog = await journal.locator('#j-log').innerText();
 assert.match(jlog, /Édition terminée : (\d+) pages/, jlog);
 assert.match(jlog, /Recherche web : [1-9]\d* sujet\(s\) complété/, jlog);
@@ -1183,6 +1192,10 @@ console.log('journal :', jlog.split('\n').filter((l) => /Reportage|Transcription
   assert.equal(printed, nPages, 'une page imprimée par page du journal : ' + printed + ' / ' + nPages);
 }
 const paperText = await journal.locator('#paper').innerText();
+assert.match(jlog, /Classements : 14 modèles \(Artificial Analysis\)/, jlog);
+assert.match(paperText, /Les modèles de la semaine/);
+assert.match(paperText, /Artificial Analysis/);
+assert.match(paperText, /Nouveaux modèles de la semaine[\s\S]*Fresh 1/);
 assert.match(paperText, /Une partie du reportage/i, 'le reportage vidéo est rendu avec son intertitre');
 assert.match(paperText, /Reportage vidéo/i);
 assert.match(paperText, /ref\.example/, 'la page web consultée figure dans l’index des sources');

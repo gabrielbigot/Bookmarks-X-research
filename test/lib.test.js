@@ -290,3 +290,26 @@ test('transcription IA : messages avec le lien de la vidéo, lecture des lignes 
   assert.equal(segs[0].text, 'Bonjour à tous');
   assert.ok(!segs.some((s) => /inaudible|Blabla/.test(s.text)));
 });
+
+import { parseBenchmarks, newModels, citedModels, pickRows, modelKey } from '../src/lib/bench.js';
+test('classements : lecture tolérante des benchmarks OpenRouter, nouveaux modèles, modèles cités', () => {
+  const b = parseBenchmarks({ data: [
+    { source: 'artificial-analysis', model_permaslug: 'z-ai/glm-5.3', display_name: 'GLM-5.3 (Reasoning)', intelligence_index: 61.2, coding_index: '55', agentic_index: 50, pricing: { prompt: '0.0000014', completion: '0.0000044' } },
+    { source: 'artificial-analysis', model_permaslug: 'z-ai/glm-5.3-nr', display_name: 'GLM-5.3 (Non-reasoning)', intelligence_index: 48 },
+    { source: 'artificial-analysis', model_permaslug: 'x/y', display_name: 'Autre', intelligence_index: 70, pricing: { price_1m_input_tokens: 2, price_1m_output_tokens: 10 } },
+    { model_permaslug: 'bad', display_name: 'Sans score' },
+  ], meta: { as_of: '2026-10-16' } });
+  assert.equal(b.rows.length, 2, 'variantes fusionnées, lignes sans score ignorées');
+  const glm = b.rows.find((r) => /GLM/.test(r.name));
+  assert.equal(glm.intelligence, 61.2); assert.equal(glm.coding, 55);
+  assert.ok(Math.abs(glm.priceIn - 1.4) < 1e-6 && Math.abs(glm.priceOut - 4.4) < 1e-6);
+  assert.deepEqual([b.rows.find((r) => r.name === 'Autre').priceIn, b.rows.find((r) => r.name === 'Autre').priceOut], [2, 10]);
+  const win = { from: '2026-10-11', to: '2026-10-17' };
+  const nm = newModels({ data: [{ id: 'a/new', name: 'New One', created: Date.UTC(2026, 9, 14, 12) / 1000, context_length: 128000, pricing: { prompt: '0.000001', completion: '0.000002' } }, { id: 'a/old', name: 'Old', created: Date.UTC(2026, 5, 1) / 1000 }] }, win);
+  assert.equal(nm.length, 1); assert.equal(nm[0].day, '2026-10-14'); assert.equal(nm[0].priceIn, 1);
+  const cited = citedModels(b.rows, 'Z.ai lance GLM-5.3 aujourd’hui, et un modèle quelconque');
+  assert.ok(cited.has('z-ai/glm-5.3') && !cited.has('x/y'));
+  assert.equal(modelKey('GLM-5.3 (Reasoning)'), 'glm53');
+  assert.deepEqual(pickRows(b.rows, 'intelligence', cited, { top: 1 }).map((r) => r.name), ['Autre', 'GLM-5.3 (Reasoning)']);
+  assert.deepEqual(parseBenchmarks({}).rows, []);
+});

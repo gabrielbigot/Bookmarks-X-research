@@ -5,6 +5,7 @@ import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
 import { isVideoItem } from './lib/youtube.js';
 import { videoPubMs } from './lib/ytdate.js';
+import { parseBenchmarks, newModels, citedModels, pickRows } from './lib/bench.js';
 import { fmtTime, aiTranscriptMessages, parseAiTranscript, chunkSegments } from './lib/transcript.js';
 import { detectorSetFor } from './lib/detsets.js';
 import { chatFull } from './lib/llm.js';
@@ -32,14 +33,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, benchmarks: $('j-bench').checked, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-bench').checked = j.benchmarks !== false; $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -49,7 +50,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-bench', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -96,7 +97,7 @@ async function prepare(s, offset = 0) {
     .sort((a, b) => prioOf(a) - prioOf(b) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const prioNoTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState !== 'ok' && prioOf(v) < 99 && inWeek(v) && !tooOld(v));
   const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v) && (prioOf(v) < 99 || onTopic(v))).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
-  const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length });
+  const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length, extra: s.journal.benchmarks ? 2 : 0 });
   reportVideos.length = Math.min(reportVideos.length, budget.reports);
   const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
   const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
@@ -205,6 +206,24 @@ function planNotes(plan, cfg) {
   if (plan.offTopic) log(`${plan.offTopic} vidéo(s) de la semaine écartée(s) des reportages : hors des rubriques cochées.`);
   if (cfg.maxPages && plan.budget && plan.budget.reportWords) log(`Budget de ${cfg.maxPages} pages : ${plan.reportVideos.length} reportage(s) de ${plan.budget.reportWords} mots au plus${plan.budget.reports < Number(cfg.reportages) ? ` (sur ${cfg.reportages} demandés)` : ''}.`);
   if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
+}
+
+// Classements : benchmarks et catalogue d'OpenRouter (nécessite OpenRouter ; une panne n'empêche jamais l'édition)
+async function loadBench(settings, plan) {
+  if (!/openrouter\.ai/i.test(settings.llm.baseUrl)) return null;
+  const base = new URL(settings.llm.baseUrl).origin + '/api/v1';
+  const headers = settings.llm.apiKey ? { authorization: `Bearer ${settings.llm.apiKey}` } : {};
+  const get = async (path) => { const r = await fetch(base + path, { headers, signal: abort?.signal }); if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); };
+  let bj, mj = null;
+  try { bj = await get('/benchmarks?source=artificial-analysis&max_results=100').catch(() => get('/benchmarks')); } catch (e) { log(`⚠ Classements : benchmarks indisponibles (${e.message}).`); return null; }
+  try { mj = await get('/models'); } catch { /* catalogue facultatif */ }
+  const { rows, meta } = parseBenchmarks(bj);
+  if (!rows.length) { log('⚠ Classements : aucune donnée de benchmark exploitable.'); return null; }
+  const text = [...plan.subjects.flatMap((s) => s.members.map((m) => m.text)), ...plan.videos.map((v) => v.text)].join(' \n ');
+  const cited = citedModels(rows, text);
+  const fresh = mj ? newModels(mj, plan.win) : [];
+  log(`Classements : ${rows.length} modèles (Artificial Analysis), ${cited.size} cité(s) cette semaine, ${fresh.length} nouveau(x) modèle(s) au catalogue.`);
+  return { rows, meta, cited, fresh };
 }
 
 // ---------- génération ----------
@@ -452,10 +471,11 @@ async function generate() {
     prog(0.85);
 
     // mise en pages
+    const bench = cfg.benchmarks ? await loadBench(settings, plan).catch((e) => { if (abort.signal.aborted) throw e; log('⚠ Classements : ' + e.message); return null; }) : null;
     log('Choix des images…');
     await pickImages(entries);
     log('Mise en pages…');
-    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal, reportEntries, trCount, maxPages: cfg.maxPages };
+    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal, reportEntries, trCount, maxPages: cfg.maxPages, bench };
     const rr = await renderPaper(model);
     if (rr.scale < 1) log(`Texte réduit à ${Math.round(rr.scale * 100)} % pour tenir en ${rr.pages} pages (objectif : ${cfg.maxPages}).`);
     if (rr.over) log(`⚠ ${rr.pages} pages malgré la réduction du texte (objectif : ${cfg.maxPages}) : baisse le nombre d'articles, de brèves ou de reportages, ou leur détail.`);
@@ -609,6 +629,33 @@ function barsSvg(vals, keys) {
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
 
+// graphiques de la page Classements : barres horizontales (modèles cités en rouge) et nuage prix / qualité
+function hbarSvg(rows, field, cited, max) {
+  const W = 300, rowH = 17, left = 112, top = 4, H = top + rows.length * rowH + 4;
+  const top0 = Math.max(1, max || Math.max(...rows.map((r) => r[field])));
+  const g = rows.map((r, i) => {
+    const y = top + i * rowH, w = Math.max(1, ((W - left - 34) * r[field]) / top0), hot = cited.has(r.slug || r.name);
+    return `<text x="${left - 6}" y="${y + 11}" font-size="9.5" text-anchor="end" fill="${hot ? '#8c1c13' : '#141210'}" font-family="Arial" font-weight="${hot ? 700 : 400}">${esc(r.name.length > 24 ? r.name.slice(0, 23) + '…' : r.name)}</text><rect x="${left}" y="${y + 2}" width="${w.toFixed(1)}" height="11" fill="${hot ? '#8c1c13' : '#141210'}" opacity="${hot ? 1 : 0.82}"/><text x="${left + w + 4}" y="${y + 11}" font-size="9.5" fill="#4a4640" font-family="Arial">${Math.round(r[field] * 10) / 10}</text>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
+}
+function scatterSvg(rows, cited) {
+  const pts = rows.filter((r) => r.intelligence != null && (r.priceOut ?? r.priceIn) > 0).map((r) => ({ r, p: r.priceOut ?? r.priceIn }));
+  if (pts.length < 3) return '<p class="src">Prix indisponibles.</p>';
+  const W = 300, H = 210, m = { l: 30, r: 10, t: 8, b: 26 };
+  const lx = (p) => Math.log10(p), xs = pts.map((o) => lx(o.p));
+  const x0 = Math.floor(Math.min(...xs) * 2) / 2, x1 = Math.ceil(Math.max(...xs) * 2) / 2 || x0 + 1;
+  const ys = pts.map((o) => o.r.intelligence), y0 = Math.floor(Math.min(...ys) / 10) * 10, y1 = Math.ceil(Math.max(...ys) / 10) * 10;
+  const X = (p) => m.l + ((lx(p) - x0) / Math.max(0.5, x1 - x0)) * (W - m.l - m.r), Y = (v) => H - m.b - ((v - y0) / Math.max(10, y1 - y0)) * (H - m.t - m.b);
+  let g = '';
+  for (let v = y0; v <= y1; v += 10) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="#d9d2c3"/><text x="${m.l - 4}" y="${Y(v) + 3}" font-size="8.5" text-anchor="end" fill="#4a4640" font-family="Arial">${v}</text>`;
+  for (let e = Math.ceil(x0); e <= x1; e++) g += `<line y1="${m.t}" y2="${H - m.b}" x1="${X(10 ** e)}" x2="${X(10 ** e)}" stroke="#ece6d8"/><text x="${X(10 ** e)}" y="${H - 12}" font-size="8.5" text-anchor="middle" fill="#4a4640" font-family="Arial">${10 ** e < 1 ? 10 ** e : '$' + 10 ** e}</text>`;
+  g += `<text x="${(W + m.l) / 2}" y="${H - 2}" font-size="8.5" text-anchor="middle" fill="#4a4640" font-family="Arial">prix de sortie ($ par million de tokens, échelle log)</text>`;
+  const label = new Set([...pts].sort((a, b) => b.r.intelligence - a.r.intelligence).slice(0, 3).map((o) => o.r));
+  for (const o of pts) { const hot = cited.has(o.r.slug || o.r.name); g += `<circle cx="${X(o.p).toFixed(1)}" cy="${Y(o.r.intelligence).toFixed(1)}" r="${hot ? 4 : 2.8}" fill="${hot ? '#8c1c13' : '#141210'}" opacity="${hot ? 1 : 0.6}"/>`; if (hot || label.has(o.r)) g += `<text x="${(X(o.p) + 5).toFixed(1)}" y="${(Y(o.r.intelligence) - 4).toFixed(1)}" font-size="8.5" fill="${hot ? '#8c1c13' : '#4a4640'}" font-family="Arial">${esc(o.r.name.length > 20 ? o.r.name.slice(0, 19) + '…' : o.r.name)}</text>`; }
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
+}
+
 // carte de chaleur : un carré par heure et par jour (plus foncé = plus d'enregistrements)
 function heatHtml(st) {
   const max = Math.max(1, ...st.heat.flat());
@@ -681,6 +728,24 @@ async function renderOnce(model) {
     <div class="g2" style="grid-template-columns:1.5fr 1fr"><div class="l"><h4 class="t">Quand vous enregistrez <small class="src">(par jour et par heure)</small></h4>${heatHtml(st)}</div>
     <div class="r"><h4 class="t">Les sites les plus cités</h4>${domainsHtml(st)}</div></div>`);
   secPage.set('stats', chiffres);
+  // classements des modèles (Artificial Analysis via OpenRouter)
+  const bn = model.bench;
+  if (bn && bn.rows.length) {
+    const ci = bn.cited, pI = pickRows(bn.rows, 'intelligence', ci, { top: 10, max: 15 }), pC = pickRows(bn.rows, 'coding', ci, { top: 8, max: 12 }), pA = pickRows(bn.rows, 'agentic', ci, { top: 8, max: 12 });
+    const asOf = bn.meta?.as_of ? ` (état au ${esc(String(bn.meta.as_of).slice(0, 10))})` : '';
+    const panel = (title, rows, field) => rows.length ? `<h4 class="t">${title}</h4>${hbarSvg(rows, field, ci)}` : '';
+    const bp = fixedPage('Classements des modèles', `<p class="kick">Classements</p><h2 class="t">Les modèles de la semaine</h2><p class="dek">Indices d’Artificial Analysis relayés par OpenRouter${asOf}. En rouge : les modèles dont il a été question dans vos lectures cette semaine.</p>
+      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${panel('Indice d’intelligence', pI, 'intelligence')}</div><div class="r">${panel('Indice de code', pC, 'coding')}</div></div>
+      <div class="dbl"></div>
+      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${panel('Indice d’agent', pA, 'agentic')}</div><div class="r"><h4 class="t">Qualité et prix</h4>${scatterSvg(bn.rows, ci)}</div></div>
+      <p class="src" style="margin-top:8px">Source : Artificial Analysis (artificialanalysis.ai), données obtenues via l’API d’OpenRouter. Les scores évoluent : ils décrivent l’état du classement au moment de la génération.</p>`);
+    secPage.set('bench', bp);
+    if (bn.fresh.length) {
+      const fmtP = (v) => (v == null ? '—' : v === 0 ? 'gratuit' : '$' + (Math.round(v * 100) / 100));
+      secPage.set('bench2', fixedPage('Nouveaux modèles', `<p class="kick">Catalogue</p><h2 class="t">Nouveaux modèles de la semaine</h2><p class="dek">Modèles ajoutés au catalogue d’OpenRouter pendant la période (prix en dollars par million de tokens).</p>
+        <table><tr><th>Modèle</th><th>Ajouté le</th><th class="n">Contexte</th><th class="n">Entrée</th><th class="n">Sortie</th></tr>${bn.fresh.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.day.split('-').reverse().join('/'))}</td><td class="n">${m.ctx ? Math.round(m.ctx / 1000) + ' k' : '—'}</td><td class="n">${fmtP(m.priceIn)}</td><td class="n">${fmtP(m.priceOut)}</td></tr>`).join('')}</table>`));
+    }
+  }
   // vidéos
   const repIds = new Set(reps.map((e) => e.subject.rep.id));
   const vlist = plan.videos.filter((v) => !repIds.has(v.id));
@@ -706,7 +771,7 @@ async function renderOnce(model) {
   front.style.setProperty('--s', String(curScale));
   paper.prepend(front);
   const numOf = (pg) => pages().indexOf(pg) + 1;
-  const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Reportages', secPage.get('reports')], ['Chiffres', secPage.get('stats')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
+  const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Reportages', secPage.get('reports')], ['Chiffres', secPage.get('stats')], ['Classements des modèles', secPage.get('bench')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
   const others = entries.filter((e) => e !== lead && e.tier === 'lead').concat(entries.filter((e) => e !== lead && e.tier === 'article')).slice(0, 3);
   const leadWords = (n) => lead.article.paragraphs.join(' ').split(/\s+/).slice(0, n).join(' ').replace(/\s*\[[TLWV][\d,TLWV]*\]/g, '');
   const buildFront = (n) => `<h1 class="mast">${esc(NAME)}</h1><div class="tag">Ce que vous avez gardé cette semaine — rédigé d’après vos bookmarks X et YouTube</div><div class="dbl" style="margin:4px 0 0"></div>
