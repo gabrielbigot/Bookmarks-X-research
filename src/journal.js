@@ -32,14 +32,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -49,7 +49,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -85,16 +85,21 @@ async function prepare(s, offset = 0) {
   const inWeek = (v) => (v.watched || []).some((d) => inWindow(d, win)) || (!v.addedBulk && v.addedAt && inWindow(dayKey(v.addedAt), win));
   const withTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState === 'ok');
   const prio = String(s.journal.priority || '').split(/[,;\n]/).map((x) => x.trim().replace(/^@/, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')).filter(Boolean);
-  const prioOf = (v) => { const h = [v.name, v.handle].map((x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')); const i = prio.findIndex((p) => h.some((x) => x && (x === p || x.includes(p)))); return i < 0 ? 99 : i; };
+  const prioOf = (v) => { const h = [v.name, v.handle].map((x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')); const i = prio.findIndex((p) => h.some((x) => x && (x === p || x.includes(p) || (x.length >= 5 && p.includes(x))))); return i < 0 ? 99 : i; };
   const tooOld = (v) => { if (!minPub) return false; const pm = videoPubMs(v); return !!pm && dayKey(pm) < minPub; };
-  const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v)).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
+  // sujet : une vidéo n'est retenue pour un reportage que si elle correspond à l'une des rubriques (détecteurs) cochées, sauf chaîne prioritaire
+  const hasDetectors = sections.some((x) => x.id !== 'all');
+  const onTopic = (v) => !s.journal.reportTopicOnly || !hasDetectors || sections.some((x) => x.set.has(v.id));
+  const offTopic = withTr.filter((v) => inWeek(v) && !tooOld(v) && prioOf(v) === 99 && !onTopic(v));
+  const prioNoTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState !== 'ok' && prioOf(v) < 99 && inWeek(v) && !tooOld(v));
+  const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v) && (prioOf(v) < 99 || onTopic(v))).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length });
   reportVideos.length = Math.min(reportVideos.length, budget.reports);
   const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
   const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
   const oldTweets = minPub ? items.filter((t) => !isVideoItem(t) && t.createdAt && t.createdAt.slice(0, 10) < minPub && eventDays(t, sv).some((d) => inWindow(d, win))).length : 0;
   const oldVideos = withTr.filter((v) => inWeek(v) && tooOld(v)).length;
-  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos };
+  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, offTopic: offTopic.length, prioNoTr: prioNoTr.map((v) => v.text) };
 }
 
 function estimatePlan(plan, cfg) {
@@ -189,6 +194,14 @@ async function pickImages(entries) {
   await Promise.all(Array.from({ length: 6 }, worker));
 }
 
+// Remarques sur le choix des éléments (journal de génération et estimation)
+function planNotes(plan, cfg) {
+  if (plan.prioNoTr.length) log(`⚠ ${plan.prioNoTr.length} vidéo(s) de vos chaînes prioritaires cette semaine sans transcription (pas de reportage possible) : ${plan.prioNoTr.slice(0, 4).map((t) => '« ' + t.slice(0, 40) + ' »').join(', ')}${plan.prioNoTr.length > 4 ? '…' : ''} — lancez « Transcriptions » dans le panneau.`);
+  if (plan.offTopic) log(`${plan.offTopic} vidéo(s) de la semaine écartée(s) des reportages : hors des rubriques cochées.`);
+  if (cfg.maxPages && plan.budget && plan.budget.reportWords) log(`Budget de ${cfg.maxPages} pages : ${plan.reportVideos.length} reportage(s) de ${plan.budget.reportWords} mots au plus${plan.budget.reports < Number(cfg.reportages) ? ` (sur ${cfg.reportages} demandés)` : ''}.`);
+  if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
+}
+
 // ---------- génération ----------
 async function generate() {
   const cfg = readCfg();
@@ -204,8 +217,7 @@ async function generate() {
   try {
     const plan = await prepare(settings, Number($('j-week').value) || 0);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets (${plan.tiers.leads.length} grands sujets, ${plan.tiers.articles.length} articles, ${plan.tiers.briefs.length} brèves).`);
-    if (cfg.maxPages && plan.budget && plan.budget.reportWords) log(`Budget de ${cfg.maxPages} pages : ${plan.reportVideos.length} reportage(s) de ${plan.budget.reportWords} mots au plus${plan.budget.reports < Number(cfg.reportages) ? ` (sur ${cfg.reportages} demandés)` : ''}.`);
-    if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
+    planNotes(plan, cfg);
     if (!plan.subjects.length) { log('Rien à publier : aucun élément retenu cette semaine.'); return; }
     if (!plan.tiers.leads.length && !plan.tiers.articles.length && !plan.tiers.briefs.length) { log('Rien à publier : les nombres de grands sujets, d’articles et de brèves sont à 0.'); return; }
     const est = estimatePlan(plan, cfg);
@@ -721,6 +733,7 @@ $('j-est').onclick = async () => {
     const plan = await prepare(settings, Number($('j-week').value) || 0);
     const est = estimatePlan(plan, cfg);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets.`);
+    planNotes(plan, cfg);
     log(`Grands sujets : ${plan.tiers.leads.length} · articles : ${plan.tiers.articles.length} · brèves : ${plan.tiers.briefs.length}.`);
     log(`≈ ${est.calls} appels au modèle, ≈ ${Math.round(est.tin / 1000)} k tokens lus et ${Math.round(est.tout / 1000)} k écrits.`);
     log(`Coût estimé : ${fmtUsd(est.usd)} avec les prix indiqués (plafond ${fmtUsd(cfg.budget)}). Ordre de grandeur : le coût réel s’affichera après génération.`);

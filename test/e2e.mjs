@@ -1143,6 +1143,8 @@ await journal.evaluate(async () => { // une vidéo regardée cette semaine, avec
 });
 await journal.click('#j-est');
 await waitFor(async () => /Coût estimé :/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'estimation du coût du journal', 60000);
+assert.match(await journal.locator('#j-log').innerText(), /vidéo\(s\) de la semaine écartée\(s\) des reportages : hors des rubriques/, 'la vidéo hors rubriques est écartée des reportages');
+await journal.evaluate(() => { const c = document.getElementById('j-topic'); c.checked = false; c.dispatchEvent(new Event('change')); });
 await journal.click('#j-go');
 await waitFor(async () => /Édition terminée/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /⚠/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'fin de la génération du journal', 120000);
 const jlog = await journal.locator('#j-log').innerText();
