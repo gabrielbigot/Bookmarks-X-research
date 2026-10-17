@@ -8,6 +8,7 @@ export async function chat(llm, messages, opts = {}) {
 
 // Comme chat(), mais retourne aussi l'usage (tokens, et le coût réel si le fournisseur le donne : OpenRouter).
 // opts.model remplace le modèle configuré ; opts.maxTokens borne la sortie ; opts.temperature.
+const thinkMode = new Map(); // modèle -> réglage du raisonnement accepté
 export async function chatFull(llm, messages, { json = false, signal, model, maxTokens, temperature = 0.2, plugins, noThink = false } = {}) {
   const url = llm.baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const body = { model: model || llm.model, messages, temperature, stream: false };
@@ -31,17 +32,32 @@ export async function chatFull(llm, messages, { json = false, signal, model, max
     }
     return res.json();
   };
-  let data;
-  try { data = await call(body); } catch (e) {
-    if (!(body.reasoning && e.status === 400)) throw e;
-    const { reasoning, ...rest } = body; // ce modèle refuse le réglage « sans raisonnement » : on réessaie sans
-    data = await call(rest);
+  // Réglage du raisonnement, mémorisé par modèle : « off » (désactivé) -> « low » (raisonnement court, marge de sortie ajoutée) -> « default » (rien)
+  const key = body.model;
+  const modes = ['off', 'low', 'default'];
+  let mode = noThink && /openrouter\.ai/i.test(llm.baseUrl) ? (thinkMode.get(key) || 'off') : 'default';
+  const bodyFor = (m) => {
+    const { reasoning, ...rest } = body;
+    if (m === 'off') return { ...rest, reasoning: { enabled: false } };
+    if (m === 'low' && rest.max_tokens) return { ...rest, reasoning: { effort: 'low' }, max_tokens: rest.max_tokens + 2500 };
+    if (m === 'low') return { ...rest, reasoning: { effort: 'low' } };
+    return m === 'default' && noThink && rest.max_tokens ? { ...rest, max_tokens: rest.max_tokens + 2500 } : rest;
+  };
+  let data, cur;
+  for (;;) {
+    cur = bodyFor(mode);
+    try { data = await call(cur); break; } catch (e) {
+      const next = modes[modes.indexOf(mode) + 1];
+      if (!(noThink && e.status === 400 && next && /reason/i.test(e.message))) throw e; // « Reasoning is mandatory… » : on essaie le réglage suivant
+      mode = next;
+    }
   }
+  if (noThink && /openrouter\.ai/i.test(llm.baseUrl)) thinkMode.set(key, mode);
   let msg = data?.choices?.[0];
   if (data?.error && !msg) throw new Error('API IA : ' + String(data.error.message || data.error.code || JSON.stringify(data.error)).slice(0, 200));
   // sortie vide parce que la limite a été consommée par le raisonnement : un seul nouvel essai avec une limite double
-  if (!String(msg?.message?.content ?? '').trim() && msg?.finish_reason === 'length' && maxTokens && maxTokens < 16000) {
-    data = await call({ ...body, max_tokens: maxTokens * 2 });
+  if (!String(msg?.message?.content ?? '').trim() && msg?.finish_reason === 'length' && cur.max_tokens && cur.max_tokens < 16000) {
+    data = await call({ ...cur, max_tokens: cur.max_tokens * 2 });
     msg = data?.choices?.[0];
   }
   const out = msg?.message?.content;

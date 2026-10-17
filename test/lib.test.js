@@ -255,3 +255,27 @@ test('sauvegarde : tableaux de bord, sources primaires et verdicts officiels fon
   assert.deepEqual(out.dash.official, { v: 'desc', m: { 1: 90 } });
   assert.equal(out.dash.widgets[0].board, 'b1');
 });
+
+import { chatFull } from '../src/lib/llm.js';
+test('chatFull : raisonnement obligatoire -> réglage « low », mémorisé, puis limite doublée si sortie vide', async () => {
+  const calls = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const b = JSON.parse(init.body);
+    calls.push(b);
+    const json = (o, status = 200) => ({ ok: status < 400, status, json: async () => o, text: async () => JSON.stringify(o) });
+    if (b.reasoning?.enabled === false) return json({ error: { message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' } }, 400);
+    if (b.max_tokens < 5000) return json({ choices: [{ finish_reason: 'length', message: { content: null } }] });
+    return json({ choices: [{ finish_reason: 'stop', message: { content: '{"ok":1}' } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  };
+  try {
+    const llm = { baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'k', model: 'z-ai/glm-test' };
+    const r = await chatFull(llm, [{ role: 'user', content: 'x' }], { maxTokens: 1000, noThink: true });
+    assert.equal(r.text, '{"ok":1}');
+    assert.deepEqual(calls.map((c) => c.reasoning), [{ enabled: false }, { effort: 'low' }, { effort: 'low' }]);
+    assert.equal(calls[2].max_tokens, 7000); // (1000 + 2500) × 2
+    calls.length = 0;
+    await chatFull(llm, [{ role: 'user', content: 'x' }], { maxTokens: 1000, noThink: true });
+    assert.equal(calls[0].reasoning.effort, 'low', 'le réglage accepté est mémorisé : pas de nouvel essai inutile');
+  } finally { globalThis.fetch = orig; }
+});
