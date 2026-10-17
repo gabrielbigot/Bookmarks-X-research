@@ -166,3 +166,36 @@ test('transcriptions : vidéos proches d’un sujet, passages, parties, résumé
   assert.match(pack.text, /\[V1\] Vidéo YouTube « Titre de la vidéo » \(Chaîne\) — extraits de la transcription : \[1:00\] le sujet précis ici/);
   assert.equal(citeHtml('Dit [V1].', pack, makeBibliography()), 'Dit <sup class="c">1</sup>.');
 });
+
+import { reportagePlan, splitPoints, parseSection, parseIntro, reportageSectionMessages } from '../src/lib/journal.js';
+test('reportage long : la longueur suit la durée', () => {
+  const h = reportagePlan({ durationSec: 3600 }, 'detailed');
+  assert.ok(h.words >= 2400 && h.sections >= 4, JSON.stringify(h));
+  const c = reportagePlan({ durationSec: 3600 }, 'short');
+  assert.ok(c.words <= 1400);
+  const petit = reportagePlan({ durationSec: 300 }, 'detailed');
+  assert.ok(petit.words >= 800 && petit.sections <= 2);
+  assert.ok(reportagePlan({ durationSec: 10 * 3600 }, 'detailed').words <= 3400);
+});
+test('splitPoints : groupes consécutifs et citations rattachées', () => {
+  const pts = Array.from({ length: 24 }, (_, i) => ({ t: i * 60, text: 'Point numéro ' + i + ' détaillé' }));
+  const g = splitPoints([{ points: pts.slice(0, 12), quote: { t: 30, text: 'q1' } }, { points: pts.slice(12), quote: { t: 900, text: 'q2' } }], 4);
+  assert.equal(g.length, 4);
+  assert.deepEqual(g.map((x) => x.points.length), [6, 6, 6, 6]);
+  assert.ok(g[0].points.at(-1).t < g[1].points[0].t);
+  assert.deepEqual(g[0].quotes.map((q) => q.text), ['q1']);
+  assert.deepEqual(g[2].quotes.map((q) => q.text), ['q2']);
+  assert.equal(splitPoints([{ points: pts.slice(0, 4) }], 6).length, 1);
+});
+test('parseSection / parseIntro : citations nettoyées', () => {
+  const pack = { sources: [{ id: 'V1', kind: 'video', text: 'Une phrase exacte de la vidéo qui sert de citation.' }] };
+  const s = parseSection(JSON.stringify({ heading: '## Le cœur du sujet', paragraphs: ['Un paragraphe suffisamment long pour passer le filtre [V1][T9].'] }), pack);
+  assert.equal(s.heading, 'Le cœur du sujet');
+  assert.match(s.paragraphs[0], /\[V1\]/);
+  assert.ok(!/T9/.test(s.paragraphs[0]));
+  const a = parseIntro(JSON.stringify({ title: 'Un titre', dek: 'Chapeau [V1]', lede: 'Introduction assez longue pour être gardée dans le reportage. [V1]', pull_quote: 'Une phrase exacte de la vidéo qui sert de citation.', pull_source: 'V1', key_points: ['a', 'b'] }), pack);
+  assert.equal(a.paragraphs.length, 1);
+  assert.match(a.pull, /phrase exacte/);
+  assert.throws(() => parseSection('{"paragraphs": []}', pack));
+  assert.equal(reportageSectionMessages({ text: 'V', name: 'C' }, { points: [{ t: 5, text: 'Un point' }], quotes: [] }, { index: 0, total: 3, words: 500 }).length, 2);
+});

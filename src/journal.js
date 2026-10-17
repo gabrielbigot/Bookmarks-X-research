@@ -10,7 +10,7 @@ import { isPublicUrl } from './lib/links.js';
 import { handleKey, OFFICIAL_DESC } from './lib/widgets.js';
 import {
   weekWindow, inWindow, dayLabel, buildSubjects, assignTiers, weekStats, extractPageText, evidenceFor, articleMessages, briefsMessages, editorialMessages,
-  searchMessages, parseFindings, verifyMessages, applyVerification, meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportageMessages, videoUrl, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
+  searchMessages, parseFindings, verifyMessages, applyVerification, meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportagePlan, splitPoints, reportageIntroMessages, reportageSectionMessages, parseSection, parseIntro, videoUrl, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
 } from './lib/journal.js';
 
 const $ = (id) => document.getElementById(id);
@@ -30,21 +30,21 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(5, Math.round(Number($('j-reports').value) || 0))), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const sel = j.sections ?? detectors.map((d) => d.id);
   $('j-sections').innerHTML = detectors.length ? detectors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}"${sel.includes(d.id) ? ' checked' : ''}> ${esc(d.name)}</label>`).join('') : '<span class="hint">Aucun détecteur : le journal couvrira toute la semaine (crée des détecteurs dans « Mes stats » pour avoir des rubriques).</span>';
   const st = $('j-status');
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -76,7 +76,9 @@ async function prepare(s) {
   const day = (v) => String(v.lastWatched || dayKey(v.addedAt || 0));
   const inWeek = (v) => (v.watched || []).some((d) => inWindow(d, win)) || (v.addedAt && inWindow(dayKey(v.addedAt), win));
   const withTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState === 'ok');
-  const reportVideos = withTr.filter(inWeek).sort((a, b) => ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
+  const prio = String(s.journal.priority || '').split(/[,;\n]/).map((x) => x.trim().replace(/^@/, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')).filter(Boolean);
+  const prioOf = (v) => { const h = [v.name, v.handle].map((x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')); const i = prio.findIndex((p) => h.some((x) => x && (x === p || x.includes(p)))); return i < 0 ? 99 : i; };
+  const reportVideos = withTr.filter(inWeek).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const recent = dayKey(Date.now() - 60 * DAY);
   const eligible = new Set(withTr.filter((v) => day(v) >= recent).map((v) => v.id));
   return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, eligible };
@@ -98,9 +100,10 @@ function estimatePlan(plan, cfg) {
   if (cfg.search) for (let i = 0; i < Math.min(cfg.searchTop, detailed.length); i++) { add(estimateCall(1500, 900, prices)); usd += cfg.searchPrice; }
   for (const v of plan.reportVideos) {
     const parts = Math.min(12, Math.max(1, Math.ceil((v.trChars || 20000) / 9000)));
-    for (let i = 0; i < parts; i++) add(estimateCall(9500, 500, prices));
-    add(estimateCall(4500, 1700, prices));
-    if (cfg.verify) add(estimateCall(6000, 300, prices));
+    for (let i = 0; i < parts; i++) add(estimateCall(9500, 900, prices));
+    const rp = reportagePlan(v, cfg.reportDepth);
+    add(estimateCall(4500, 500, prices));
+    for (let i = 0; i < rp.sections; i++) { add(estimateCall(2500, Math.round(rp.perSection * 1.8), prices)); if (cfg.verify) add(estimateCall(rp.perSection * 7 + 800, 250, prices)); }
   }
   if (cfg.verify) for (const sub of detailed) add(estimateCall(evidenceFor(sub).text.length + (sub.links.length ? 4500 : 0) + (cfg.search ? 2500 : 0) + 1500, 400, prices));
   return { usd, calls, tin, tout };
@@ -295,27 +298,47 @@ async function generate() {
           const parts = splitTranscript(chunks);
           const sums = [];
           let pi = 0;
-          const pw = async () => { while (pi < parts.length && !abort.signal.aborted) { const part = parts[pi++]; try { sums.push(parseSummary(await ask(summaryMessages(video, part), { model: assist, maxTokens: 800 }), part)); } catch (err) { if (err.message === 'budget' || abort.signal.aborted) throw err; } } };
+          const pw = async () => { while (pi < parts.length && !abort.signal.aborted) { const part = parts[pi++]; try { sums.push(parseSummary(await ask(summaryMessages(video, part), { model: assist, maxTokens: 1400 }), part)); } catch (err) { if (err.message === 'budget' || abort.signal.aborted) throw err; } } };
           await Promise.all([pw(), pw()]);
           const pack = reportageEvidence(video, sums);
           if (pack.points < 3) { log(`  « ${video.text.slice(0, 50)} » : transcription trop pauvre, ignorée.`); continue; }
-          let article = null;
-          for (let attempt = 0; attempt < 2 && !article; attempt++) {
-            const msgs = reportageMessages(video, pack);
+          const rp = reportagePlan(video, cfg.reportDepth);
+          log(`  « ${video.text.slice(0, 50)} » : ${pack.points} points, reportage d’environ ${rp.words} mots en ${rp.sections} partie(s)…`);
+          const groups = splitPoints(sums, rp.sections);
+          // ouverture (titre, chapeau, introduction, citation, points à retenir), puis une partie après l'autre
+          let intro = null;
+          for (let attempt = 0; attempt < 2 && !intro; attempt++) {
+            const msgs = reportageIntroMessages(video, pack);
             if (attempt) msgs.push({ role: 'user', content: 'Réponds uniquement avec un objet JSON valide, sans texte autour.' });
-            try { article = parseArticle(await ask(msgs, { model: writer, maxTokens: 2400 }), pack); }
+            try { intro = parseIntro(await ask(msgs, { model: writer, maxTokens: 1200 }), pack); }
             catch (err) { if (err.message === 'budget' || abort.signal.aborted) throw err; if (!/inexploitable|JSON|Unexpected|Expected/.test(err.message)) throw err; }
           }
-          if (!article) continue;
+          if (!intro) continue;
+          const secs = [];
+          for (let gi = 0; gi < groups.length; gi++) {
+            let sec = null;
+            for (let attempt = 0; attempt < 2 && !sec; attempt++) {
+              const msgs = reportageSectionMessages(video, groups[gi], { index: gi, total: groups.length, words: Math.round(rp.words / groups.length / 10) * 10 });
+              if (attempt) msgs.push({ role: 'user', content: 'Réponds uniquement avec un objet JSON valide, sans texte autour.' });
+              try { sec = parseSection(await ask(msgs, { model: writer, maxTokens: Math.round(rp.perSection * 2.6) + 600 }), pack); }
+              catch (err) { if (err.message === 'budget' || abort.signal.aborted) throw err; if (!/inexploitable|JSON|Unexpected|Expected/.test(err.message)) throw err; }
+            }
+            if (!sec) continue;
+            if (cfg.verify && !budgetHit) { // relecture partie par partie (les intertitres restent attachés à leur partie)
+              const v = verifyMessages({ paragraphs: sec.paragraphs, dek: '', points: [] }, pack);
+              if (v.lines.length) {
+                try { const r = applyVerification({ paragraphs: sec.paragraphs }, v.lines, await ask(v.messages, { model: assist, maxTokens: Math.min(1800, 300 + v.lines.length * 14) })); sec.paragraphs = r.article.paragraphs; removedTotal += r.removed; }
+                catch (err) { if (abort.signal.aborted) throw err; if (err.message !== 'budget') log(`⚠ Relecture du reportage : ${err.message}`); }
+              }
+            }
+            secs.push(sec);
+          }
+          if (!secs.length) continue;
+          const heads = {}, paragraphs = [...intro.paragraphs];
+          for (const sec of secs) { if (sec.heading) heads[paragraphs.length] = sec.heading; paragraphs.push(...sec.paragraphs); }
+          const article = { ...intro, paragraphs, heads, words: paragraphs.join(' ').split(/\s+/).length };
           const day0 = (video.watched || [])[0] || dayKey(video.addedAt || Date.now());
           const entry = { tier: 'report', pack, article, image: null, subject: { id: 'r:' + video.id, section: 'reports', sectionName: 'Reportage vidéo', members: [video], rep: video, firstDay: day0, lastDay: day0, images: [], links: [] } };
-          if (cfg.verify && !budgetHit) {
-            const v = verifyMessages(article, pack);
-            if (v.lines.length) {
-              try { const r = applyVerification(article, v.lines, await ask(v.messages, { model: assist, maxTokens: Math.min(1800, 300 + v.lines.length * 14) })); entry.article = r.article; removedTotal += r.removed; }
-              catch (err) { if (abort.signal.aborted) throw err; if (err.message !== 'budget') log(`⚠ Relecture du reportage : ${err.message}`); }
-            }
-          }
           if (video.thumb && await probe(video.thumb)) entry.image = { url: video.thumb, alt: video.text, card: true };
           reportEntries.push(entry);
         } catch (err) {
@@ -424,6 +447,7 @@ function articleBlocks(e, bib) {
   const img = e.image && !a.fallback ? figHtml(e.image, lead, e.image.card ? `Illustration : ${e.image.alt}` : null) : '';
   blocks.push({ ref, html: head + img + `<p class="${lead ? 'drop ' : ''}">${cite(a.paragraphs[0])}</p>` });
   a.paragraphs.slice(1).forEach((p, i) => {
+    if (a.heads?.[i + 1]) blocks.push({ html: `<h4 class="t sub">${esc(a.heads[i + 1])}</h4>` });
     blocks.push({ html: `<p>${cite(p)}</p>` });
     if (i === 0 && a.pull) blocks.push({ html: `<blockquote class="pull">« ${esc(a.pull)} »<cite>${esc(a.pullSource ? (report ? vs.channel : '@' + (e.pack.sources.find((s) => s.id === a.pullSource)?.handle || '')) : '')}</cite></blockquote>` });
   });

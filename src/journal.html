@@ -31,7 +31,9 @@
       <label class="chk"><input id="j-links" type="checkbox"> Lire les pages liées dans les tweets <small>(demande une autorisation d’accès aux sites, une seule fois)</small></label>
       <div class="web">
         <label class="chk"><input id="j-tr" type="checkbox"> Compléter les sujets avec les transcriptions de mes vidéos <small>(extraits horodatés des vidéos proches du sujet)</small></label>
-        <div class="grid"><label>Reportages vidéo<input id="j-reports" type="number" min="0" max="5"></label></div>
+        <div class="grid"><label>Reportages vidéo<input id="j-reports" type="number" min="0" max="8"></label>
+          <label>Détail des reportages<select id="j-depth"><option value="short">Court (≈ 1 page)</option><option value="normal">Normal (≈ 2 pages pour 1 h)</option><option value="detailed">Détaillé (≈ 3 à 4 pages pour 1 h)</option></select></label></div>
+        <label>Chaînes prioritaires pour les reportages <small>(noms ou @identifiants séparés par des virgules ; leurs vidéos de la semaine passent en premier)</small><input id="j-prio" type="text" placeholder="ex. Silicon Carne, @hey_initium"></label>
         <label class="chk"><input id="j-search" type="checkbox"> Recherche web sur les grands sujets <small>(OpenRouter : ajoute des sources et du contexte ; payant, voir le prix par recherche)</small></label>
         <div class="grid">
           <label>Sujets recherchés<input id="j-top" type="number" min="1" max="20"></label>

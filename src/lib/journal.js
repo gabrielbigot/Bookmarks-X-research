@@ -222,14 +222,14 @@ export function splitTranscript(chunks, { size = 9000, maxParts = 12 } = {}) {
 }
 export function summaryMessages(video, part) {
   return [
-    { role: 'system', content: 'Tu résumes une partie de la transcription d’une vidéo pour un journal. Utilise UNIQUEMENT ce texte, n’ajoute rien. Réponds uniquement en JSON : {"points": [{"t": secondes (nombre) du début du passage concerné, "text": "une idée ou un fait précis, en une phrase, en français"}], "quote": {"t": secondes, "text": "citation EXACTE de 80 à 220 caractères, copiée mot pour mot dans le texte"}}. 4 à 8 points ; omets "quote" s’il n’y a rien de citable.' },
+    { role: 'system', content: 'Tu résumes une partie de la transcription d’une vidéo pour un journal. Utilise UNIQUEMENT ce texte, n’ajoute rien. Réponds uniquement en JSON : {"points": [{"t": secondes (nombre) du début du passage concerné, "text": "une idée ou un fait précis, en une phrase, en français"}], "quote": {"t": secondes, "text": "citation EXACTE de 80 à 220 caractères, copiée mot pour mot dans le texte"}}. 6 à 12 points, aussi détaillés que possible (chiffres, noms, étapes, arguments) ; omets "quote" s’il n’y a rien de citable.' },
     { role: 'user', content: `Vidéo : « ${clean(video.text)} » (${clean(video.name)})\nPARTIE (de ${fmtTime(Math.floor(part.from))} à ${fmtTime(Math.floor(part.to))}) :\n${part.text}` },
   ];
 }
 export function parseSummary(text, part) {
   const o = parseJsonLoose(text);
   const norm = (x) => clean(x).toLowerCase().replace(/\[[\d:]+\]/g, ' ').replace(/[«»"'’]/g, '').replace(/\s+/g, ' ');
-  const points = (Array.isArray(o.points) ? o.points : []).map((p) => ({ t: Math.max(0, Math.floor(Number(p?.t) || part.from)), text: clean(p?.text) })).filter((p) => p.text.length > 10).slice(0, 8);
+  const points = (Array.isArray(o.points) ? o.points : []).map((p) => ({ t: Math.max(0, Math.floor(Number(p?.t) || part.from)), text: clean(p?.text) })).filter((p) => p.text.length > 10).slice(0, 12);
   const q = o.quote && clean(o.quote.text);
   const quote = q && q.length >= 40 && norm(part.text).includes(norm(q)) ? { t: Math.floor(Number(o.quote.t) || part.from), text: q } : null; // la citation doit figurer mot pour mot
   return { points, quote };
@@ -249,9 +249,57 @@ export function reportageMessages(video, pack) {
   ];
 }
 
+// Reportage long, en sections : la longueur suit la durée de la vidéo.
+export const DEPTH = { short: { perMin: 20, max: 1400, min: 450 }, normal: { perMin: 32, max: 2400, min: 600 }, detailed: { perMin: 48, max: 3400, min: 800 } };
+export function reportagePlan(video, depth = 'detailed') {
+  const d = DEPTH[depth] || DEPTH.detailed;
+  const minutes = Math.max(5, (video.durationSec || 0) / 60 || 12);
+  const words = Math.round(Math.max(d.min, Math.min(d.max, minutes * d.perMin)) / 50) * 50;
+  const sections = Math.max(1, Math.min(7, Math.round(words / 520)));
+  return { words, sections, perSection: Math.round(words / sections / 10) * 10 };
+}
+// Points horodatés répartis en `n` groupes consécutifs (même nombre de points par groupe).
+export function splitPoints(summaries, n) {
+  const pts = summaries.flatMap((s) => s.points).sort((a, b) => a.t - b.t);
+  const quotes = summaries.map((s) => s.quote).filter(Boolean);
+  n = Math.max(1, Math.min(n, Math.floor(pts.length / 3)));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const g = pts.slice(Math.floor((i * pts.length) / n), Math.floor(((i + 1) * pts.length) / n));
+    if (!g.length) continue;
+    const from = g[0].t, to = i === n - 1 ? Infinity : pts[Math.floor(((i + 1) * pts.length) / n)].t;
+    out.push({ points: g, quotes: quotes.filter((q) => q.t >= from && q.t < to) });
+  }
+  return out;
+}
+const groupText = (video, g) => `[V1] Vidéo YouTube « ${clean(video.text)} » (${clean(video.name)}). Points clés de cette partie, avec leur horodatage :\n${g.points.map((p) => `- (${fmtTime(p.t)}) ${p.text}`).join('\n')}${g.quotes.length ? '\n\nExtraits exacts :\n' + g.quotes.map((q) => `[${fmtTime(q.t)}] ${q.text}`).join('\n') : ''}`;
+export function reportageIntroMessages(video, pack) {
+  return [
+    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu prépares l’ouverture d’un grand reportage sur une vidéo, à partir de ses points clés horodatés. Réponds uniquement en JSON : {"title": "titre informatif de 8 à 14 mots", "dek": "chapeau d’une phrase", "lede": "paragraphe d’introduction d’environ 90 mots qui présente la vidéo, son auteur et son fil directeur", "pull_quote": "citation exacte tirée des extraits exacts, ou chaîne vide", "pull_source": "V1", "key_points": ["5 points à retenir"]}.` },
+    { role: 'user', content: `DOSSIER :\n${pack.text}` },
+  ];
+}
+export function reportageSectionMessages(video, group, { index, total, words }) {
+  return [
+    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu rédiges la partie ${index + 1} sur ${total} d’un grand reportage sur une vidéo, à partir des points clés horodatés de cette partie uniquement. Raconte ce que dit la vidéo dans l’ordre, avec le plus de précision possible : chiffres, noms, étapes, arguments, exemples, en situant les moments importants (par exemple « vers 12:40 »). ${index ? 'N’introduis pas la vidéo : l’introduction est déjà écrite.' : 'L’introduction est déjà écrite : entre directement dans le contenu.'} Réponds uniquement en JSON : {"heading": "intertitre de 3 à 8 mots", "paragraphs": ["…"]}. Rédige environ ${words} mots en ${Math.max(3, Math.round(words / 110))} paragraphes.` },
+    { role: 'user', content: `DOSSIER :\n${groupText(video, group)}` },
+  ];
+}
+export function parseSection(text, pack) {
+  const o = parseJsonLoose(text);
+  const valid = new Set(pack.sources.map((s) => s.id));
+  const paragraphs = (Array.isArray(o.paragraphs) ? o.paragraphs : String(o.paragraphs || '').split(/\n+/)).map((p) => cleanCitations(clean(p), valid)).filter((p) => p.length > 20);
+  if (!paragraphs.length) throw new Error('article inexploitable');
+  return { heading: clean(o.heading).replace(/^#+\s*/, '').slice(0, 90), paragraphs };
+}
+export function parseIntro(text, pack) {
+  const o = parseJsonLoose(text);
+  return parseArticle(JSON.stringify({ ...o, paragraphs: [o.lede || ''] }), pack);
+}
+
 // ---------- invites ----------
 const STYLE = 'Style : journal économique sobre, factuel, phrases claires, pas de superlatifs ni d’emphase, pas d’exclamation.';
-const RULES = 'Règles strictes : utilise UNIQUEMENT les informations du dossier fourni. N’ajoute aucun fait, chiffre, date ou nom qui n’y figure pas. Si une information manque, ne la devine pas. Cite tes sources dans le texte avec leur identifiant entre crochets, par exemple [T1], [L1] ou [W1], à la fin de la phrase concernée. Les sources [T] sont des tweets (elles portent l’annonce), [L] des pages liées dans les tweets, [W] des pages web trouvées par recherche (elles servent au contexte, aux chiffres et aux réactions). Le texte est en français.';
+const RULES = 'Règles strictes : utilise UNIQUEMENT les informations du dossier fourni. N’ajoute aucun fait, chiffre, date ou nom qui n’y figure pas. Si une information manque, ne la devine pas. Cite tes sources dans le texte avec leur identifiant entre crochets, par exemple [T1], [L1] ou [W1], à la fin de la phrase concernée. Les sources [T] sont des tweets (elles portent l’annonce), [L] des pages liées dans les tweets, [W] des pages web trouvées par recherche (elles servent au contexte, aux chiffres et aux réactions), [V] une vidéo (d’après sa transcription). Le texte est en français.';
 
 export const TIER = { lead: { words: 700, maxTokens: 2400, paras: '6 à 8' }, article: { words: 300, maxTokens: 1100, paras: '3 à 4' } };
 

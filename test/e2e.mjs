@@ -116,8 +116,10 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         out = JSON.stringify({ results: ids.map((id) => ({ id, supported: id !== '1.0' })) });
       } else if (sys.includes('résumes une partie')) {
         out = JSON.stringify({ points: [1, 2, 3, 4].map((n) => ({ t: n * 60, text: 'Point numéro ' + n + ' tiré de la partie de transcription.' })) });
-      } else if (sys.includes('reportage sur une vidéo')) {
-        out = JSON.stringify({ title: 'Un reportage sur la vidéo de la semaine et ses idées', dek: 'Chapeau du reportage [V1]', paragraphs: [1, 2, 3, 4, 5].map((n) => 'Paragraphe ' + n + ' du reportage : la vidéo développe ses idées dans l’ordre, vers ' + n + ':00. [V1]'), pull_quote: '', pull_source: 'V1', key_points: ['Premier point [V1]', 'Deuxième point', 'Troisième point'] });
+      } else if (sys.includes('prépares l’ouverture')) {
+        out = JSON.stringify({ title: 'Un reportage sur la vidéo de la semaine et ses idées', dek: 'Chapeau du reportage [V1]', lede: 'Introduction du reportage : la vidéo présente ses idées et son fil directeur à ses spectateurs. [V1]', pull_quote: '', pull_source: 'V1', key_points: ['Premier point [V1]', 'Deuxième point', 'Troisième point'] });
+      } else if (sys.includes('grand reportage sur une vidéo')) {
+        out = JSON.stringify({ heading: 'Une partie du reportage', paragraphs: [1, 2, 3].map((n) => 'Paragraphe ' + n + ' de la partie : la vidéo développe ses idées dans l’ordre, vers ' + n + ':00. [V1]') });
       } else if (sys.includes('journaliste pour un journal hebdomadaire') && sys.includes('Pour chaque entrée')) {
         const ids = [...usr.matchAll(/ENTRÉE (B\d+) /g)].map((m) => m[1]);
         out = JSON.stringify({ briefs: ids.map((id) => ({ id, title: 'Brève ' + id, text: 'Une brève rédigée à partir du tweet source, avec sa citation [T1].' })) });
@@ -1120,6 +1122,8 @@ assert.match(jlog, /Transcriptions : \d+ sujet/, jlog);
 assert.match(jlog, /Reportages : 1\./, jlog);
 console.log('journal :', jlog.split('\n').filter((l) => /Reportage|Transcriptions/.test(l)).join(' | '));
 const paperText = await journal.locator('#paper').innerText();
+assert.match(paperText, /Une partie du reportage/i, 'le reportage vidéo est rendu avec son intertitre');
+assert.match(paperText, /Reportage vidéo/i);
 assert.match(paperText, /ref\.example/, 'la page web consultée figure dans l’index des sources');
 assert.ok(!/made\.up/.test(paperText), 'l’adresse inventée n’apparaît nulle part');
 const pagesN = await journal.locator('#paper .page').count();

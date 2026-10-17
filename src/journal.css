@@ -82,3 +82,5 @@ td{border-bottom:1px solid var(--soft);padding:6px}td.n,th.n{text-align:right}
 
 .chk{display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0}.chk small{color:#6d695e}
 .g2 .im{aspect-ratio:16/9}
+
+h4.t.sub{font:700 15px/1.2 Didot,"Bodoni 72",Georgia,serif;letter-spacing:0;text-transform:none;border:0;border-top:1px solid var(--ink);padding:7px 0 0;margin:12px 0 5px;break-after:avoid}
