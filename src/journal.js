@@ -33,14 +33,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, benchmarks: $('j-bench').checked, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, benchmarks: $('j-bench').checked, benchTop: Number($('j-benchtop').value) || 10, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-bench').checked = j.benchmarks !== false; $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-bench').checked = j.benchmarks !== false; $('j-benchtop').value = String(j.benchTop || 10); $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -50,7 +50,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-bench', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-bench', 'j-benchtop', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -211,6 +211,7 @@ function planNotes(plan, cfg) {
 
 // Classements : benchmarks, catalogue, usage et vitesse d'OpenRouter ; mentions dans les lectures de la semaine (une panne n'empêche jamais l'édition)
 async function loadBench(settings, plan) {
+  const N = settings.journal.benchTop || 10;
   if (!/openrouter\.ai/i.test(settings.llm.baseUrl)) return null;
   const base = new URL(settings.llm.baseUrl).origin + '/api/v1';
   const headers = settings.llm.apiKey ? { authorization: `Bearer ${settings.llm.apiKey}` } : {};
@@ -229,12 +230,12 @@ async function loadBench(settings, plan) {
   try {
     const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
     const rk = parseRankings(await get(`/datasets/rankings-daily?start_date=${plan.win.prevFrom}&end_date=${plan.win.to < yesterday ? plan.win.to : yesterday}`), plan.win);
-    const top = topUsage(rk, 10).map((u) => ({ ...u, name: prettySlug(u.slug, catalog) }));
+    const top = topUsage(rk, N).map((u) => ({ ...u, name: prettySlug(u.slug, catalog) }));
     if (top.length) usage = { top, total: rk.totalCur };
   } catch (e) { log(`⚠ Classements : usage indisponible (${e.message}).`); }
   // vitesse constatée (débit et latence médians) des meilleurs modèles et des meilleurs rapports qualité/prix
   const speed = new Map();
-  const wanted = [...new Map([...pickRows(rows, 'intelligence', cited, { top: 10, max: 14 }), ...bestValue(rows, 8)].map((r) => [r.slug, r])).values()].filter((r) => r.slug).slice(0, 18);
+  const wanted = [...new Map([...pickRows(rows, 'intelligence', cited, { top: N, max: N }), ...bestValue(rows, N)].map((r) => [r.slug, r])).values()].filter((r) => r.slug).slice(0, 18);
   let qi = 0;
   const worker = async () => {
     while (qi < wanted.length && !abort?.signal.aborted) {
@@ -247,7 +248,7 @@ async function loadBench(settings, plan) {
   await Promise.all([worker(), worker(), worker()]);
   // buzz : les modèles dont parlent le plus les lectures de la semaine (pondéré par l'audience)
   const names = [...new Set([...rows.map((r) => r.name), ...fresh.map((m) => m.name), ...(usage?.top || []).map((u) => u.name)])];
-  const mention = topMentions(countMentions(names.map((name) => ({ name })), plan.weekTweets), 10);
+  const mention = topMentions(countMentions(names.map((name) => ({ name })), plan.weekTweets), N);
   // extraits pour résumer les avis : les 5 modèles les plus commentés (au plus 5 extraits chacun, auteurs distincts)
   const byId = new Map(plan.weekTweets.map((t) => [t.id, t]));
   const groups = [], sources = [];
@@ -263,7 +264,7 @@ async function loadBench(settings, plan) {
     if (extracts.length) groups.push({ name: m.name, extracts });
   }
   log(`Classements : ${rows.length} modèles (Artificial Analysis), ${cited.size} cité(s) cette semaine, ${fresh.length} nouveau(x) modèle(s) au catalogue, usage ${usage ? usage.top.length + ' modèles' : 'indisponible'}, vitesse ${speed.size}, ${mention.length} modèle(s) commenté(s).`);
-  return { rows, meta, cited, fresh, usage, speed, mention, groups, opinionPack: { sources }, opinions: [] };
+  return { rows, meta, cited, fresh, usage, speed, mention, groups, top: N, opinionPack: { sources }, opinions: [] };
 }
 
 // ---------- génération ----------
@@ -788,13 +789,13 @@ async function renderOnce(model) {
   // classements des modèles (Artificial Analysis via OpenRouter)
   const bn = model.bench;
   if (bn && bn.rows.length) {
-    const ci = bn.cited, pI = pickRows(bn.rows, 'intelligence', ci, { top: 10, max: 15 }), pC = pickRows(bn.rows, 'coding', ci, { top: 8, max: 12 }), pA = pickRows(bn.rows, 'agentic', ci, { top: 8, max: 12 });
+    const ci = bn.cited, pI = pickRows(bn.rows, 'intelligence', ci, { top: bn.top, max: bn.top }), pC = pickRows(bn.rows, 'coding', ci, { top: bn.top, max: bn.top }), pA = pickRows(bn.rows, 'agentic', ci, { top: bn.top, max: bn.top });
     const asOf = bn.meta?.as_of ? ` (état au ${esc(String(bn.meta.as_of).slice(0, 10))})` : '';
     const panel = (title, rows, field) => rows.length ? `<h4 class="t">${title}</h4>${hbarSvg(rows, field, ci)}` : '';
     const bp = fixedPage('Classements des modèles', `<p class="kick">Classements</p><h2 class="t">Les modèles de la semaine</h2><p class="dek">Indices d’Artificial Analysis relayés par OpenRouter${asOf}. En rouge : les modèles dont il a été question dans vos lectures cette semaine.</p>
-      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${panel('Indice d’intelligence', pI, 'intelligence')}</div><div class="r">${panel('Indice de code', pC, 'coding')}</div></div>
+      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${panel(`Intelligence (top ${bn.top})`, pI, 'intelligence')}</div><div class="r">${panel(`Code (top ${bn.top})`, pC, 'coding')}</div></div>
       <div class="dbl"></div>
-      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${panel('Indice d’agent', pA, 'agentic')}</div><div class="r"><h4 class="t">Qualité et prix</h4>${scatterSvg(bn.rows, ci)}</div></div>
+      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${panel(`Agent (top ${bn.top})`, pA, 'agentic')}</div><div class="r"><h4 class="t">Qualité et prix</h4>${scatterSvg(bn.rows, ci)}</div></div>
       <p class="src" style="margin-top:8px">Source : Artificial Analysis (artificialanalysis.ai), données obtenues via l’API d’OpenRouter. Les scores évoluent : ils décrivent l’état du classement au moment de la génération.</p>`);
     secPage.set('bench', bp);
     if (bn.fresh.length) {
@@ -809,13 +810,13 @@ async function renderOnce(model) {
     const usageItems = (bn.usage?.top || []).map((u) => ({ name: u.name, v: u.tokens, text: `${fmtTok(u.tokens)} · ${Math.round(u.share * 100)} %${u.change != null ? (u.change >= 0 ? ' ▲' : ' ▼') + Math.abs(Math.round(u.change * 100)) + ' %' : ''}` }));
     const buzzItems = bn.mention.map((m) => ({ name: m.name, v: m.score, text: `${m.n} mention${m.n > 1 ? 's' : ''}`, hot: true }));
     secPage.set('usage', fixedPage('Usage et avis', `<p class="kick">Usage et avis</p><h2 class="t">Ce qui s’utilise, ce dont on parle</h2><p class="dek">Les modèles qui ont traité le plus de jetons sur OpenRouter cette semaine, et ceux qui reviennent le plus dans vos lectures, avec ce qu’on en dit.</p>
-      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l"><h4 class="t">Les plus utilisés (jetons, part, évolution)</h4>${usageItems.length ? barsLabelSvg(usageItems) : '<p class="src">Données d’usage indisponibles.</p>'}</div>
-      <div class="r"><h4 class="t">Les plus commentés dans vos lectures</h4>${buzzItems.length ? barsLabelSvg(buzzItems) : '<p class="src">Aucun modèle cité plusieurs fois.</p>'}</div></div>
+      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l"><h4 class="t">Les plus utilisés (top ${bn.top})</h4>${usageItems.length ? barsLabelSvg(usageItems) : '<p class="src">Données d’usage indisponibles.</p>'}</div>
+      <div class="r"><h4 class="t">Les plus commentés (top ${bn.top})</h4>${buzzItems.length ? barsLabelSvg(buzzItems) : '<p class="src">Aucun modèle cité plusieurs fois.</p>'}</div></div>
       ${bn.opinions.length ? `<div class="dbl"></div><h4 class="t">Ce qu’on en dit</h4><div class="ops">${bn.opinions.map(cardOf).join('')}</div>` : ''}
       <p class="src" style="margin-top:8px">Usage : OpenRouter (rankings, licence CC BY 4.0), jetons des 7 jours, variation par rapport aux 7 jours précédents. Avis : résumés automatiques des tweets enregistrés ; les numéros renvoient à l’index des sources.</p>`));
   }
   if (bn) {
-    const vr = bestValue(bn.rows, 10);
+    const vr = bestValue(bn.rows, bn.top);
     const hasSpeed = vr.some((r) => bn.speed.has(r.slug));
     if (vr.length >= 3) {
       const fast = [...bn.speed].map(([slug, sp]) => ({ r: bn.rows.find((x) => x.slug === slug), sp })).filter((x) => x.r && x.sp.tps != null && (x.r.intelligence || 0) >= Math.max(...bn.rows.map((y) => y.intelligence || 0)) * 0.6).sort((a, b) => b.sp.tps - a.sp.tps).slice(0, 6);
