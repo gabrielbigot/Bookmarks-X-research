@@ -1137,6 +1137,7 @@ await journal.evaluate(async () => { // une vidéo regardée cette semaine, avec
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const tx = db.transaction(['tweets', 'transcripts'], 'readwrite');
   tx.objectStore('tweets').put({ id: 'yt:jr1', kind: 'youtube', source: 'youtube', handle: 'chaine', name: 'Chaîne Test', text: 'Une conférence sur les agents', url: 'https://www.youtube.com/watch?v=jr1', createdAt: new Date(now).toISOString(), sortIndex: String(now), links: [], media: [], stats: {}, capturedAt: now, addedAt: now, watched: [day], lastWatched: now, durationText: '12:00', trState: 'ok', trChars: 4000, playlists: [] });
+  tx.objectStore('tweets').put({ id: 'yt:jr2', kind: 'youtube', source: 'youtube', handle: 'autre', name: 'Autre Chaîne', text: 'Une autre vidéo regardée', url: 'https://www.youtube.com/watch?v=jr2', createdAt: new Date(now).toISOString(), sortIndex: String(now - 5), links: [], media: [], stats: {}, capturedAt: now, addedAt: now - 60_000, watched: [day], lastWatched: now, durationText: '5:00', playlists: [] });
   tx.objectStore('transcripts').put({ id: 'yt:jr1', chunks: Array.from({ length: 12 }, (_, i) => ({ t: i * 60, text: 'Le conférencier explique le point ' + i + ' sur les agents et leur mémoire de façon détaillée. '.repeat(4) })) });
   await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 });

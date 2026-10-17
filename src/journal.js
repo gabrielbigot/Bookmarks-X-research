@@ -78,10 +78,10 @@ async function prepare(s, offset = 0) {
   const subjects = buildSubjects(items, { sv, sections, vecs, primary: primarySet, official, win, minPub });
   const tiers = assignTiers(subjects, { leads: s.journal.leads, articles: s.journal.articles, briefs: s.journal.briefs });
   const stats = weekStats(items, { sv, sections, win });
+  const day = (v) => { const w = (v.watched || []).filter((d) => d <= win.to).sort().pop(); if (w) return w; if (!v.addedBulk && v.addedAt && dayKey(v.addedAt) <= win.to) return dayKey(v.addedAt); const pm = videoPubMs(v); return pm ? dayKey(pm) : ''; };
   // jour de référence d'une vidéo, au plus tard à la fin de la période : dernier visionnage, sinon ajout (si fiable), sinon publication
   const videos = items.filter(isVideoItem).filter((v) => (v.watched || []).some((d) => inWindow(d, win)) || (!v.addedBulk && v.addedAt && inWindow(dayKey(v.addedAt), win)))
     .sort((a, b) => day(b).localeCompare(day(a))).slice(0, 8);
-  const day = (v) => { const w = (v.watched || []).filter((d) => d <= win.to).sort().pop(); if (w) return w; if (!v.addedBulk && v.addedAt && dayKey(v.addedAt) <= win.to) return dayKey(v.addedAt); const pm = videoPubMs(v); return pm ? dayKey(pm) : ''; };
   const inWeek = (v) => (v.watched || []).some((d) => inWindow(d, win)) || (!v.addedBulk && v.addedAt && inWindow(dayKey(v.addedAt), win));
   const withTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState === 'ok');
   const prio = String(s.journal.priority || '').split(/[,;\n]/).map((x) => x.trim().replace(/^@/, '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')).filter(Boolean);
