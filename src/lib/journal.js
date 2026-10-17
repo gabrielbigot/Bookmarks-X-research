@@ -5,6 +5,7 @@ import { decodeEntities } from './text.js';
 import { isVideoItem } from './youtube.js';
 import { clusterCandidates, eventDays, rankMembers, groupKeys, linkKeys, handleKey, OFFICIAL_MIN } from './widgets.js';
 import { parseJsonLoose } from './llm.js';
+import { sampleChunks, fmtTime } from './transcript.js';
 
 const DAY = 86_400_000;
 const MONTHS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
@@ -136,7 +137,7 @@ export function extractPageText(html, { max = 6000 } = {}) {
 
 // ---------- dossier de preuves ----------
 // pages : Map(url -> { title, text }) lues pour ce sujet. Retourne { sources, text }.
-export function evidenceFor(subject, pages = new Map(), { maxTweets = 8, maxPages = 2, maxTweetChars = 700, maxPageChars = 5000, web = [] } = {}) {
+export function evidenceFor(subject, pages = new Map(), { maxTweets = 8, maxPages = 2, maxTweetChars = 700, maxPageChars = 5000, web = [], videos = [] } = {}) {
   const sources = [];
   const lines = [];
   subject.members.slice(0, maxTweets).forEach((t) => {
@@ -164,7 +165,88 @@ export function evidenceFor(subject, pages = new Map(), { maxTweets = 8, maxPage
     sources.push({ id, kind: 'web', url: w.url, title: w.title || w.host, host: w.host, text: w.text });
     lines.push(`[${id}] Page web trouvée par recherche (${w.host}) « ${w.title || ''} » : ${w.text}`);
   });
+  videos.forEach((v, i) => {
+    const id = 'V' + (i + 1);
+    const text = v.passages.map((p) => `[${fmtTime(Math.floor(p.t))}] ${clean(p.text)}`).join(' … ');
+    sources.push({ id, kind: 'video', url: videoUrl(v.video, v.passages[0]?.t || 0), title: clean(v.video.text), host: 'youtube.com', channel: clean(v.video.name), text });
+    lines.push(`[${id}] Vidéo YouTube « ${clean(v.video.text)} » (${clean(v.video.name)}) — extraits de la transcription : ${text}`);
+  });
   return { sources, text: lines.join('\n\n') };
+}
+
+// ---------- transcriptions de vidéos ----------
+export const videoUrl = (v, t = 0) => `https://www.youtube.com/watch?v=${v.videoId}${t ? '&t=' + Math.floor(t) + 's' : ''}`;
+export function meanVec(vs) {
+  const list = vs.filter(Boolean);
+  if (!list.length) return null;
+  const out = new Float32Array(list[0].length);
+  for (const v of list) for (let i = 0; i < out.length; i++) out[i] += v[i];
+  let n = 0; for (let i = 0; i < out.length; i++) n += out[i] * out[i];
+  n = Math.sqrt(n) || 1;
+  for (let i = 0; i < out.length; i++) out[i] /= n;
+  return out;
+}
+const dot = (a, ao, b) => { let s = 0; for (let d = 0; d < b.length; d++) s += a[ao + d] * b[d]; return s; };
+// Vidéos (avec passages vectorisés) dont un passage ressemble au sujet ; eligible : ensemble d'identifiants autorisés (ou null).
+export function matchVideos(qvec, chunkMap, { eligible = null, minSim = 0.55, top = 2 } = {}) {
+  if (!qvec) return [];
+  const out = [];
+  for (const [id, info] of chunkMap) {
+    if (eligible && !eligible.has(id)) continue;
+    if (info.vecs.length !== info.k * qvec.length) continue; // vecteurs d'un autre modèle
+    let best = -1;
+    for (let c = 0; c < info.k; c++) best = Math.max(best, dot(info.vecs, c * qvec.length, qvec));
+    if (best >= minSim) out.push({ id, sim: best });
+  }
+  return out.sort((a, b) => b.sim - a.sim).slice(0, top);
+}
+// Passages les plus proches du sujet (les vecteurs correspondent à sampleChunks(chunks, k)), dans l'ordre de la vidéo.
+export function bestPassages(chunks, info, qvec, n = 3) {
+  const sampled = sampleChunks(chunks, info.k);
+  const scored = sampled.map((c, i) => ({ t: c.t, text: c.text, sim: i < info.k ? dot(info.vecs, i * qvec.length, qvec) : -1 }));
+  return scored.sort((a, b) => b.sim - a.sim).slice(0, n).sort((a, b) => a.t - b.t);
+}
+// Transcription découpée en parties d'environ `size` caractères (au plus maxParts, réparties sur toute la vidéo).
+export function splitTranscript(chunks, { size = 9000, maxParts = 12 } = {}) {
+  const parts = [];
+  let cur = null;
+  for (const c of chunks) {
+    if (!cur) cur = { from: c.t, to: c.t, text: '' };
+    cur.text += `[${fmtTime(Math.floor(c.t))}] ${clean(c.text)}\n`;
+    cur.to = c.t;
+    if (cur.text.length >= size) { parts.push(cur); cur = null; }
+  }
+  if (cur) parts.push(cur);
+  if (parts.length <= maxParts) return parts;
+  return Array.from({ length: maxParts }, (_, i) => parts[Math.floor((i * parts.length) / maxParts)]);
+}
+export function summaryMessages(video, part) {
+  return [
+    { role: 'system', content: 'Tu résumes une partie de la transcription d’une vidéo pour un journal. Utilise UNIQUEMENT ce texte, n’ajoute rien. Réponds uniquement en JSON : {"points": [{"t": secondes (nombre) du début du passage concerné, "text": "une idée ou un fait précis, en une phrase, en français"}], "quote": {"t": secondes, "text": "citation EXACTE de 80 à 220 caractères, copiée mot pour mot dans le texte"}}. 4 à 8 points ; omets "quote" s’il n’y a rien de citable.' },
+    { role: 'user', content: `Vidéo : « ${clean(video.text)} » (${clean(video.name)})\nPARTIE (de ${fmtTime(Math.floor(part.from))} à ${fmtTime(Math.floor(part.to))}) :\n${part.text}` },
+  ];
+}
+export function parseSummary(text, part) {
+  const o = parseJsonLoose(text);
+  const norm = (x) => clean(x).toLowerCase().replace(/\[[\d:]+\]/g, ' ').replace(/[«»"'’]/g, '').replace(/\s+/g, ' ');
+  const points = (Array.isArray(o.points) ? o.points : []).map((p) => ({ t: Math.max(0, Math.floor(Number(p?.t) || part.from)), text: clean(p?.text) })).filter((p) => p.text.length > 10).slice(0, 8);
+  const q = o.quote && clean(o.quote.text);
+  const quote = q && q.length >= 40 && norm(part.text).includes(norm(q)) ? { t: Math.floor(Number(o.quote.t) || part.from), text: q } : null; // la citation doit figurer mot pour mot
+  return { points, quote };
+}
+export function reportageEvidence(video, summaries) {
+  const points = summaries.flatMap((s) => s.points).sort((a, b) => a.t - b.t);
+  const quotes = summaries.map((s) => s.quote).filter(Boolean);
+  const pts = points.map((p) => `- (${fmtTime(p.t)}) ${p.text}`).join('\n');
+  const exact = quotes.map((q) => `[${fmtTime(q.t)}] ${q.text}`).join('\n');
+  const src = { id: 'V1', kind: 'video', url: videoUrl(video), title: clean(video.text), host: 'youtube.com', channel: clean(video.name), text: exact };
+  return { sources: [src], text: `[V1] Vidéo YouTube « ${clean(video.text)} » (${clean(video.name)}${video.durationText ? ', ' + video.durationText : ''}). Points clés de la transcription, avec leur horodatage :\n${pts}\n\nExtraits exacts :\n${exact}`, points: points.length };
+}
+export function reportageMessages(video, pack) {
+  return [
+    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu rédiges un reportage sur une vidéo à partir de ses points clés horodatés : raconte ce que dit la vidéo, dans l’ordre, en mentionnant les moments importants avec leur horodatage (par exemple « vers 12:40 »). Réponds uniquement en JSON : {"title": "titre informatif de 8 à 14 mots", "dek": "chapeau d’une phrase", "paragraphs": ["…"], "pull_quote": "citation exacte tirée des extraits exacts, ou chaîne vide", "pull_source": "V1", "key_points": ["3 points à retenir"]}. Rédige environ 500 mots en 5 à 7 paragraphes.` },
+    { role: 'user', content: `DOSSIER :\n${pack.text}` },
+  ];
 }
 
 // ---------- invites ----------
@@ -195,7 +277,7 @@ export function editorialMessages(summary) {
 
 // ---------- lecture des réponses ----------
 export function cleanCitations(text, valid) {
-  return String(text || '').replace(/\[((?:[TLW]\d+)(?:\s*[,;]\s*[TLW]\d+)*)\]/g, (m, ids) => {
+  return String(text || '').replace(/\[((?:[TLWV]\d+)(?:\s*[,;]\s*[TLWV]\d+)*)\]/g, (m, ids) => {
     const keep = ids.split(/\s*[,;]\s*/).filter((i) => valid.has(i));
     return keep.length ? `[${keep.join(',')}]` : '';
   }).replace(/\s{2,}/g, ' ').replace(/\s+([.,;:])/g, '$1').trim();
@@ -207,7 +289,7 @@ export function parseArticle(text, pack) {
   if (!paragraphs.length || !clean(o.title)) throw new Error('article inexploitable');
   const norm = (x) => clean(x).toLowerCase().replace(/[«»"'’]/g, '');
   const pullTxt = clean(o.pull_quote).replace(/^[«"\s]+|[»"\s]+$/g, '');
-  const pullFound = pullTxt && pack.sources.some((x) => x.kind === 'tweet' && norm(x.text).includes(norm(pullTxt))); // la citation doit figurer mot pour mot dans un tweet
+  const pullFound = pullTxt && pack.sources.some((x) => (x.kind === 'tweet' || x.kind === 'video') && norm(x.text).includes(norm(pullTxt))); // la citation doit figurer mot pour mot dans un tweet
   const pull = pullFound ? pullTxt : '', ps = valid.has(String(o.pull_source || '').trim()) ? String(o.pull_source).trim() : '';
   return { title: clean(o.title), dek: cleanCitations(clean(o.dek), valid), paragraphs, pull: pull.length >= 15 && pull.length <= 220 ? pull : '', pullSource: ps, points: (Array.isArray(o.key_points) ? o.key_points : []).map((p) => cleanCitations(clean(p), valid)).filter(Boolean).slice(0, 4) };
 }
@@ -266,17 +348,17 @@ export function makeBibliography() {
 // [T1,L1] -> <sup>3,4</sup>
 export function citeHtml(text, pack, bib) {
   const byId = new Map(pack.sources.map((s) => [s.id, s]));
-  return esc(text).replace(/\[((?:[TLW]\d+)(?:,[TLW]\d+)*)\]/g, (m, ids) => {
+  return esc(text).replace(/\[((?:[TLWV]\d+)(?:,[TLWV]\d+)*)\]/g, (m, ids) => {
     const ns = [...new Set(ids.split(',').map((i) => byId.get(i)).filter(Boolean).map((s) => bib.number(s)))].sort((a, b) => a - b);
     return ns.length ? `<sup class="c">${ns.join(',')}</sup>` : '';
   });
 }
 export const sourcesLine = (article, pack, bib) => {
   const ids = new Set();
-  for (const m of [article.dek, ...article.paragraphs, ...article.points].join(' ').matchAll(/\[((?:[TLW]\d+)(?:,[TLW]\d+)*)\]/g)) m[1].split(',').forEach((i) => ids.add(i));
+  for (const m of [article.dek, ...article.paragraphs, ...article.points].join(' ').matchAll(/\[((?:[TLWV]\d+)(?:,[TLWV]\d+)*)\]/g)) m[1].split(',').forEach((i) => ids.add(i));
   const srcs = pack.sources.filter((s) => ids.has(s.id));
   if (!srcs.length) return '';
-  return `<p class="srcl">Sources : ${srcs.map((s) => `<a href="${esc(s.url)}">${bib.number(s)}. ${esc(s.kind === 'tweet' ? '@' + s.handle : s.host)}</a>`).join(' · ')}</p>`;
+  return `<p class="srcl">Sources : ${srcs.map((s) => `<a href="${esc(s.url)}">${bib.number(s)}. ${esc(s.kind === 'tweet' ? '@' + s.handle : s.kind === 'video' ? s.channel : s.host)}</a>`).join(' · ')}</p>`;
 };
 
 // ---------- recherche web ----------

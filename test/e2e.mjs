@@ -112,6 +112,10 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       } else if (sys.includes('vérificateur')) {
         const ids = [...usr.matchAll(/^(\d+\.\d+) : /gm)].map((m) => m[1]);
         out = JSON.stringify({ results: ids.map((id) => ({ id, supported: id !== '1.0' })) });
+      } else if (sys.includes('résumes une partie')) {
+        out = JSON.stringify({ points: [1, 2, 3, 4].map((n) => ({ t: n * 60, text: 'Point numéro ' + n + ' tiré de la partie de transcription.' })) });
+      } else if (sys.includes('reportage sur une vidéo')) {
+        out = JSON.stringify({ title: 'Un reportage sur la vidéo de la semaine et ses idées', dek: 'Chapeau du reportage [V1]', paragraphs: [1, 2, 3, 4, 5].map((n) => 'Paragraphe ' + n + ' du reportage : la vidéo développe ses idées dans l’ordre, vers ' + n + ':00. [V1]'), pull_quote: '', pull_source: 'V1', key_points: ['Premier point [V1]', 'Deuxième point', 'Troisième point'] });
       } else if (sys.includes('journaliste pour un journal hebdomadaire') && sys.includes('Pour chaque entrée')) {
         const ids = [...usr.matchAll(/ENTRÉE (B\d+) /g)].map((m) => m[1]);
         out = JSON.stringify({ briefs: ids.map((id) => ({ id, title: 'Brève ' + id, text: 'Une brève rédigée à partir du tweet source, avec sa citation [T1].' })) });
@@ -1091,6 +1095,14 @@ await journal.evaluate(() => { document.getElementById('j-links').checked = fals
 await journal.evaluate(() => { for (const id of ['j-search', 'j-verify']) { const c = document.getElementById(id); c.checked = true; c.dispatchEvent(new Event('change')); } });
 await journal.fill('#j-budget', '5');
 await journal.dispatchEvent('#j-budget', 'change');
+await journal.evaluate(async () => { // une vidéo regardée cette semaine, avec sa transcription
+  const now = Date.now(), day = new Date(now).toISOString().slice(0, 10);
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['tweets', 'transcripts'], 'readwrite');
+  tx.objectStore('tweets').put({ id: 'yt:jr1', kind: 'youtube', source: 'youtube', handle: 'chaine', name: 'Chaîne Test', text: 'Une conférence sur les agents', url: 'https://www.youtube.com/watch?v=jr1', createdAt: new Date(now).toISOString(), sortIndex: String(now), links: [], media: [], stats: {}, capturedAt: now, addedAt: now, watched: [day], lastWatched: now, durationText: '12:00', trState: 'ok', trChars: 4000, playlists: [] });
+  tx.objectStore('transcripts').put({ id: 'yt:jr1', chunks: Array.from({ length: 12 }, (_, i) => ({ t: i * 60, text: 'Le conférencier explique le point ' + i + ' sur les agents et leur mémoire de façon détaillée. '.repeat(4) })) });
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
 await journal.click('#j-est');
 await waitFor(async () => /Coût estimé :/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'estimation du coût du journal', 60000);
 await journal.click('#j-go');
@@ -1100,6 +1112,9 @@ assert.match(jlog, /Édition terminée : (\d+) pages/, jlog);
 assert.match(jlog, /Recherche web : [1-9]\d* sujet\(s\) complété/, jlog);
 assert.match(jlog, /fait\(s\) écarté\(s\) : adresse non consultée/, jlog);
 assert.match(jlog, /Relecture : [1-9]\d* phrase\(s\) non étayée\(s\) retirée\(s\)/, jlog);
+assert.match(jlog, /Transcriptions : \d+ sujet/, jlog);
+assert.match(jlog, /Reportages : 1\./, jlog);
+console.log('journal :', jlog.split('\n').filter((l) => /Reportage|Transcriptions/.test(l)).join(' | '));
 const paperText = await journal.locator('#paper').innerText();
 assert.match(paperText, /ref\.example/, 'la page web consultée figure dans l’index des sources');
 assert.ok(!/made\.up/.test(paperText), 'l’adresse inventée n’apparaît nulle part');

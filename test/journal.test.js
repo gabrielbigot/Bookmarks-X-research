@@ -129,3 +129,40 @@ test('relecture : phrases non étayées retirées, réponse suspecte ignorée', 
   assert.equal(all.removed, 0); assert.equal(all.article, article);
   assert.equal(applyVerification(article, v.lines, 'n’importe quoi').removed, 0);
 });
+
+import { meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportageMessages, videoUrl } from '../src/lib/journal.js';
+test('transcriptions : vidéos proches d’un sujet, passages, parties, résumé vérifié, dossier de reportage', () => {
+  const o = (v) => Float32Array.from(v);
+  const q = meanVec([o([1, 0, 0]), o([1, 0.2, 0])]);
+  assert.ok(Math.abs(Math.hypot(...q) - 1) < 1e-6);
+  assert.equal(meanVec([null]), null);
+  const vids = new Map([
+    ['yt:near', { k: 2, vecs: Float32Array.from([0, 1, 0, 0.9, 0.3, 0]) }],   // 2 passages (dim 3) : le 2e ressemble
+    ['yt:far', { k: 1, vecs: Float32Array.from([0, 0, 1]) }],
+    ['yt:old', { k: 1, vecs: Float32Array.from([1, 0, 0]) }],
+  ]);
+  assert.deepEqual(matchVideos(q, vids, { minSim: 0.55, eligible: new Set(['yt:near', 'yt:far']) }).map((m) => m.id), ['yt:near']);
+  assert.deepEqual(matchVideos(q, vids, { minSim: 0.55 }).map((m) => m.id), ['yt:old', 'yt:near']);
+  const chunks = [{ t: 0, text: 'intro' }, { t: 60, text: 'le sujet précis ici' }];
+  const ps = bestPassages(chunks, vids.get('yt:near'), q, 1);
+  assert.equal(ps.length, 1); assert.equal(ps[0].t, 60);
+  assert.equal(videoUrl({ videoId: 'abc' }, 125.7), 'https://www.youtube.com/watch?v=abc&t=125s');
+  const long = Array.from({ length: 100 }, (_, i) => ({ t: i * 30, text: 'x'.repeat(450) }));
+  const parts = splitTranscript(long, { size: 9000, maxParts: 4 });
+  assert.equal(parts.length, 4); assert.match(parts[0].text, /^\[0:00\] x+/);
+  const part = { from: 600, to: 700, text: '[10:00] Le modèle lit les images et le texte ensemble, ce qui change beaucoup de choses pour les utilisateurs.\n[10:30] Autre chose.\n' };
+  const video = { videoId: 'abc', text: 'Titre de la vidéo', name: 'Chaîne', durationText: '48:00' };
+  assert.match(summaryMessages(video, part)[1].content, /de 10:00 à 11:40/);
+  const sm = parseSummary('{"points":[{"t":600,"text":"Le modèle lit images et texte"},{"t":"x","text":"court"}],"quote":{"t":600,"text":"Le modèle lit les images et le texte ensemble, ce qui change beaucoup de choses pour les utilisateurs."}}', part);
+  assert.equal(sm.points.length, 1); assert.ok(sm.quote);
+  assert.equal(parseSummary('{"points":[],"quote":{"t":1,"text":"Une citation que la vidéo ne contient absolument pas du tout."}}', part).quote, null);
+  const ev = reportageEvidence(video, [sm]);
+  assert.equal(ev.sources[0].id, 'V1'); assert.match(ev.text, /\(10:00\) Le modèle lit images et texte/); assert.match(reportageMessages(video, ev)[0].content, /reportage/);
+  const art = parseArticle(JSON.stringify({ title: 'Un reportage sur la vidéo du jour', dek: 'chapeau [V1]', paragraphs: ['Vers 10:00, la vidéo explique que le modèle lit images et texte [V1].'], pull_quote: 'Le modèle lit les images et le texte ensemble', pull_source: 'V1' }), ev);
+  assert.equal(art.pullSource, 'V1'); assert.ok(art.pull.startsWith('Le modèle lit'));
+  const rep = tw('1', 'we announced Jev', 1, { handle: 'typesafeai' });
+  const pack = evidenceFor({ rep, members: [rep], links: [] }, new Map(), { videos: [{ video, passages: ps }] });
+  assert.deepEqual(pack.sources.map((s) => s.id), ['T1', 'V1']);
+  assert.match(pack.text, /\[V1\] Vidéo YouTube « Titre de la vidéo » \(Chaîne\) — extraits de la transcription : \[1:00\] le sujet précis ici/);
+  assert.equal(citeHtml('Dit [V1].', pack, makeBibliography()), 'Dit <sup class="c">1</sup>.');
+});

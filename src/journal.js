@@ -1,5 +1,5 @@
 // Page « Journal » : prépare la semaine, fait rédiger les articles par le modèle d'IA (avec plafond de dépense), met en pages A4.
-import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs, getTweets } from './lib/db.js';
+import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs, getTranscripts } from './lib/db.js';
 import { getSettings, setSettings, llmReady } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
@@ -10,7 +10,7 @@ import { isPublicUrl } from './lib/links.js';
 import { handleKey, OFFICIAL_DESC } from './lib/widgets.js';
 import {
   weekWindow, inWindow, dayLabel, buildSubjects, assignTiers, weekStats, extractPageText, evidenceFor, articleMessages, briefsMessages, editorialMessages,
-  searchMessages, parseFindings, verifyMessages, applyVerification, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
+  searchMessages, parseFindings, verifyMessages, applyVerification, meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportageMessages, videoUrl, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
 } from './lib/journal.js';
 
 const $ = (id) => document.getElementById(id);
@@ -30,21 +30,21 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(5, Math.round(Number($('j-reports').value) || 0))), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const sel = j.sections ?? detectors.map((d) => d.id);
   $('j-sections').innerHTML = detectors.length ? detectors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}"${sel.includes(d.id) ? ' checked' : ''}> ${esc(d.name)}</label>`).join('') : '<span class="hint">Aucun détecteur : le journal couvrira toute la semaine (crée des détecteurs dans « Mes stats » pour avoir des rubriques).</span>';
   const st = $('j-status');
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -73,7 +73,13 @@ async function prepare(s) {
   const stats = weekStats(items, { sv, sections, win });
   const videos = items.filter(isVideoItem).filter((v) => (v.watched || []).some((d) => inWindow(d, win)) || (v.addedAt && inWindow(dayKey(v.addedAt), win)))
     .sort((a, b) => String(b.lastWatched || dayKey(b.addedAt || 0)).localeCompare(String(a.lastWatched || dayKey(a.addedAt || 0)))).slice(0, 8);
-  return { items, win, sections, subjects, tiers, stats, videos };
+  const day = (v) => String(v.lastWatched || dayKey(v.addedAt || 0));
+  const inWeek = (v) => (v.watched || []).some((d) => inWindow(d, win)) || (v.addedAt && inWindow(dayKey(v.addedAt), win));
+  const withTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState === 'ok');
+  const reportVideos = withTr.filter(inWeek).sort((a, b) => ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
+  const recent = dayKey(Date.now() - 60 * DAY);
+  const eligible = new Set(withTr.filter((v) => day(v) >= recent).map((v) => v.id));
+  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, eligible };
 }
 
 function estimatePlan(plan, cfg) {
@@ -90,6 +96,12 @@ function estimatePlan(plan, cfg) {
   add(estimateCall(plan.subjects.length * 220 + 900, 1000, prices));
   const detailed = [...plan.tiers.leads, ...plan.tiers.articles];
   if (cfg.search) for (let i = 0; i < Math.min(cfg.searchTop, detailed.length); i++) { add(estimateCall(1500, 900, prices)); usd += cfg.searchPrice; }
+  for (const v of plan.reportVideos) {
+    const parts = Math.min(12, Math.max(1, Math.ceil((v.trChars || 20000) / 9000)));
+    for (let i = 0; i < parts; i++) add(estimateCall(9500, 500, prices));
+    add(estimateCall(4500, 1700, prices));
+    if (cfg.verify) add(estimateCall(6000, 300, prices));
+  }
   if (cfg.verify) for (const sub of detailed) add(estimateCall(evidenceFor(sub).text.length + (sub.links.length ? 4500 : 0) + (cfg.search ? 2500 : 0) + 1500, 400, prices));
   return { usd, calls, tin, tout };
 }
@@ -182,7 +194,23 @@ async function generate() {
       return full ? r : r.text;
     };
     const pagesOf = (subject) => new Map(subject.links.map((l) => [l, pages.get(l)]).filter(([, p]) => p));
-    const entries = detailed.map((subject, i) => ({ subject, tier: i < plan.tiers.leads.length ? 'lead' : 'article', pack: evidenceFor(subject, pagesOf(subject)) }));
+    const entries = detailed.map((subject, i) => ({ subject, tier: i < plan.tiers.leads.length ? 'lead' : 'article', web: [], videos: [] }));
+    const buildPack = (e) => evidenceFor(e.subject, pagesOf(e.subject), { web: e.web, videos: e.videos });
+    // extraits de transcription : les vidéos de ta bibliothèque dont un passage ressemble au sujet
+    let trCount = 0;
+    if (cfg.useTranscripts) {
+      const byId = new Map(plan.items.filter(isVideoItem).map((v) => [v.id, v]));
+      for (const e of entries) {
+        const q = meanVec(e.subject.members.map((m) => plan.vecs.get(m.id)));
+        for (const m of matchVideos(q, plan.chunks, { eligible: plan.eligible, minSim: 0.55, top: 2 })) {
+          const tr = (await getTranscripts([m.id])).get(m.id), video = byId.get(m.id);
+          if (tr?.length && video) e.videos.push({ video, passages: bestPassages(tr, plan.chunks.get(m.id), q, 3) });
+        }
+        if (e.videos.length) trCount++;
+      }
+      log(`Transcriptions : ${trCount} sujet(s) complété(s) par des extraits de vidéos.`);
+    }
+    for (const e of entries) e.pack = buildPack(e);
     // recherche web : les sujets les plus importants d'abord ; seules les adresses réellement consultées sont retenues
     let webCount = 0, removedTotal = 0;
     if (cfg.search) {
@@ -196,7 +224,7 @@ async function generate() {
             const r = await ask(searchMessages(e.subject), { model: assist, maxTokens: 1400, plugins: [{ id: 'web', max_results: 5 }], extra: cfg.searchPrice, full: true });
             const pf = parseFindings(r.text, r.annotations);
             if (pf.noAnnotations && !warned) { warned = true; log('⚠ Le fournisseur n’a pas renvoyé les pages consultées : résultats de recherche ignorés (impossible de vérifier les adresses).'); }
-            if (pf.sources.length) { webCount++; e.pack = evidenceFor(e.subject, pagesOf(e.subject), { web: pf.sources }); }
+            if (pf.sources.length) { webCount++; e.web = pf.sources; e.pack = buildPack(e); }
             if (pf.rejected) log(`  ${pf.rejected} fait(s) écarté(s) : adresse non consultée.`);
           } catch (err) { if (abort.signal.aborted) return; if (err.message !== 'budget') log(`⚠ Recherche web : ${err.message}`); }
         }
@@ -255,6 +283,49 @@ async function generate() {
     }
     if (budgetHit) log(`Plafond de ${fmtUsd(cfg.budget)} atteint : étapes restantes allégées.`);
 
+    // reportages : résumé de la transcription par parties, puis article
+    const reportEntries = [];
+    if (cfg.useTranscripts && plan.reportVideos.length && !budgetHit) {
+      log(`Reportages vidéo (${plan.reportVideos.length})…`);
+      for (const video of plan.reportVideos) {
+        if (abort.signal.aborted || budgetHit) break;
+        try {
+          const chunks = (await getTranscripts([video.id])).get(video.id);
+          if (!chunks?.length) continue;
+          const parts = splitTranscript(chunks);
+          const sums = [];
+          let pi = 0;
+          const pw = async () => { while (pi < parts.length && !abort.signal.aborted) { const part = parts[pi++]; try { sums.push(parseSummary(await ask(summaryMessages(video, part), { model: assist, maxTokens: 800 }), part)); } catch (err) { if (err.message === 'budget' || abort.signal.aborted) throw err; } } };
+          await Promise.all([pw(), pw()]);
+          const pack = reportageEvidence(video, sums);
+          if (pack.points < 3) { log(`  « ${video.text.slice(0, 50)} » : transcription trop pauvre, ignorée.`); continue; }
+          let article = null;
+          for (let attempt = 0; attempt < 2 && !article; attempt++) {
+            const msgs = reportageMessages(video, pack);
+            if (attempt) msgs.push({ role: 'user', content: 'Réponds uniquement avec un objet JSON valide, sans texte autour.' });
+            try { article = parseArticle(await ask(msgs, { model: writer, maxTokens: 2400 }), pack); }
+            catch (err) { if (err.message === 'budget' || abort.signal.aborted) throw err; if (!/inexploitable|JSON|Unexpected|Expected/.test(err.message)) throw err; }
+          }
+          if (!article) continue;
+          const day0 = (video.watched || [])[0] || dayKey(video.addedAt || Date.now());
+          const entry = { tier: 'report', pack, article, image: null, subject: { id: 'r:' + video.id, section: 'reports', sectionName: 'Reportage vidéo', members: [video], rep: video, firstDay: day0, lastDay: day0, images: [], links: [] } };
+          if (cfg.verify && !budgetHit) {
+            const v = verifyMessages(article, pack);
+            if (v.lines.length) {
+              try { const r = applyVerification(article, v.lines, await ask(v.messages, { model: assist, maxTokens: Math.min(1800, 300 + v.lines.length * 14) })); entry.article = r.article; removedTotal += r.removed; }
+              catch (err) { if (abort.signal.aborted) throw err; if (err.message !== 'budget') log(`⚠ Relecture du reportage : ${err.message}`); }
+            }
+          }
+          if (video.thumb && await probe(video.thumb)) entry.image = { url: video.thumb, alt: video.text, card: true };
+          reportEntries.push(entry);
+        } catch (err) {
+          if (abort.signal.aborted) throw err;
+          if (err.message !== 'budget') log(`⚠ Reportage : ${err.message}`);
+        }
+      }
+      log(`Reportages : ${reportEntries.length}.`);
+    }
+
     // brèves
     const briefEntries = plan.tiers.briefs.map((subject) => ({ subject, tier: 'brief', pack: evidenceFor(subject, new Map(), { maxTweets: 3 }) }));
     log('Rédaction des brèves…');
@@ -277,7 +348,7 @@ async function generate() {
     let editorial = null;
     try {
       const summary = [...entries, ...briefEntries].map((e) => `- [${e.subject.sectionName}] ${e.subject.firstDay} : ${e.article.title}${e.article.dek ? ' — ' + e.article.dek : ''}`).join('\n');
-      editorial = parseEditorial(await ask(editorialMessages(summary.replace(/\[[TLW]\d+(,[TLW]\d+)*\]/g, '')), { model: assist, maxTokens: 1400 }));
+      editorial = parseEditorial(await ask(editorialMessages(summary.replace(/\[[TLWV]\d+(,[TLWV]\d+)*\]/g, '')), { model: assist, maxTokens: 1400 }));
     } catch (err) { if (abort.signal.aborted) throw err; log(`Éditorial non rédigé (${err.message === 'budget' ? 'plafond atteint' : err.message}).`); }
     prog(0.85);
 
@@ -285,7 +356,7 @@ async function generate() {
     log('Choix des images…');
     await pickImages(entries);
     log('Mise en pages…');
-    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal };
+    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal, reportEntries, trCount };
     await renderPaper(model);
     prog(0.97);
     const id = String(Date.now());
@@ -344,16 +415,17 @@ function fixedPage(label, html, cls = '') {
 
 const figHtml = (im, wide, cap) => (im ? `<figure class="${wide ? 'wide' : ''}"><span class="im"><img src="${esc(im.url)}" alt="" referrerpolicy="no-referrer"></span><figcaption>${esc(cap || im.alt || `Image du tweet de @${im.handle}`)}</figcaption></figure>` : '');
 function articleBlocks(e, bib) {
-  const a = e.article, lead = e.tier === 'lead', ref = e.subject.id;
+  const a = e.article, report = e.tier === 'report', lead = e.tier === 'lead' || report, ref = e.subject.id;
   const cite = (t) => citeHtml(t, e.pack, bib);
-  const by = `D’après ${e.pack.sources.filter((s) => s.kind === 'tweet').slice(0, 3).map((s) => '@' + esc(s.handle)).join(', ')} · ${esc(e.subject.firstDay.slice(8))}/${esc(e.subject.firstDay.slice(5, 7))}${e.pack.sources.some((x) => x.kind === 'web') ? ' · recherche web' : ''}${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}`;
-  const head = `<div class="art-head${lead ? ' lead' : ''}"><p class="kick">${esc(e.subject.sectionName)}${lead ? ' · À la une' : ''}</p>${lead ? `<h2 class="t">${esc(a.title)}</h2>` : `<h3 class="t">${esc(a.title)}</h3>`}${a.dek ? `<p class="dek">${cite(a.dek)}</p>` : ''}<p class="by">${by}</p></div>`;
+  const vs = e.pack.sources.find((x) => x.kind === 'video');
+  const by = report ? `Vidéo de ${esc(vs.channel)}${e.subject.rep.durationText ? ' · ' + esc(e.subject.rep.durationText) : ''} · d’après la transcription${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}` : `D’après ${e.pack.sources.filter((s) => s.kind === 'tweet').slice(0, 3).map((s) => '@' + esc(s.handle)).join(', ')} · ${esc(e.subject.firstDay.slice(8))}/${esc(e.subject.firstDay.slice(5, 7))}${e.pack.sources.some((x) => x.kind === 'web') ? ' · recherche web' : ''}${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}`;
+  const head = `<div class="art-head${lead ? ' lead' : ''}"><p class="kick">${esc(e.subject.sectionName)}${lead && !report ? ' · À la une' : ''}</p>${lead ? `<h2 class="t">${esc(a.title)}</h2>` : `<h3 class="t">${esc(a.title)}</h3>`}${a.dek ? `<p class="dek">${cite(a.dek)}</p>` : ''}<p class="by">${by}</p></div>`;
   const blocks = [];
   const img = e.image && !a.fallback ? figHtml(e.image, lead, e.image.card ? `Illustration : ${e.image.alt}` : null) : '';
   blocks.push({ ref, html: head + img + `<p class="${lead ? 'drop ' : ''}">${cite(a.paragraphs[0])}</p>` });
   a.paragraphs.slice(1).forEach((p, i) => {
     blocks.push({ html: `<p>${cite(p)}</p>` });
-    if (i === 0 && a.pull) blocks.push({ html: `<blockquote class="pull">« ${esc(a.pull)} »<cite>${esc(a.pullSource ? '@' + (e.pack.sources.find((s) => s.id === a.pullSource)?.handle || '') : '')}</cite></blockquote>` });
+    if (i === 0 && a.pull) blocks.push({ html: `<blockquote class="pull">« ${esc(a.pull)} »<cite>${esc(a.pullSource ? (report ? vs.channel : '@' + (e.pack.sources.find((s) => s.id === a.pullSource)?.handle || '')) : '')}</cite></blockquote>` });
   });
   if (a.points.length) blocks.push({ html: `<div class="kp"><h5>À retenir</h5><ul>${a.points.map((p) => `<li>${cite(p)}</li>`).join('')}</ul></div>` });
   const sl = sourcesLine(a, e.pack, bib);
@@ -414,6 +486,13 @@ async function renderPaper(model) {
     const pgs = flow(sec.name, blocks, refs);
     secPage.set(sec.id, pgs[0]);
   }
+  // reportages vidéo
+  const reps = model.reportEntries || [];
+  if (reps.length) {
+    const blocks = [];
+    reps.forEach((e, i) => { if (i) blocks.push({ html: '<div class="sep"></div>' }); blocks.push(...articleBlocks(e, bib)); });
+    secPage.set('reports', flow('Reportages', blocks, refs)[0]);
+  }
   // chiffres
   const st = plan.stats;
   const chiffres = fixedPage('Chiffres', `<p class="kick">Chiffres</p><h2 class="t">Votre veille en chiffres</h2><p class="dek">Ce que vous avez gardé cette semaine, jour par jour, et ce qui progresse par rapport à la semaine précédente.</p>
@@ -423,8 +502,10 @@ async function renderPaper(model) {
     <div class="r"><h4 class="t">Les mots qui montent</h4><table><tr><th>Mot</th><th class="n">Cette semaine</th><th class="n">Avant</th></tr>${st.rising.map((w) => `<tr><td>${esc(w.word)}</td><td class="n">${w.n}</td><td class="n">${w.prev}</td></tr>`).join('') || '<tr><td colspan="3">Rien ne se détache nettement.</td></tr>'}</table></div></div>`);
   secPage.set('stats', chiffres);
   // vidéos
-  if (plan.videos.length) {
-    const vids = await Promise.all(plan.videos.map(async (v) => ({ v, ok: v.thumb ? await probe(v.thumb) : false })));
+  const repIds = new Set(reps.map((e) => e.subject.rep.id));
+  const vlist = plan.videos.filter((v) => !repIds.has(v.id));
+  if (vlist.length) {
+    const vids = await Promise.all(vlist.map(async (v) => ({ v, ok: v.thumb ? await probe(v.thumb) : false })));
     const vp = fixedPage('À voir et à écouter', `<p class="kick">Vidéos</p><h2 class="t">À voir et à écouter</h2><p class="dek">Les vidéos ajoutées à vos playlists ou regardées cette semaine.</p>${vids.map(({ v, ok }) => `<div class="vid"><span class="im">${ok ? `<img src="${esc(v.thumb)}" alt="" referrerpolicy="no-referrer">` : ''}</span><div><p class="kick">${esc(v.durationText || 'Vidéo')}${(v.watched || []).length ? ' · regardée' : ''}</p><h3 class="t">${esc(v.text)}</h3><p class="src">${esc(v.name)}${(v.playlists || []).length ? ' · ' + esc(v.playlists[0].title) : ''} · <a href="${esc(v.url)}">${esc(v.url.replace('https://www.', ''))}</a></p></div></div>`).join('')}`);
     secPage.set('videos', vp);
   }
@@ -432,8 +513,8 @@ async function renderPaper(model) {
   const blocks = [];
   if (editorial?.glossary.length) { blocks.push({ html: '<h4 class="t" style="column-span:all">Lexique</h4>' }); editorial.glossary.forEach((g) => blocks.push({ html: `<p class="gloss"><b>${esc(g.term)}</b> — ${esc(g.def)}</p>` })); }
   blocks.push({ html: '<h4 class="t" style="column-span:all">Index des sources</h4>' });
-  for (const s of bib.list) blocks.push({ html: `<p class="bibl"><b>${s.n}.</b> ${s.kind === 'tweet' ? `@${esc(s.handle)} (${esc(s.date)})` : esc(s.title)} — <a href="${esc(s.url)}">${esc(s.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 70))}</a></p>` });
-  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
+  for (const s of bib.list) blocks.push({ html: `<p class="bibl"><b>${s.n}.</b> ${s.kind === 'tweet' ? `@${esc(s.handle)} (${esc(s.date)})` : s.kind === 'video' ? `${esc(s.title)} (${esc(s.channel || 'YouTube')})` : esc(s.title)} — <a href="${esc(s.url)}">${esc(s.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 70))}</a></p>` });
+  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${reps.length ? ` ${reps.length} reportage(s) rédigé(s) d’après la transcription de vidéos.` : ''}${model.trCount ? ` ${model.trCount} sujet(s) complété(s) par des extraits de transcriptions.` : ''}${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
   const lp = flow('Lexique et sources', blocks);
   secPage.set('sources', lp[0]);
 
@@ -444,11 +525,11 @@ async function renderPaper(model) {
   front.className = 'page';
   paper.prepend(front);
   const numOf = (pg) => pages().indexOf(pg) + 1;
-  const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Chiffres', secPage.get('stats')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
+  const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Reportages', secPage.get('reports')], ['Chiffres', secPage.get('stats')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
   const others = entries.filter((e) => e !== lead && e.tier === 'lead').concat(entries.filter((e) => e !== lead && e.tier === 'article')).slice(0, 3);
-  const leadWords = (n) => lead.article.paragraphs.join(' ').split(/\s+/).slice(0, n).join(' ').replace(/\s*\[[TLW][\d,TLW]*\]/g, '');
+  const leadWords = (n) => lead.article.paragraphs.join(' ').split(/\s+/).slice(0, n).join(' ').replace(/\s*\[[TLWV][\d,TLWV]*\]/g, '');
   const buildFront = (n) => `<h1 class="mast">${esc(NAME)}</h1><div class="tag">Ce que vous avez gardé cette semaine — rédigé d’après vos bookmarks X et YouTube</div><div class="dbl" style="margin:4px 0 0"></div>
-    <div class="g2" style="margin-top:12px"><div class="l"><p class="kick">${esc(lead.subject.sectionName)} · À la une</p><h2 class="t" style="font-size:40px">${esc(lead.article.title)}</h2>${lead.article.dek ? `<p class="dek">${esc(lead.article.dek.replace(/\s*\[[TLW][\d,TLW]*\]/g, ''))}</p>` : ''}${lead.image ? figHtml(lead.image, false, null).replace('class=""', 'style="column-span:none"') : ''}<div style="column-count:2;column-gap:20px;column-rule:1px solid var(--soft);text-align:justify;hyphens:auto"><p class="drop">${esc(leadWords(n))}…</p></div><p class="src">Suite page ${numOf(refs.get(lead.subject.id) || secPage.get(lead.subject.section))}.</p></div>
+    <div class="g2" style="margin-top:12px"><div class="l"><p class="kick">${esc(lead.subject.sectionName)} · À la une</p><h2 class="t" style="font-size:40px">${esc(lead.article.title)}</h2>${lead.article.dek ? `<p class="dek">${esc(lead.article.dek.replace(/\s*\[[TLWV][\d,TLWV]*\]/g, ''))}</p>` : ''}${lead.image ? figHtml(lead.image, false, null).replace('class=""', 'style="column-span:none"') : ''}<div style="column-count:2;column-gap:20px;column-rule:1px solid var(--soft);text-align:justify;hyphens:auto"><p class="drop">${esc(leadWords(n))}…</p></div><p class="src">Suite page ${numOf(refs.get(lead.subject.id) || secPage.get(lead.subject.section))}.</p></div>
     <div class="r"><div class="box"><h4 class="t">Dans ce numéro</h4>${toc.map(([l, pg]) => `<div class="fig"><span>${esc(l)}</span><b style="font-size:14px">${numOf(pg)}</b></div>`).join('')}</div>
     <div class="box"><h4 class="t">Cette semaine</h4><div class="fig"><span>Éléments retenus</span><b>${st.total}</b></div><div class="fig"><span>Sujets distincts</span><b>${plan.subjects.length}</b></div></div>
     ${others.map((e) => `<div style="margin-bottom:10px;text-align:left"><p class="kick">${esc(e.subject.sectionName)}</p><h3 class="t">${esc(e.article.title)}</h3><p class="src">page ${numOf(refs.get(e.subject.id) || secPage.get(e.subject.section))}</p></div>`).join('')}</div></div>`;
