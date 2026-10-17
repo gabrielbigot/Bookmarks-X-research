@@ -1,6 +1,6 @@
 // Compréhension (par règles) des requêtes en langage naturel :
 //   « le tweet le plus vieux d'OpenAI »  ->  tri par date + filtre auteur.
-import { normalizeText } from './search.js';
+import { normalizeText, acctKey } from './search.js';
 
 const OLDEST = /\b(?:le |la |les |tout )?(?:plus (?:vieux|vieille|vieilles|vieux|ancien|anciens|ancienne|anciennes)|tout premier|premier|oldest|earliest|first ever)\b/;
 const NEWEST = /\b(?:le |la |les )?(?:plus (?:recent|recents|recente|recentes|nouveau|nouveaux)|dernier|derniers|derniere|dernieres|newest|latest|most recent)\b/;
@@ -33,13 +33,17 @@ export function interpret(raw) {
 // Comptes dont le nom ou le @handle correspond au mot demandé.
 export function findAuthors(tweets, token) {
   const t = normalizeText(token);
+  const k = acctKey(token);
   if (t.length < 3) return [];
   const seen = new Map();
   for (const tw of tweets) {
     const h = tw.handle.toLowerCase();
     if (seen.has(h)) continue;
     const nameWords = normalizeText(tw.name || '').split(/[^a-z0-9]+/).filter(Boolean);
-    const hit = nameWords.some((w) => w.startsWith(t)) || normalizeText(h).startsWith(t) || normalizeText(h).includes(t);
+    const hk = acctKey(h), nk = acctKey(tw.name);
+    // mot de nom ou @handle (début ou inclusion) ; chaîne YouTube : « siliconcarnepod » retrouve « Silicon Carne » (inclusion dans un sens ou l'autre dès 5 caractères)
+    const hit = nameWords.some((w) => w.startsWith(t)) || normalizeText(h).startsWith(t) || normalizeText(h).includes(t)
+      || (k.length >= 5 && ((hk.length >= 5 && (hk.includes(k) || k.includes(hk))) || (nk.length >= 5 && (nk.includes(k) || k.includes(nk)))));
     if (hit) seen.set(h, { handle: tw.handle, name: tw.name || tw.handle });
   }
   return [...seen.values()];

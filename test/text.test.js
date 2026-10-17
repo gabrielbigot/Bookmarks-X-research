@@ -87,3 +87,20 @@ test('contentWords : « montre-moi le tweet » est vide', () => {
   assert.equal(contentWords('montre-moi le tweet'), 0);
   assert.equal(contentWords("Trouve-moi le tweet le d'"), 0);
 });
+
+import { matchAccount, acctKey, passesFilters, parseQuery } from '../src/lib/search.js';
+test('chaînes YouTube : @identifiant, nom, tiret ou emoji désignent la même chaîne', () => {
+  const sc = { id: 'yt:a', kind: 'video', handle: 'silicon-carne', name: 'Silicon Carne 🌶️', channelId: 'UCabc', playlists: [] };
+  assert.equal(acctKey('Silicon Carne 🌶️'), 'siliconcarne');
+  for (const tok of ['@siliconcarnepod', 'siliconcarne', 'Silicon Carne', 'silicon-carne', 'UCabc']) assert.ok(matchAccount(sc, tok), tok);
+  assert.ok(!matchAccount(sc, '@cashinvestigation'));
+  assert.ok(!matchAccount(sc, 'ai'), 'trop court');
+  assert.ok(passesFilters(sc, parseQuery('from:@siliconcarnepod').filters));
+  assert.ok(!passesFilters({ ...sc, handle: 'autre', name: 'Autre chaîne' }, parseQuery('from:@siliconcarnepod').filters));
+  // tweets : from: reste exact
+  assert.ok(!passesFilters({ id: '1', handle: 'openaidevs', name: 'OpenAI Developers', playlists: [], links: [], media: [] }, parseQuery('from:@openai').filters));
+  const vids = [sc, { id: 'yt:b', kind: 'video', handle: 'hey-initium', name: 'Hey Initium' }, { id: 't1', handle: 'openai', name: 'OpenAI' }];
+  assert.deepEqual(findAuthors(vids, 'siliconcarnepod').map((a) => a.handle), ['silicon-carne']);
+  assert.deepEqual(findAuthors(vids, 'silicon').map((a) => a.handle), ['silicon-carne']);
+  assert.ok(passesFilters(sc, { fromAny: ['autre'], fromTokens: ['Silicon Carne'] }), 'chaîne retrouvée par son nom même si le handle diffère');
+});

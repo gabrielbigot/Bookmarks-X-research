@@ -179,6 +179,16 @@ async function run(opts = {}) {
   $('save').hidden = !raw;
   const parsed = parseQuery(raw);
   let text = parsed.text;
+  // « @siliconcarnepod » seul dans la requête : filtre sur ce compte / cette chaîne s'il existe (sinon le mot reste dans le texte)
+  const atAuthors = [], atTokens = [];
+  text = text.split(/\s+/).filter((w) => {
+    if (!/^@\S{3,}$/.test(w)) return true;
+    const found = findAuthors(index.tweets, w.slice(1));
+    if (!found.length || found.length > 15) return true;
+    atAuthors.push(...found); atTokens.push(w.slice(1));
+    return false;
+  }).join(' ');
+  parsed.text = text;
   let filters = mergeFilters(parsed.filters, toolbarFilters());
   await resolveIs(filters);
   if (my !== seq) return;
@@ -212,8 +222,9 @@ async function run(opts = {}) {
     if (opts.jev.period) filters = mergeFilters(filters, { since: isoDay(Date.now() - PERIOD_DAYS[opts.jev.period] * 86_400_000) });
     if (opts.jev.kind) filters = mergeFilters(filters, { has: [opts.jev.kind] });
   }
+  authors.push(...atAuthors);
   authors = [...new Map(authors.map((a) => [a.handle.toLowerCase(), a])).values()];
-  if (authors.length && authors.length <= 15) filters.fromAny = authors.map((a) => a.handle.toLowerCase());
+  if (authors.length && authors.length <= 15) { filters.fromAny = authors.map((a) => a.handle.toLowerCase()); filters.fromTokens = [...atTokens, ...authors.map((a) => a.name)]; }
   else authors = [];
   text = text.replace(/\s+/g, ' ').trim();
   const allowed = maskFor(filters);

@@ -77,6 +77,16 @@ export function parseQuery(q) {
   return { text: rest.join(' '), filters };
 }
 
+// Compte / chaîne : « @siliconcarnepod », « Silicon Carne » ou « silicon-carne » désignent la même chaîne. On compare des clés sans accents,
+// sans emoji ni ponctuation ; égalité, ou inclusion dans un sens ou l'autre quand le plus court a au moins 5 caractères.
+export const acctKey = (s) => normalizeText(String(s || '')).replace(/[^a-z0-9]+/g, '');
+export function matchAccount(t, token) {
+  const k = acctKey(String(token).replace(/^@/, ''));
+  if (k.length < 3) return false;
+  const cands = [acctKey(t.handle), acctKey(t.name), String(t.channelId || '').toLowerCase()].filter(Boolean);
+  return cands.some((c) => c === k || (c.length >= 5 && k.length >= 5 && (c.includes(k) || k.includes(c))));
+}
+
 export function passesFilters(t, f) {
   const isVideo = isVideoItem(t);
   if (f.source && (f.source === 'youtube') !== isVideo) return false;
@@ -88,8 +98,8 @@ export function passesFilters(t, f) {
   if (f.viewed !== undefined) { if (!isVideo) return false; if (!!(t.watched || []).length !== f.viewed) return false; }
   if (f.watched) { if (!(t.watched || []).some((d) => d >= f.watched.from && d <= f.watched.to)) return false; }
   if (f.playlist) { const w = normalizeText(f.playlist); if (!(t.playlists || []).some((p) => normalizeText(p.title || '').includes(w) || p.id.toLowerCase() === f.playlist)) return false; }
-  if (f.from && t.handle.toLowerCase() !== f.from) return false;
-  if (f.fromAny && !f.fromAny.includes(t.handle.toLowerCase())) return false;
+  if (f.from && (isVideo ? !matchAccount(t, f.from) : t.handle.toLowerCase() !== f.from)) return false;
+  if (f.fromAny && !f.fromAny.includes(t.handle.toLowerCase()) && !(isVideo && f.fromTokens?.some((k) => matchAccount(t, k)))) return false;
   if (f.lang && t.lang !== f.lang) return false;
   if (f.since && (!t.createdAt || t.createdAt.slice(0, 10) < f.since)) return false;
   if (f.until && (!t.createdAt || t.createdAt.slice(0, 10) > f.until)) return false;

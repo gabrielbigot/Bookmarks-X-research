@@ -735,6 +735,10 @@ await panel.fill('#q', '');
 await panel.click('#yt-tr');
 await panel.waitForFunction(() => /ont déjà leur transcription/.test(document.getElementById('progress').textContent), null, { timeout: 15000 });
 
+// recherche par chaîne : « @chaineneuropod » (identifiant approchant) retrouve les vidéos de « Chaîne Neuro », et seulement elles
+await panel.fill('#q', '@chaineneuropod');
+await waitFor(async () => { const n = await panel.locator('.tw.yt .yt-m a').allInnerTexts().catch(() => []); return n.length >= 1 && n.every((x) => /Chaîne Neuro/.test(x)); }, 'recherche par @chaîne : seules les vidéos de la chaîne', 10000);
+await panel.fill('#q', '');
 // ------------------------------------------------------------------ 11d2. transcriptions refusées en direct (400) : lecture par la page vidéo
 await panel.evaluate(async () => {
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
