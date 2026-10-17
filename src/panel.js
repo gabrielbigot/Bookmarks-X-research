@@ -470,7 +470,7 @@ function videoCard([row], terms, pos) {
   el.innerHTML = `
     <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}${t.progress ? `<span class="prog"><i style="width:${Math.min(100, t.progress)}%"></i></span>` : ''}</div>
     <div class="yt-b">
-      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}${t.trState === 'ok' ? '<span class="yt-tr" title="Transcription disponible (cherchée dans le texte parlé)">🗒</span>' : ''}</div>
+      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}${t.trState === 'ok' ? `<span class="yt-tr" title="${t.trSource === 'ai' ? 'Transcription générée par une IA (peut contenir des erreurs) — cherchée dans le texte parlé' : 'Transcription disponible (cherchée dans le texte parlé)'}">${t.trSource === 'ai' ? '🤖' : '🗒'}</span>` : ''}</div>
       <div class="yt-m"><a href="#" data-q="${esc('from:@' + t.handle)}" title="Voir les vidéos de cette chaîne">${esc(t.name || t.handle)}</a>${meta ? ' · ' + esc(meta) : ''}</div>
       ${seen}
       ${pls.length ? `<div class="yt-pl">${pls.map((p) => `<button class="chip-pl" type="button" data-q="${esc(`playlist:"${p.title}"`)}" title="Voir cette playlist">${esc(p.title)}</button>`).join('')}</div>` : ''}

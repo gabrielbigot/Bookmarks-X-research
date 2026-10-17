@@ -5,7 +5,7 @@ import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
 import { isVideoItem } from './lib/youtube.js';
 import { videoPubMs } from './lib/ytdate.js';
-import { fmtTime } from './lib/transcript.js';
+import { fmtTime, aiTranscriptMessages, parseAiTranscript, chunkSegments } from './lib/transcript.js';
 import { detectorSetFor } from './lib/detsets.js';
 import { chatFull } from './lib/llm.js';
 import { isPublicUrl } from './lib/links.js';
@@ -32,14 +32,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -49,7 +49,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -91,6 +91,9 @@ async function prepare(s, offset = 0) {
   const hasDetectors = sections.some((x) => x.id !== 'all');
   const onTopic = (v) => !s.journal.reportTopicOnly || !hasDetectors || sections.some((x) => x.set.has(v.id));
   const offTopic = withTr.filter((v) => inWeek(v) && !tooOld(v) && prioOf(v) === 99 && !onTopic(v));
+  const aiMax = (s.journal.aiTrMaxMin || 150) * 60;
+  const needTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState !== 'ok' && inWeek(v) && !tooOld(v) && (prioOf(v) < 99 || onTopic(v)) && (!v.durationSec || v.durationSec <= aiMax))
+    .sort((a, b) => prioOf(a) - prioOf(b) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const prioNoTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState !== 'ok' && prioOf(v) < 99 && inWeek(v) && !tooOld(v));
   const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v) && (prioOf(v) < 99 || onTopic(v))).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length });
@@ -99,7 +102,7 @@ async function prepare(s, offset = 0) {
   const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
   const oldTweets = minPub ? items.filter((t) => !isVideoItem(t) && t.createdAt && t.createdAt.slice(0, 10) < minPub && eventDays(t, sv).some((d) => inWindow(d, win))).length : 0;
   const oldVideos = withTr.filter((v) => inWeek(v) && tooOld(v)).length;
-  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, offTopic: offTopic.length, prioNoTr: prioNoTr.map((v) => v.text) };
+  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, offTopic: offTopic.length, needTr, prioNoTr: prioNoTr.map((v) => v.text) };
 }
 
 function estimatePlan(plan, cfg) {
@@ -116,7 +119,9 @@ function estimatePlan(plan, cfg) {
   add(estimateCall(plan.subjects.length * 220 + 900, 1000, prices));
   const detailed = [...plan.tiers.leads, ...plan.tiers.articles];
   if (cfg.search) for (let i = 0; i < Math.min(cfg.searchTop, detailed.length); i++) { add(estimateCall(1500, 900, prices)); usd += cfg.searchPrice; }
-  for (const v of plan.reportVideos) {
+  const aiList = cfg.aiTranscribe ? plan.needTr : [];
+  for (const v of aiList) usd += Math.max(5, (v.durationSec || 0) / 60 || 30) * cfg.aiTrPerMin; // transcription par l'IA (vidéo regardée par le modèle)
+  for (const v of [...plan.reportVideos, ...aiList].slice(0, cfg.reportages)) {
     const parts = Math.min(12, Math.max(1, Math.ceil((v.trChars || 20000) / 9000)));
     for (let i = 0; i < parts; i++) add(estimateCall(9500, 900, prices));
     const rp = reportagePlan(v, cfg.reportDepth, plan.budget?.reportWords || 0);
@@ -196,7 +201,7 @@ async function pickImages(entries) {
 
 // Remarques sur le choix des éléments (journal de génération et estimation)
 function planNotes(plan, cfg) {
-  if (plan.prioNoTr.length) log(`⚠ ${plan.prioNoTr.length} vidéo(s) de vos chaînes prioritaires cette semaine sans transcription (pas de reportage possible) : ${plan.prioNoTr.slice(0, 4).map((t) => '« ' + t.slice(0, 40) + ' »').join(', ')}${plan.prioNoTr.length > 4 ? '…' : ''} — lancez « Transcriptions » dans le panneau.`);
+  if (plan.prioNoTr.length) log(`⚠ ${plan.prioNoTr.length} vidéo(s) de vos chaînes prioritaires cette semaine sans transcription (pas de reportage possible) : ${plan.prioNoTr.slice(0, 4).map((t) => '« ' + t.slice(0, 40) + ' »').join(', ')}${plan.prioNoTr.length > 4 ? '…' : ''} — ${cfg.aiTranscribe ? 'transcription par l’IA activée' : 'lancez « Transcriptions » dans le panneau, ou cochez « Transcrire par l’IA »'}.`);
   if (plan.offTopic) log(`${plan.offTopic} vidéo(s) de la semaine écartée(s) des reportages : hors des rubriques cochées.`);
   if (cfg.maxPages && plan.budget && plan.budget.reportWords) log(`Budget de ${cfg.maxPages} pages : ${plan.reportVideos.length} reportage(s) de ${plan.budget.reportWords} mots au plus${plan.budget.reports < Number(cfg.reportages) ? ` (sur ${cfg.reportages} demandés)` : ''}.`);
   if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
@@ -215,7 +220,8 @@ async function generate() {
   const prices = { priceInPerM: cfg.priceInPerM, priceOutPerM: cfg.priceOutPerM };
   let spent = 0, fallbacks = 0, budgetHit = false;
   try {
-    const plan = await prepare(settings, Number($('j-week').value) || 0);
+    const weekOffset = Number($('j-week').value) || 0;
+    let plan = await prepare(settings, weekOffset);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets (${plan.tiers.leads.length} grands sujets, ${plan.tiers.articles.length} articles, ${plan.tiers.briefs.length} brèves).`);
     planNotes(plan, cfg);
     if (!plan.subjects.length) { log('Rien à publier : aucun élément retenu cette semaine.'); return; }
@@ -223,6 +229,34 @@ async function generate() {
     const est = estimatePlan(plan, cfg);
     log(`Coût estimé : ${fmtUsd(est.usd)} (plafond ${fmtUsd(cfg.budget)}).${est.usd > cfg.budget ? ' Au-delà du plafond, les derniers sujets seront traités en brèves simples.' : ''}`);
     const writer = cfg.writerModel || undefined, assist = cfg.assistModel || cfg.writerModel || undefined;
+
+    // vidéos de la semaine sans sous-titres : un modèle qui regarde la vidéo (Gemini via OpenRouter) les transcrit
+    if (cfg.aiTranscribe && plan.needTr.length) {
+      if (!/openrouter\.ai/i.test(settings.llm.baseUrl)) log('⚠ Transcription IA : réservée à OpenRouter (le modèle reçoit l’adresse YouTube) — ignorée.');
+      else {
+        log(`Transcription par l’IA (${cfg.aiTrModel}) de ${plan.needTr.length} vidéo(s) sans sous-titres…`);
+        let okN = 0;
+        for (const v of plan.needTr) {
+          if (abort.signal.aborted) break;
+          const title = `« ${v.text.slice(0, 45)} »`;
+          const minutes = Math.max(5, (v.durationSec || 0) / 60 || 30), est = minutes * cfg.aiTrPerMin;
+          if (spent + est > cfg.budget) { log('  plafond atteint : transcription par l’IA arrêtée.'); break; }
+          if (!(settings.aiHistory || !(v.watched || []).length || (v.playlists || []).length)) { log(`  ${title} : non envoyée (vidéo issue de l’historique de visionnage : option ⚙ › IA).`); continue; }
+          try {
+            const r = await chatFull(settings.llm, aiTranscriptMessages(v), { model: cfg.aiTrModel, maxTokens: 60000, temperature: 0.1, signal: abort.signal, noThink: true });
+            const cost = r.usage.cost != null ? r.usage.cost : est;
+            spent += cost;
+            const segs = parseAiTranscript(r.text);
+            if (segs.length < Math.max(8, minutes * 0.4)) { log(`  ${title} : transcription trop courte (${segs.length} passages), ignorée (${fmtUsd(cost)}).`); continue; }
+            await chrome.runtime.sendMessage({ type: 'ytTranscript', id: v.id, state: 'ok', chunks: chunkSegments(segs), extra: { trSource: 'ai', trModel: cfg.aiTrModel } }).catch(() => {});
+            for (let i = 0; i < 24 && !(await getTranscripts([v.id])).get(v.id)?.length; i++) await ms(250);
+            okN++;
+            log(`  ${title} : ${segs.length} passages transcrits (${fmtUsd(cost)}).`);
+          } catch (err) { if (abort.signal.aborted) throw err; log(`⚠ Transcription IA ${title} : ${err.message}`); }
+        }
+        if (okN) { plan = await prepare(settings, weekOffset); log(`Transcription IA : ${okN} vidéo(s) ajoutée(s) ; ${plan.reportVideos.length} reportage(s) possible(s).`); }
+      }
+    }
 
     const detailed = [...plan.tiers.leads, ...plan.tiers.articles];
     log(hasPerm ? `Lecture des pages liées (${detailed.reduce((n, s) => n + Math.min(2, s.links.length), 0)})…` : 'Accès aux pages liées non autorisé : on se limite aux tweets et aux cartes déjà enregistrées.');

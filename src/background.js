@@ -345,7 +345,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     case 'ytTranscript': {
       (async () => {
-        if (msg.state === 'ok' && msg.chunks?.length) await putTranscript(msg.id, msg.chunks);
+        if (msg.state === 'ok' && msg.chunks?.length) await putTranscript(msg.id, msg.chunks, msg.extra || {});
         else await markNoTranscript([msg.id]);
         broadcast({ type: 'tweetsUpdated' });
         if (msg.state === 'ok') kickIndexing();

@@ -94,6 +94,28 @@ export function chunkSegments(segs, { size = 450 } = {}) {
   return chunks;
 }
 
+// Transcription par un modèle qui regarde la vidéo (Gemini via OpenRouter, lien YouTube) : pour les vidéos sans sous-titres (récentes).
+export function aiTranscriptMessages(video) {
+  const id = video.videoId || String(video.id || '').replace(/^yt:/, '');
+  const dur = video.durationText ? `, durée ${video.durationText}` : '';
+  return [{ role: 'user', content: [
+    { type: 'text', text: `Transcris fidèlement la partie parlée de cette vidéo YouTube (« ${String(video.text || '').slice(0, 120)} », chaîne ${video.name || '?'}${dur}), dans la langue parlée, sans résumer ni reformuler. Une ligne par passage d’environ 20 à 40 secondes, au format exact « [mm:ss] texte » (« [h:mm:ss] » après une heure), du début à la fin de la vidéo. N’ajoute aucun commentaire avant ou après. Si un passage est inaudible, écris [inaudible].` },
+    { type: 'video_url', video_url: { url: `https://www.youtube.com/watch?v=${id}` } },
+  ] }];
+}
+// « [12:40] texte » / « [1:02:03] texte » / « 12:40 - texte » -> [{ t, text }]
+export function parseAiTranscript(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\n+/)) {
+    const m = /^\s*[\[(]?(?:(\d+):)?(\d{1,3}):(\d{2})[\])]?\s*[-–—:]?\s*(.+)$/.exec(line);
+    if (!m) continue;
+    const t = (m[1] ? Number(m[1]) * 3600 : 0) + Number(m[2]) * 60 + Number(m[3]);
+    const txt = clean(m[4]);
+    if (txt && !/^\[?inaudible\]?$/i.test(txt)) out.push({ t, text: txt });
+  }
+  return out;
+}
+
 export const chunksText = (chunks, cap = 40000) => { let s = ''; for (const c of chunks) { if (s.length >= cap) break; s += c.text + ' '; } return s.slice(0, cap); };
 
 // Au plus n passages, répartis sur toute la vidéo (le calcul d'embeddings reste borné pour les vidéos longues).

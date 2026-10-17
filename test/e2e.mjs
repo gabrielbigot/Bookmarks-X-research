@@ -44,6 +44,7 @@ const V = { w1: ['Le cerveau expliqué', 'Chaîne Neuro'], w2: ['Recette de rame
 const PLAYLISTS = { WL: ['w1', 'w2', 'w3'], LL: ['l1'], PL1: ['w1', 'p2'], PL2: ['w2', 'c1'], PL3: ['m1'] };
 let ytDrop = null; // vidéo retirée de TOUTES les playlists (simule « retirée côté YouTube »)
 const ytLog = [];
+const aiLog = [];
 const ytItems = (pid) => PLAYLISTS[pid].filter((v) => v !== ytDrop).map((v, i) => pvr(v, V[v][0], V[v][1], i + 1));
 // historique : 4 pages (HP1 -> HC1 -> HC2 -> HC3), groupées par jour avec les libellés français de YouTube
 const DAYS_FR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -105,6 +106,12 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
     req.on('data', (c) => (raw += c));
     req.on('end', () => {
       const body = JSON.parse(raw);
+      if (Array.isArray(body.messages[0].content)) { // transcription par un modèle qui regarde la vidéo
+        aiLog.push(body.messages[0].content.find((c) => c.type === 'video_url')?.video_url?.url);
+        const lines = Array.from({ length: 14 }, (_, i) => `[${Math.floor(i / 2)}:${i % 2 ? '30' : '00'}] Passage ${i} de la transcription générée par le modèle, avec un peu de texte pour la vidéo.`).join('\n');
+        res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ choices: [{ message: { content: lines } }], usage: { prompt_tokens: 100, completion_tokens: 50 } }));
+      }
       const sys = body.messages[0].content, usr = body.messages.at(-1).content;
       llmLog.push({ sys: sys.slice(0, 40), auth: req.headers.authorization });
       let out = 'ok', ann;
@@ -232,7 +239,7 @@ const ctx = await chromium.launchPersistentContext(tmp + '/profile', {
   headless: false,
   acceptDownloads: true,
   args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox',
-    '--host-resolver-rules=MAP x.com 127.0.0.1, MAP www.youtube.com 127.0.0.1, MAP llm.test 127.0.0.1, MAP huggingface.co 127.0.0.1:1', '--ignore-certificate-errors', '--no-proxy-server'],
+    '--host-resolver-rules=MAP x.com 127.0.0.1, MAP www.youtube.com 127.0.0.1, MAP llm.test 127.0.0.1, MAP openrouter.ai 127.0.0.1, MAP huggingface.co 127.0.0.1:1', '--ignore-certificate-errors', '--no-proxy-server'],
 });
 
 const waitFor = async (fn, what, ms = 45000) => {
@@ -1134,6 +1141,7 @@ await journal.waitForSelector('#j-go');
 await journal.evaluate(() => { document.getElementById('j-links').checked = false; document.getElementById('j-links').dispatchEvent(new Event('change')); });
 await journal.evaluate(() => { for (const id of ['j-search', 'j-verify']) { const c = document.getElementById(id); c.checked = true; c.dispatchEvent(new Event('change')); } });
 await journal.selectOption('#j-age', '0'); // les tweets de test sont anciens
+await journal.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, llm: { ...settings.llm, baseUrl: 'https://openrouter.ai/v1' } } }); const c = document.getElementById('j-aitr'); c.checked = true; c.dispatchEvent(new Event('change')); });
 await journal.fill('#j-budget', '5');
 await journal.dispatchEvent('#j-budget', 'change');
 await journal.evaluate(async () => { // une vidéo regardée cette semaine, avec sa transcription
@@ -1141,7 +1149,8 @@ await journal.evaluate(async () => { // une vidéo regardée cette semaine, avec
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
   const tx = db.transaction(['tweets', 'transcripts'], 'readwrite');
   tx.objectStore('tweets').put({ id: 'yt:jr1', kind: 'youtube', source: 'youtube', handle: 'chaine', name: 'Chaîne Test', text: 'Une conférence sur les agents', url: 'https://www.youtube.com/watch?v=jr1', createdAt: new Date(now).toISOString(), sortIndex: String(now), links: [], media: [], stats: {}, capturedAt: now, addedAt: now, watched: [day], lastWatched: now, durationText: '12:00', trState: 'ok', trChars: 4000, playlists: [] });
-  tx.objectStore('tweets').put({ id: 'yt:jr2', kind: 'youtube', source: 'youtube', handle: 'autre', name: 'Autre Chaîne', text: 'Une autre vidéo regardée', url: 'https://www.youtube.com/watch?v=jr2', createdAt: new Date(now).toISOString(), sortIndex: String(now - 5), links: [], media: [], stats: {}, capturedAt: now, addedAt: now - 60_000, watched: [day], lastWatched: now, durationText: '5:00', playlists: [] });
+  tx.objectStore('tweets').put({ id: 'yt:jr2', kind: 'youtube', source: 'youtube', handle: 'autre', name: 'Autre Chaîne', text: 'Une autre vidéo regardée', url: 'https://www.youtube.com/watch?v=jr2', createdAt: new Date(now).toISOString(), sortIndex: String(now - 5), links: [], media: [], stats: {}, capturedAt: now, addedAt: now - 60_000, watched: [day], lastWatched: now, durationText: '5:00', durationSec: 99999, playlists: [] });
+  tx.objectStore('tweets').put({ id: 'yt:jr3', kind: 'youtube', source: 'youtube', handle: 'recente', name: 'Chaîne Récente', text: 'Une vidéo toute récente sans sous-titres', videoId: 'jr3', url: 'https://www.youtube.com/watch?v=jr3', createdAt: null, sortIndex: String(now - 9), links: [], media: [], stats: {}, capturedAt: now, addedAt: now - 120_000, watched: [day], lastWatched: now, durationText: '20:00', durationSec: 1200, trState: 'none', playlists: [{ id: 'PL1', title: 'Neurosciences', pos: 3 }] });
   tx.objectStore('transcripts').put({ id: 'yt:jr1', chunks: Array.from({ length: 12 }, (_, i) => ({ t: i * 60, text: 'Le conférencier explique le point ' + i + ' sur les agents et leur mémoire de façon détaillée. '.repeat(4) })) });
   await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 });
@@ -1157,7 +1166,9 @@ assert.match(jlog, /Recherche web : [1-9]\d* sujet\(s\) complété/, jlog);
 assert.match(jlog, /fait\(s\) écarté\(s\) : adresse non consultée/, jlog);
 assert.match(jlog, /Relecture : [1-9]\d* phrase\(s\) non étayée\(s\) retirée\(s\)/, jlog);
 assert.match(jlog, /Transcriptions : \d+ sujet/, jlog);
-assert.match(jlog, /Reportages : 1\./, jlog);
+assert.match(jlog, /Transcription IA : 1 vidéo\(s\) ajoutée\(s\)/, jlog);
+assert.ok(aiLog.length === 1 && /watch\?v=jr3$/.test(aiLog[0]), 'le modèle reçoit l’adresse YouTube : ' + aiLog);
+assert.match(jlog, /Reportages : 2\./, jlog);
 console.log('journal :', jlog.split('\n').filter((l) => /Reportage|Transcriptions/.test(l)).join(' | '));
 { // impression : une page imprimée par page du journal (pas de page blanche ni de débordement)
   const fs = await import('node:fs'), os = await import('node:os');

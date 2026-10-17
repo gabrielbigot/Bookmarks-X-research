@@ -279,3 +279,14 @@ test('chatFull : raisonnement obligatoire -> réglage « low », mémorisé, pui
     assert.equal(calls[0].reasoning.effort, 'low', 'le réglage accepté est mémorisé : pas de nouvel essai inutile');
   } finally { globalThis.fetch = orig; }
 });
+
+import { aiTranscriptMessages, parseAiTranscript } from '../src/lib/transcript.js';
+test('transcription IA : messages avec le lien de la vidéo, lecture des lignes horodatées', () => {
+  const m = aiTranscriptMessages({ id: 'yt:abc123', text: 'Une vidéo', name: 'Chaîne', durationText: '1:25:36' });
+  assert.equal(m[0].content[1].video_url.url, 'https://www.youtube.com/watch?v=abc123');
+  assert.match(m[0].content[0].text, /1:25:36/);
+  const segs = parseAiTranscript('[00:00] Bonjour à tous\n[0:45] Aujourd’hui on parle d’IA.\n[1:02:03] Merci beaucoup\n12:40 - Un passage sans crochets\n[05:00] [inaudible]\nBlabla sans horodatage\n[75:30] Après plus de 60 minutes');
+  assert.deepEqual(segs.map((s) => s.t), [0, 45, 3723, 760, 4530]);
+  assert.equal(segs[0].text, 'Bonjour à tous');
+  assert.ok(!segs.some((s) => /inaudible|Blabla/.test(s.text)));
+});
