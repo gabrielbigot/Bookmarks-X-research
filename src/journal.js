@@ -251,7 +251,8 @@ async function generate() {
             await chrome.runtime.sendMessage({ type: 'ytTranscript', id: v.id, state: 'ok', chunks: chunkSegments(segs), extra: { trSource: 'ai', trModel: cfg.aiTrModel } }).catch(() => {});
             for (let i = 0; i < 24 && !(await getTranscripts([v.id])).get(v.id)?.length; i++) await ms(250);
             okN++;
-            log(`  ${title} : ${segs.length} passages transcrits (${fmtUsd(cost)}).`);
+            const lastT = segs.at(-1).t, partial = v.durationSec && lastT < 0.7 * v.durationSec;
+            log(`  ${title} : ${segs.length} passages (≈ 20 à 40 s de parole chacun), de 0:00 à ${fmtTime(lastT)}${v.durationText ? ' sur ' + v.durationText : ''} (${fmtUsd(cost)}).${partial ? ' ⚠ le modèle s’est arrêté avant la fin : transcription incomplète.' : ''}`);
           } catch (err) { if (abort.signal.aborted) throw err; log(`⚠ Transcription IA ${title} : ${err.message}`); }
         }
         if (okN) { plan = await prepare(settings, weekOffset); log(`Transcription IA : ${okN} vidéo(s) ajoutée(s) ; ${plan.reportVideos.length} reportage(s) possible(s).`); }
