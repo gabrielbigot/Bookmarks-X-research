@@ -199,3 +199,34 @@ test('parseSection / parseIntro : citations nettoyées', () => {
   assert.throws(() => parseSection('{"paragraphs": []}', pack));
   assert.equal(reportageSectionMessages({ text: 'V', name: 'C' }, { points: [{ t: 5, text: 'Un point' }], quotes: [] }, { index: 0, total: 3, words: 500 }).length, 2);
 });
+
+import { numberFacts } from '../src/lib/journal.js';
+test('chiffres marquants : nombre + unité, hors années, sans renvois', () => {
+  const f = numberFacts([
+    'Meta publie un modèle de 816 milliards de paramètres [T1]. Il date de 2026. Le prix est de 2 499 dollars par unité [W2].',
+    'Le taux atteint 19,2 % sur le benchmark. Rien de chiffré ici.',
+  ]);
+  assert.ok(f.length >= 3, JSON.stringify(f));
+  assert.ok(f.some((x) => /816 milliards/.test(x.num)));
+  assert.ok(f.some((x) => /2 499 dollars/.test(x.num)));
+  assert.ok(f.some((x) => /19,2 %/.test(x.num)));
+  assert.ok(f.every((x) => !/\[/.test(x.text) && !/^2026/.test(x.num)));
+  assert.deepEqual(numberFacts(['Aucun chiffre ici du tout, juste du texte.']), []);
+});
+
+import { pageBudget } from '../src/lib/journal.js';
+test('budget de pages : reportages limités pour tenir dans le total', () => {
+  const none = pageBudget({ maxPages: 0, reportages: 5 });
+  assert.equal(none.reports, 5); assert.equal(none.reportWords, 0);
+  const b = pageBudget({ maxPages: 30, leads: 4, articles: 14, briefs: 30, reportages: 6, sections: 3 });
+  assert.ok(b.reports >= 1 && b.reports <= 6);
+  assert.ok(b.reportWords >= 300 && b.reportWords <= 3500, JSON.stringify(b));
+  const tight = pageBudget({ maxPages: 12, leads: 4, articles: 14, briefs: 30, reportages: 6, sections: 3 });
+  assert.equal(tight.reports, 0, 'plus de place : aucun reportage');
+  const roomy = pageBudget({ maxPages: 60, leads: 2, articles: 4, briefs: 10, reportages: 3, sections: 2 });
+  assert.equal(roomy.reports, 3);
+});
+test('reportagePlan : plafond de mots', () => {
+  assert.ok(reportagePlan({ durationSec: 3600 }, 'detailed', 900).words <= 900);
+  assert.ok(reportagePlan({ durationSec: 3600 }, 'detailed', 900).sections <= 2);
+});

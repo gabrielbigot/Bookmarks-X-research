@@ -23,7 +23,7 @@ progress{width:100%;height:8px;margin-top:6px}
 .ed{display:flex;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid #eee}.ed b{flex:1}.ed span{color:#6d695e;font-size:12.5px}
 #paper{margin-top:10px}
 /* ---- papier ---- */
-.page{position:relative;width:210mm;height:297mm;margin:14px auto;background:var(--paper);padding:11mm 12mm 14mm;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.25);display:flex;flex-direction:column}
+.page{font-size:calc(13.4px*var(--s,1));line-height:calc(1.36 + .09*var(--s,1));position:relative;width:210mm;height:297mm;margin:14px auto;background:var(--paper);padding:11mm 12mm 14mm;overflow:hidden;box-shadow:0 2px 18px rgba(0,0,0,.25);display:flex;flex-direction:column}
 .run{display:flex;justify-content:space-between;font:700 9.5px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase;border-bottom:1px solid var(--ink);padding-bottom:6px;margin-bottom:12px;color:var(--ink2)}
 .pn{position:absolute;left:12mm;right:12mm;bottom:6mm;display:flex;justify-content:space-between;font:10px/1 "Helvetica Neue",Arial,sans-serif;color:var(--ink2);border-top:1px solid var(--soft);padding-top:5px}
 .pn b{color:var(--ink)}
@@ -32,33 +32,33 @@ progress{width:100%;height:8px;margin-top:6px}
 .flow p{margin:0 0 .75em}
 .kick{font:700 10px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 6px;text-align:left}
 h2.t,h3.t,h4.t{margin:0 0 5px;font-family:"Didot","Bodoni 72","Playfair Display",Georgia,serif;font-weight:700;letter-spacing:-.01em;text-align:left}
-h2.t{font-size:34px;line-height:1.05}h3.t{font-size:21px;line-height:1.1}h4.t{font:700 10.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase;border-bottom:2px solid var(--ink);padding-bottom:5px;margin:4px 0 8px}
-.dek{font:italic 15px/1.32 Georgia,serif;color:var(--ink2);margin:0 0 8px;text-align:left}
+h2.t{font-size:calc(34px*(.75 + .25*var(--s,1)));line-height:1.05}h3.t{font-size:calc(21px*(.8 + .2*var(--s,1)));line-height:1.1}h4.t{font:700 10.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase;border-bottom:2px solid var(--ink);padding-bottom:5px;margin:4px 0 8px}
+.dek{font:italic 1.1em/1.32 Georgia,serif;color:var(--ink2);margin:0 0 8px;text-align:left}
 .by{font:600 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.09em;text-transform:uppercase;border-top:1px solid var(--soft);border-bottom:1px solid var(--soft);padding:5px 0;margin:0 0 10px;color:var(--ink2);text-align:left}
 .art-head.lead{column-span:all;margin-bottom:6px}.art-head{break-inside:avoid}
-.art-head.lead h2.t{font-size:38px}
+.art-head.lead h2.t{font-size:calc(38px*(.75 + .25*var(--s,1)))}
 .sep{break-inside:avoid;border-top:3px double var(--ink);margin:6px 0 10px}
 .drop::first-letter{float:left;font:700 3.2em/.85 "Didot","Bodoni 72",Georgia,serif;padding:3px 7px 0 0}
 figure{margin:0 0 10px;break-inside:avoid}figure.wide{column-span:all}
 .im{display:block;width:100%;aspect-ratio:3/2;background:#e6e2d6;overflow:hidden}figure.wide .im{aspect-ratio:21/9}
-.im img{display:block;width:100%;height:100%;object-fit:cover}
+.im img{display:block;width:100%;height:100%;object-fit:cover}.im.fit{background:#ebe7dc}.im.fit img{object-fit:contain}
 figcaption{font:italic 11px/1.3 Georgia,serif;color:var(--ink2);margin-top:4px;border-bottom:1px solid var(--soft);padding-bottom:6px;text-align:left}
-blockquote.pull{break-inside:avoid;margin:.2em 0 .9em;padding:8px 0;border-top:3px solid var(--ink);border-bottom:1px solid var(--ink);font:italic 700 17px/1.25 "Didot","Bodoni 72",Georgia,serif;text-align:left}
+blockquote.pull{break-inside:avoid;margin:.2em 0 .9em;padding:8px 0;border-top:3px solid var(--ink);border-bottom:1px solid var(--ink);font:italic 700 1.27em/1.25 "Didot","Bodoni 72",Georgia,serif;text-align:left}
 blockquote.pull cite{display:block;font:600 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;margin-top:6px;font-style:normal;color:var(--ink2)}
 .kp{break-inside:avoid;border:1px solid var(--ink);padding:8px 10px;margin:0 0 .9em;text-align:left}
 .kp h5{margin:0 0 5px;font:700 10px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase}
-.kp ul{margin:0;padding-left:16px;font-size:12.5px}
+.kp ul{margin:0;padding-left:16px;font-size:.93em}
 sup.c{font:700 9px/1 "Helvetica Neue",Arial,sans-serif;color:var(--accent);margin-left:1px}
 .srcl{font:600 9.5px/1.4 "Helvetica Neue",Arial,sans-serif;color:var(--ink2);letter-spacing:.02em;text-align:left;break-inside:avoid}
 .srcl a{color:var(--ink2);text-decoration:none}
-.brief{break-inside:avoid;padding:0 0 8px;font-size:12.5px;text-align:left}
+.brief{break-inside:avoid;padding:0 0 8px;font-size:.93em;text-align:left}
 .brief b{display:block;font:700 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:2px}
 .fb{font:italic 10px/1.2 "Helvetica Neue",Arial,sans-serif;color:var(--ink2)}
 .week{list-style:none;margin:0 0 .9em;padding:0;break-inside:avoid;text-align:left}
-.week li{display:grid;grid-template-columns:52px 1fr;gap:8px;padding:5px 0;border-bottom:1px dotted var(--soft);font-size:12.5px}
+.week li{display:grid;grid-template-columns:52px 1fr;gap:8px;padding:5px 0;border-bottom:1px dotted var(--soft);font-size:.93em}
 .week b{font:700 10px/1.3 "Helvetica Neue",Arial,sans-serif;letter-spacing:.09em;text-transform:uppercase;color:var(--accent)}
-.gloss{break-inside:avoid;font-size:12.5px;margin:0 0 .6em;text-align:left}
-.bibl{font:10.5px/1.35 "Helvetica Neue",Arial,sans-serif;text-align:left;break-inside:avoid;margin:0 0 4px;word-break:break-word}
+.gloss{break-inside:avoid;font-size:.93em;margin:0 0 .6em;text-align:left}
+.bibl{font:9.5px/1.3 "Helvetica Neue",Arial,sans-serif;text-align:left;break-inside:avoid;margin:0 0 4px;word-break:break-word}
 .bibl b{color:var(--accent)}
 /* pages fixes */
 .mast{margin:0;text-align:center;font:700 54px/1 "Didot","Bodoni 72","Playfair Display",Georgia,serif;letter-spacing:-.01em}
@@ -89,3 +89,30 @@ h4.t.sub{font:700 15px/1.2 Didot,"Bodoni 72",Georgia,serif;letter-spacing:0;text
 .wk small{font-weight:400;color:#6d695e}
 
 sup.c+sup.c::before{content:",";margin-left:-.1em}
+
+/* ---- mise en pages variée ---- */
+.flow.c3{column-count:3;column-gap:16px;font-size:.96em}
+.rub{column-span:all;display:flex;align-items:baseline;gap:12px;border-top:5px solid var(--sc,var(--ink));padding:6px 0 7px;margin:0 0 10px;break-after:avoid}
+.rub span{font:700 calc(27px*(.8 + .2*var(--s,1)))/1 "Didot","Bodoni 72","Playfair Display",Georgia,serif;color:var(--sc,var(--ink));letter-spacing:-.01em}
+.rub small{font:700 9.5px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.12em;text-transform:uppercase;color:var(--ink2)}
+.brh{column-span:all;border-bottom-color:var(--sc,var(--ink))}
+.brefs{column-span:all;column-count:3;column-gap:18px;column-rule:1px solid var(--soft);margin:0 0 8px;text-align:left}
+.facts{break-inside:avoid;border-top:3px solid var(--sc,var(--ink));border-bottom:1px solid var(--ink);padding:7px 0 4px;margin:.2em 0 .9em;text-align:left}
+.facts h5{margin:0 0 4px;font:700 10px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase}
+.facts .f{display:grid;grid-template-columns:minmax(0,auto) 1fr;gap:2px 10px;align-items:baseline;padding:4px 0;border-top:1px dotted var(--soft)}
+.facts .f b{font:700 1.45em/1 "Didot","Bodoni 72",Georgia,serif;color:var(--sc,var(--accent));white-space:nowrap}
+.facts .f span{font-size:.86em;line-height:1.3}
+.tl{column-span:all;display:flex;flex-wrap:wrap;gap:3px 16px;border-top:1px solid var(--ink);border-bottom:1px solid var(--ink);padding:7px 0;margin:2px 0 10px;font:11px/1.3 "Helvetica Neue",Arial,sans-serif;text-align:left}
+.tl h5{margin:0;width:100%;font:700 9.5px/1.2 "Helvetica Neue",Arial,sans-serif;letter-spacing:.13em;text-transform:uppercase;color:var(--ink2)}
+.tl b{color:var(--accent);margin-right:5px;font-variant-numeric:tabular-nums}
+.heat{text-align:left}
+.heat .hr{display:grid;grid-template-columns:34px repeat(24,1fr);gap:2px;margin-bottom:2px;align-items:center}
+.heat .hr span{font:700 9.5px/1 "Helvetica Neue",Arial,sans-serif;text-transform:uppercase;color:var(--ink2)}
+.heat .hr i{display:block;aspect-ratio:1;background:var(--accent)}
+.heat .hx em{white-space:nowrap;font:8px/1 "Helvetica Neue",Arial,sans-serif;font-style:normal;color:var(--ink2)}
+.dom{position:relative;display:flex;justify-content:space-between;gap:8px;padding:6px 6px 8px;border-bottom:1px solid var(--soft);font:11.5px/1.2 "Helvetica Neue",Arial,sans-serif;text-align:left}
+.dom i{position:absolute;left:0;bottom:2px;height:3px;background:var(--s1)}
+.dom b{font-variant-numeric:tabular-nums}
+.sep+.art-head{break-before:avoid}
+
+.colo{column-span:all}

@@ -5,13 +5,14 @@ import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
 import { isVideoItem } from './lib/youtube.js';
 import { videoPubMs } from './lib/ytdate.js';
+import { fmtTime } from './lib/transcript.js';
 import { detectorSetFor } from './lib/detsets.js';
 import { chatFull } from './lib/llm.js';
 import { isPublicUrl } from './lib/links.js';
 import { handleKey, OFFICIAL_DESC, eventDays } from './lib/widgets.js';
 import {
   weekWindow, inWindow, dayLabel, buildSubjects, assignTiers, weekStats, extractPageText, evidenceFor, articleMessages, briefsMessages, editorialMessages,
-  searchMessages, parseFindings, verifyMessages, applyVerification, meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportagePlan, splitPoints, reportageIntroMessages, reportageSectionMessages, parseSection, parseIntro, videoUrl, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, esc, TIER,
+  searchMessages, parseFindings, verifyMessages, applyVerification, meanVec, matchVideos, bestPassages, splitTranscript, summaryMessages, parseSummary, reportageEvidence, reportagePlan, splitPoints, pageBudget, reportageIntroMessages, reportageSectionMessages, parseSection, parseIntro, videoUrl, parseArticle, parseBriefs, parseEditorial, fallbackArticle, estimateCall, costOf, fmtUsd, makeBibliography, citeHtml, sourcesLine, numberFacts, esc, TIER,
 } from './lib/journal.js';
 
 const $ = (id) => document.getElementById(id);
@@ -31,14 +32,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -48,7 +49,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -87,11 +88,13 @@ async function prepare(s, offset = 0) {
   const prioOf = (v) => { const h = [v.name, v.handle].map((x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '')); const i = prio.findIndex((p) => h.some((x) => x && (x === p || x.includes(p)))); return i < 0 ? 99 : i; };
   const tooOld = (v) => { if (!minPub) return false; const pm = videoPubMs(v); return !!pm && dayKey(pm) < minPub; };
   const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v)).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
+  const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length });
+  reportVideos.length = Math.min(reportVideos.length, budget.reports);
   const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
   const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
   const oldTweets = minPub ? items.filter((t) => !isVideoItem(t) && t.createdAt && t.createdAt.slice(0, 10) < minPub && eventDays(t, sv).some((d) => inWindow(d, win))).length : 0;
   const oldVideos = withTr.filter((v) => inWeek(v) && tooOld(v)).length;
-  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, eligible, minPub, oldTweets, oldVideos };
+  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos };
 }
 
 function estimatePlan(plan, cfg) {
@@ -111,7 +114,7 @@ function estimatePlan(plan, cfg) {
   for (const v of plan.reportVideos) {
     const parts = Math.min(12, Math.max(1, Math.ceil((v.trChars || 20000) / 9000)));
     for (let i = 0; i < parts; i++) add(estimateCall(9500, 900, prices));
-    const rp = reportagePlan(v, cfg.reportDepth);
+    const rp = reportagePlan(v, cfg.reportDepth, plan.budget?.reportWords || 0);
     add(estimateCall(4500, 500, prices));
     for (let i = 0; i < rp.sections; i++) { add(estimateCall(2500, Math.round(rp.perSection * 1.8), prices)); if (cfg.verify) add(estimateCall(rp.perSection * 7 + 800, 250, prices)); }
   }
@@ -168,14 +171,19 @@ function videoWhy(v, win) {
 }
 
 // ---------- images ----------
-const probe = (url) => new Promise((res) => { const im = new Image(); const t = setTimeout(() => res(false), 7000); im.onload = () => { clearTimeout(t); res(true); }; im.onerror = () => { clearTimeout(t); res(false); }; im.referrerPolicy = 'no-referrer'; im.src = url; });
+const probeCache = new Map(); // adresse -> { w, h } | false (les images déjà vues ne sont pas rechargées à chaque mise en page)
+const probeSize = (url) => {
+  if (!probeCache.has(url)) probeCache.set(url, new Promise((res) => { const im = new Image(); const t = setTimeout(() => res(false), 7000); im.onload = () => { clearTimeout(t); res({ w: im.naturalWidth, h: im.naturalHeight }); }; im.onerror = () => { clearTimeout(t); res(false); }; im.referrerPolicy = 'no-referrer'; im.src = url; }));
+  return probeCache.get(url);
+};
+const probe = async (url) => !!(await probeSize(url));
 async function pickImages(entries) {
   let i = 0;
   const worker = async () => {
     while (i < entries.length) {
       const e = entries[i++];
       e.image = null;
-      for (const im of e.subject.images.slice(0, 3)) { if (await probe(im.url)) { e.image = im; break; } }
+      for (const im of e.subject.images.slice(0, 3)) { const sz = await probeSize(im.url); if (sz) { e.image = { ...im, ratio: sz.w && sz.h ? sz.w / sz.h : 0 }; break; } }
     }
   };
   await Promise.all(Array.from({ length: 6 }, worker));
@@ -196,6 +204,7 @@ async function generate() {
   try {
     const plan = await prepare(settings, Number($('j-week').value) || 0);
     log(`Semaine ${plan.win.label} : ${plan.subjects.length} sujets (${plan.tiers.leads.length} grands sujets, ${plan.tiers.articles.length} articles, ${plan.tiers.briefs.length} brèves).`);
+    if (cfg.maxPages && plan.budget && plan.budget.reportWords) log(`Budget de ${cfg.maxPages} pages : ${plan.reportVideos.length} reportage(s) de ${plan.budget.reportWords} mots au plus${plan.budget.reports < Number(cfg.reportages) ? ` (sur ${cfg.reportages} demandés)` : ''}.`);
     if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
     if (!plan.subjects.length) { log('Rien à publier : aucun élément retenu cette semaine.'); return; }
     if (!plan.tiers.leads.length && !plan.tiers.articles.length && !plan.tiers.briefs.length) { log('Rien à publier : les nombres de grands sujets, d’articles et de brèves sont à 0.'); return; }
@@ -321,7 +330,7 @@ async function generate() {
           await Promise.all([pw(), pw()]);
           const pack = reportageEvidence(video, sums);
           if (pack.points < 3) { log(`  « ${video.text.slice(0, 50)} » : transcription trop pauvre, ignorée.`); continue; }
-          const rp = reportagePlan(video, cfg.reportDepth);
+          const rp = reportagePlan(video, cfg.reportDepth, plan.budget?.reportWords || 0);
           log(`  « ${video.text.slice(0, 50)} » (${videoWhy(video, plan.win)}) : ${pack.points} points, reportage d’environ ${rp.words} mots en ${rp.sections} partie(s)…`);
           const groups = splitPoints(sums, rp.sections);
           // ouverture (titre, chapeau, introduction, citation, points à retenir), puis une partie après l'autre
@@ -350,15 +359,16 @@ async function generate() {
                 catch (err) { if (abort.signal.aborted) throw err; if (err.message !== 'budget') log(`⚠ Relecture du reportage : ${err.message}`); }
               }
             }
+            sec.t = groups[gi].points[0]?.t;
             secs.push(sec);
           }
           if (!secs.length) continue;
-          const heads = {}, paragraphs = [...intro.paragraphs];
-          for (const sec of secs) { if (sec.heading) heads[paragraphs.length] = sec.heading; paragraphs.push(...sec.paragraphs); }
-          const article = { ...intro, paragraphs, heads, words: paragraphs.join(' ').split(/\s+/).length };
+          const heads = {}, headTimes = {}, paragraphs = [...intro.paragraphs];
+          for (const sec of secs) { if (sec.heading) { heads[paragraphs.length] = sec.heading; headTimes[paragraphs.length] = sec.t; } paragraphs.push(...sec.paragraphs); }
+          const article = { ...intro, paragraphs, heads, headTimes, words: paragraphs.join(' ').split(/\s+/).length };
           const day0 = (video.watched || [])[0] || dayKey(video.addedAt || Date.now());
           const entry = { tier: 'report', pack, article, image: null, subject: { id: 'r:' + video.id, section: 'reports', sectionName: 'Reportage vidéo', members: [video], rep: video, firstDay: day0, lastDay: day0, images: [], links: [] } };
-          if (video.thumb && await probe(video.thumb)) entry.image = { url: video.thumb, alt: video.text, card: true };
+          if (video.thumb) { const sz = await probeSize(video.thumb); if (sz) entry.image = { url: video.thumb, alt: video.text, card: true, ratio: sz.w / sz.h }; }
           reportEntries.push(entry);
         } catch (err) {
           if (abort.signal.aborted) throw err;
@@ -398,8 +408,10 @@ async function generate() {
     log('Choix des images…');
     await pickImages(entries);
     log('Mise en pages…');
-    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal, reportEntries, trCount };
-    await renderPaper(model);
+    const model = { plan, entries, briefEntries, editorial, cost: spent, fallbacks, budget: cfg.budget, budgetHit, webCount, removedTotal, reportEntries, trCount, maxPages: cfg.maxPages };
+    const rr = await renderPaper(model);
+    if (rr.scale < 1) log(`Texte réduit à ${Math.round(rr.scale * 100)} % pour tenir en ${rr.pages} pages (objectif : ${cfg.maxPages}).`);
+    if (rr.over) log(`⚠ ${rr.pages} pages malgré la réduction du texte (objectif : ${cfg.maxPages}) : baisse le nombre d'articles, de brèves ou de reportages, ou leur détail.`);
     prog(0.97);
     const id = String(Date.now());
     const pagesN = $('paper').children.length;
@@ -419,58 +431,110 @@ async function generate() {
 
 // ---------- mise en pages ----------
 const paper = $('paper');
-function newPage(label, sec) {
+let curWin = null, curScale = 1;
+const runHtml = (label) => `<div class="run"><span>${esc(label)}</span><span>${esc(curWin.label)}</span><span>Édition n° ${curWin.week}</span></div>`;
+const footHtml = `<div class="pn"><b>${esc(NAME)}</b><span></span></div>`;
+function newPage(label, { cols = 2, accent = '' } = {}) {
   const pg = document.createElement('section');
-  pg.className = 'page'; if (sec) pg.dataset.sec = sec;
-  pg.innerHTML = `<div class="run"><span>${esc(label)}</span><span>${esc(curWin.label)}</span><span>Édition n° ${curWin.week}</span></div><div class="body flow"></div><div class="pn"><b>${esc(NAME)}</b><span></span></div>`;
+  pg.className = 'page';
+  pg.style.setProperty('--s', String(curScale)); // échelle du texte (voir renderPaper) : enregistrée avec la page
+  if (accent) pg.style.setProperty('--sc', accent);
+  pg.innerHTML = `${runHtml(label)}<div class="body flow${cols === 3 ? ' c3' : ''}"></div>${footHtml}`;
   paper.append(pg);
   return pg;
 }
-let curWin = null;
 const nodesOf = (html) => { const d = document.createElement('div'); d.innerHTML = html; return [...d.childNodes]; };
-const overflows = (body) => body.scrollWidth > body.clientWidth + 2;
-// blocks : [{ html, ref? }] ; ref = clé retenue avec la page où le bloc a atterri.
-function flow(label, blocks, refs) {
-  let pg = newPage(label), body = pg.querySelector('.body');
-  const pagesOut = [pg];
-  for (const b of blocks) {
-    const nodes = nodesOf(b.html);
+const overflows = (body) => body.scrollWidth > body.clientWidth + 2 || body.scrollHeight > body.clientHeight + 2;
+// Mise en pages par blocs. Un bloc : { html | alts: [{ html, after? }], ref?, refs?, lab?, defer?, accent? }
+//  - alts : variantes essayées dans l'ordre (la première qui tient dans la place restante) ; `after` = blocs à insérer ensuite ;
+//  - defer : bloc qui ne tient pas -> mis de côté et placé en tête de la page suivante (les textes continuent de remplir la page) ;
+//  - ref / refs : clés retenues avec la page où le bloc a atterri ; lab : intitulé en haut de la page où il commence.
+function flow(blocks, { label, cols = 2, refs } = {}) {
+  const pagesOut = [];
+  let pg = null, body = null;
+  const open = (b) => { pg = newPage(b?.lab || label, { cols, accent: b?.accent }); body = pg.querySelector('.body'); pagesOut.push(pg); };
+  const pending = [];
+  const tryPlace = (html) => {
+    const nodes = nodesOf(html);
     nodes.forEach((n) => body.append(n));
-    if (overflows(body) && body.children.length > nodes.length) {
-      nodes.forEach((n) => n.remove());
-      pg = newPage(label); body = pg.querySelector('.body'); pagesOut.push(pg);
-      nodes.forEach((n) => body.append(n));
+    if (!overflows(body) || body.children.length === nodes.length) return true;
+    nodes.forEach((n) => n.remove());
+    return false;
+  };
+  const flushPending = () => { for (let i = 0; i < pending.length;) { if (tryPlace(pending[i].html)) pending.splice(i, 1); else i++; } };
+  const queue = [...blocks];
+  while (queue.length) {
+    const b = queue.shift();
+    if (!pg) open(b);
+    const alts = b.alts || [{ html: b.html }];
+    const alt = alts.find((x) => tryPlace(x.html));
+    if (alt) {
+      for (const r of b.refs || (b.ref ? [b.ref] : [])) if (refs) refs.set(r, pg);
+      if (alt.after) queue.unshift(...alt.after);
+      continue;
     }
-    if (b.ref && refs) refs.set(b.ref, pg);
+    if (b.defer) { pending.push(b); continue; }
+    open(b); flushPending(); queue.unshift(b);
   }
+  while (pending.length) { open(null); const n = pending.length; flushPending(); if (pending.length === n) { tryPlace(pending[0].html); pending.shift(); } }
   return pagesOut;
 }
 function fixedPage(label, html, cls = '') {
   const pg = document.createElement('section');
   pg.className = 'page ' + cls;
-  pg.innerHTML = `<div class="run"><span>${esc(label)}</span><span>${esc(curWin.label)}</span><span>Édition n° ${curWin.week}</span></div><div class="body">${html}</div><div class="pn"><b>${esc(NAME)}</b><span></span></div>`;
+  pg.style.setProperty('--s', String(curScale));
+  pg.innerHTML = `${runHtml(label)}<div class="body">${html}</div>${footHtml}`;
   paper.append(pg);
   const body = pg.querySelector('.body');
   for (let z = 1; z > 0.6 && body.scrollHeight > body.clientHeight + 2; z -= 0.04) body.style.zoom = z.toFixed(2);
   return pg;
 }
 
-const figHtml = (im, wide, cap) => (im ? `<figure class="${wide ? 'wide' : ''}"><span class="im"><img src="${esc(im.url)}" alt="" referrerpolicy="no-referrer"></span><figcaption>${esc(cap || im.alt || `Image du tweet de @${im.handle}`)}</figcaption></figure>` : '');
-function articleBlocks(e, bib) {
+// Image : le cadre suit le format de l'image (une capture de graphique n'est plus rognée) ; formats extrêmes : image entière sur fond neutre.
+function figHtml(im, wide, cap) {
+  if (!im) return '';
+  const r = im.ratio || 0;
+  const lo = wide ? 1.7 : 1.15, hi = wide ? 2.4 : 2.0;
+  const box = r ? Math.min(hi, Math.max(lo, r)) : (wide ? 2.2 : 1.5);
+  const fit = r && (r < lo || r > hi) ? ' fit' : '';
+  return `<figure class="${wide ? 'wide' : ''}"><span class="im${fit}" style="aspect-ratio:${box.toFixed(3)}"><img src="${esc(im.url)}" alt="" referrerpolicy="no-referrer"></span><figcaption>${esc(cap || im.alt || `Image du tweet de @${im.handle}`)}</figcaption></figure>`;
+}
+const ACCENTS = ['#1f4e79', '#b5532a', '#2e7d5b', '#b8860b', '#8a4f7d', '#8c1c13'];
+const factsHtml = (facts) => `<div class="facts"><h5>En chiffres</h5>${facts.map((f) => `<div class="f"><b>${esc(f.num)}</b><span>${esc(f.text)}</span></div>`).join('')}</div>`;
+
+// Blocs d'un article. prefix : html placé avant l'en-tête (bandeau de rubrique), dans le même bloc pour ne jamais rester seul en bas de page.
+function articleBlocks(e, bib, { prefix = '', lab = '', accent = '' } = {}) {
   const a = e.article, report = e.tier === 'report', lead = e.tier === 'lead' || report, ref = e.subject.id;
   const cite = (t) => citeHtml(t, e.pack, bib);
   const vs = e.pack.sources.find((x) => x.kind === 'video');
   const by = report ? `Vidéo de ${esc(vs.channel)}${e.subject.rep.durationText ? ' · ' + esc(e.subject.rep.durationText) : ''} · d’après la transcription${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}` : `D’après ${e.pack.sources.filter((s) => s.kind === 'tweet').slice(0, 3).map((s) => '@' + esc(s.handle)).join(', ')} · ${esc(e.subject.firstDay.slice(8))}/${esc(e.subject.firstDay.slice(5, 7))}${e.pack.sources.some((x) => x.kind === 'web') ? ' · recherche web' : ''}${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}`;
-  const head = `<div class="art-head${lead ? ' lead' : ''}"><p class="kick">${esc(e.subject.sectionName)}${lead && !report ? ' · À la une' : ''}</p>${lead ? `<h2 class="t">${esc(a.title)}</h2>` : `<h3 class="t">${esc(a.title)}</h3>`}${a.dek ? `<p class="dek">${cite(a.dek)}</p>` : ''}<p class="by">${by}</p></div>`;
+  const head = `<div class="art-head${lead ? ' lead' : ''}"><p class="kick">${esc(e.subject.sectionName)}${report ? '' : lead ? ' · À la une de la rubrique' : ''}</p>${lead ? `<h2 class="t">${esc(a.title)}</h2>` : `<h3 class="t">${esc(a.title)}</h3>`}${a.dek ? `<p class="dek">${cite(a.dek)}</p>` : ''}<p class="by">${by}</p></div>`;
+  const cap = e.image && e.image.card ? (report ? 'Image de la vidéo' : `Illustration : ${e.image.alt}`) : null;
+  const hasImg = !!(e.image && !a.fallback);
+  const p0 = `<p class="${lead ? 'drop ' : ''}">${cite(a.paragraphs[0])}</p>`;
   const blocks = [];
-  const img = e.image && !a.fallback ? figHtml(e.image, lead, e.image.card ? `Illustration : ${e.image.alt}` : null) : '';
-  blocks.push({ ref, html: head + img + `<p class="${lead ? 'drop ' : ''}">${cite(a.paragraphs[0])}</p>` });
+  const colFig = hasImg ? { html: figHtml(e.image, false, cap), defer: true } : null;
+  if (report) {
+    // reportage : ouverture pleine largeur, chronologie des parties, essentiel en tête
+    const times = Object.entries(a.heads || {}).map(([i, h]) => ({ h, t: a.headTimes?.[i] }));
+    const tl = times.length ? `<div class="tl"><h5>Dans cette vidéo</h5>${times.map((x) => `<span><b>${x.t != null ? fmtTime(x.t) : ''}</b>${esc(x.h)}</span>`).join('')}</div>` : '';
+    const kp = a.points.length ? `<div class="kp"><h5>L’essentiel</h5><ul>${a.points.map((p) => `<li>${cite(p)}</li>`).join('')}</ul></div>` : '';
+    const rest = tl + kp + p0;
+    blocks.push({ refs: [ref], lab, accent, alts: hasImg ? [{ html: prefix + head + figHtml(e.image, true, cap) + rest }, { html: prefix + head + rest, after: [colFig] }] : [{ html: prefix + head + rest }] });
+  } else {
+    const first = prefix + head;
+    blocks.push({ refs: [ref], lab, accent, alts: hasImg
+      ? [{ html: first + figHtml(e.image, lead, cap) + p0 }, { html: first + p0, after: [colFig] }]
+      : [{ html: first + p0 }] });
+  }
+  const facts = !report && (lead || a.paragraphs.length >= 5) ? numberFacts(a.paragraphs, 4) : [];
   a.paragraphs.slice(1).forEach((p, i) => {
     if (a.heads?.[i + 1]) blocks.push({ html: `<h4 class="t sub">${esc(a.heads[i + 1])}</h4>` });
     blocks.push({ html: `<p>${cite(p)}</p>` });
-    if (i === 0 && a.pull) blocks.push({ html: `<blockquote class="pull">« ${esc(a.pull)} »<cite>${esc(a.pullSource ? (report ? vs.channel : '@' + (e.pack.sources.find((s) => s.id === a.pullSource)?.handle || '')) : '')}</cite></blockquote>` });
+    if (i === 0 && a.pull) blocks.push({ defer: true, html: `<blockquote class="pull">« ${esc(a.pull)} »<cite>${esc(a.pullSource ? (report ? vs.channel : '@' + (e.pack.sources.find((s) => s.id === a.pullSource)?.handle || '')) : '')}</cite></blockquote>` });
+    if (i === 1 && facts.length >= 3) blocks.push({ defer: true, html: factsHtml(facts) });
   });
-  if (a.points.length) blocks.push({ html: `<div class="kp"><h5>À retenir</h5><ul>${a.points.map((p) => `<li>${cite(p)}</li>`).join('')}</ul></div>` });
+  if (!report && a.points.length) blocks.push({ html: `<div class="kp"><h5>À retenir</h5><ul>${a.points.map((p) => `<li>${cite(p)}</li>`).join('')}</ul></div>` });
   const sl = sourcesLine(a, e.pack, bib);
   if (sl) blocks.push({ html: sl });
   return blocks;
@@ -498,7 +562,18 @@ function barsSvg(vals, keys) {
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
 
-async function renderPaper(model) {
+// carte de chaleur : un carré par heure et par jour (plus foncé = plus d'enregistrements)
+function heatHtml(st) {
+  const max = Math.max(1, ...st.heat.flat());
+  const rows = st.dayKeys.map((k, i) => `<div class="hr"><span>${esc(dayLabel(k).split(' ')[0].replace('.', ''))}</span>${st.heat[i].map((n, h) => `<i title="${n} à ${h} h" style="opacity:${n ? (0.18 + 0.82 * n / max).toFixed(2) : 0.06}"></i>`).join('')}</div>`).join('');
+  return `<div class="heat">${rows}<div class="hr hx"><span></span>${Array.from({ length: 24 }, (_, h) => `<em>${h % 6 === 0 ? h + ' h' : ''}</em>`).join('')}</div></div>`;
+}
+function domainsHtml(st) {
+  const max = Math.max(1, ...st.domains.map((d) => d.n));
+  return st.domains.length ? st.domains.map((d) => `<div class="dom"><span>${esc(d.host)}</span><i style="width:${Math.round(100 * d.n / max)}%"></i><b>${d.n}</b></div>`).join('') : '<p class="src">Aucun lien externe cette semaine.</p>';
+}
+
+async function renderOnce(model) {
   const { plan, entries, briefEntries, editorial } = model;
   curWin = plan.win;
   paper.innerHTML = '';
@@ -506,36 +581,47 @@ async function renderPaper(model) {
   const refs = new Map();
   const secPage = new Map();
 
-  // éditorial
+  // texte courant : éditorial puis rubriques dans UN SEUL flux (les articles comblent les fins de page, une rubrique peut commencer en bas d'une page)
+  const main = [];
   if (editorial && editorial.paragraphs.length) {
-    const blocks = [{ html: `<div class="art-head lead"><p class="kick">Éditorial</p><h2 class="t">${esc(editorial.title || 'La semaine')}</h2><p class="by">Par la rédaction · ${plan.subjects.length} sujets cette semaine</p></div><p class="drop">${esc(editorial.paragraphs[0])}</p>` }];
-    editorial.paragraphs.slice(1).forEach((p) => blocks.push({ html: `<p>${esc(p)}</p>` }));
-    if (editorial.ideas.length) blocks.push({ html: `<div class="kp"><h5>Les idées à retenir</h5><ul>${editorial.ideas.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>` });
-    if (editorial.week.length) blocks.push({ html: `<h4 class="t">La semaine en 60 secondes</h4><ul class="week">${editorial.week.sort((a, b) => a.day.localeCompare(b.day)).map((w) => `<li><b>${esc(dayLabel(w.day))}</b><span>${esc(w.text)}</span></li>`).join('')}</ul>` });
-    const pgs = flow('Éditorial', blocks);
-    secPage.set('edito', pgs[0]);
+    main.push({ refs: ['sec:edito'], lab: 'Éditorial', alts: [{ html: `<div class="art-head lead"><p class="kick">Éditorial</p><h2 class="t">${esc(editorial.title || 'La semaine')}</h2><p class="by">Par la rédaction · ${plan.subjects.length} sujets cette semaine</p></div><p class="drop">${esc(editorial.paragraphs[0])}</p>` }] });
+    editorial.paragraphs.slice(1).forEach((p) => main.push({ html: `<p>${esc(p)}</p>` }));
+    if (editorial.ideas.length) main.push({ html: `<div class="kp"><h5>Les idées à retenir</h5><ul>${editorial.ideas.map((i) => `<li>${esc(i)}</li>`).join('')}</ul></div>` });
+    if (editorial.week.length) main.push({ html: `<h4 class="t">La semaine en 60 secondes</h4>` }, ...editorial.week.sort((a, b) => a.day.localeCompare(b.day)).map((w) => ({ html: `<ul class="week"><li><b>${esc(dayLabel(w.day))}</b><span>${esc(w.text)}</span></li></ul>` })));
   }
-  // rubriques
-  for (const sec of plan.sections) {
+  plan.sections.forEach((sec, si) => {
     const list = [...entries.filter((e) => e.subject.section === sec.id), ...briefEntries.filter((e) => e.subject.section === sec.id)];
-    if (!list.length) continue;
-    const blocks = [];
-    for (const e of list.filter((x) => x.tier === 'lead')) blocks.push(...articleBlocks(e, bib));
-    for (const e of list.filter((x) => x.tier === 'article')) { blocks.push({ html: '<div class="sep"></div>' }); blocks.push(...articleBlocks(e, bib)); }
-    const br = list.filter((x) => x.tier === 'brief');
-    if (br.length) {
-      blocks.push({ html: '<h4 class="t" style="column-span:all">Brèves</h4>' });
-      br.forEach((e) => blocks.push({ html: `<div class="brief"><b>${esc(e.article.title)}</b>${citeHtml(e.article.paragraphs[0], e.pack, bib)}${e.article.fallback ? ' <span class="fb">version simplifiée</span>' : ''}</div>` }));
+    if (!list.length) return;
+    const accent = ACCENTS[si % ACCENTS.length];
+    const heads = list.filter((x) => x.tier === 'lead' || x.tier === 'article');
+    const nBr = list.filter((x) => x.tier === 'brief').length;
+    const banner = `<div class="rub" style="--sc:${accent}"><span>${esc(sec.name)}</span><small>${heads.length} article${heads.length > 1 ? 's' : ''}${nBr ? ` · ${nBr} brève${nBr > 1 ? 's' : ''}` : ''}</small></div>`;
+    let first = true;
+    for (const e of [...list.filter((x) => x.tier === 'lead'), ...list.filter((x) => x.tier === 'article')]) {
+      const bl = articleBlocks(e, bib, { prefix: first ? banner : '<div class="sep"></div>', lab: sec.name, accent });
+      if (first) bl[0].refs.push('sec:' + sec.id);
+      main.push(...bl);
+      first = false;
     }
-    const pgs = flow(sec.name, blocks, refs);
-    secPage.set(sec.id, pgs[0]);
-  }
-  // reportages vidéo
+    const br = list.filter((x) => x.tier === 'brief');
+    for (let i = 0; i < br.length; i += 6) {
+      const grp = br.slice(i, i + 6);
+      const hd = i === 0 ? `<h4 class="t brh" style="--sc:${accent}">Brèves · ${esc(sec.name)}</h4>` : '';
+      const html = `${first ? banner : ''}${hd}<div class="brefs">${grp.map((e) => `<div class="brief"><b>${esc(e.article.title)}</b>${citeHtml(e.article.paragraphs[0], e.pack, bib)}${e.article.fallback ? ' <span class="fb">version simplifiée</span>' : ''}</div>`).join('')}</div>`;
+      main.push({ refs: first ? ['sec:' + sec.id] : [], lab: sec.name, accent, html });
+      first = false;
+    }
+  });
+  flow(main, { label: 'Éditorial', refs });
+  for (const k of ['edito', ...plan.sections.map((s) => s.id)]) if (refs.has('sec:' + k)) secPage.set(k, refs.get('sec:' + k));
+  // reportages vidéo : 3 colonnes, un reportage après l'autre
   const reps = model.reportEntries || [];
   if (reps.length) {
     const blocks = [];
-    reps.forEach((e, i) => { if (i) blocks.push({ html: '<div class="sep"></div>' }); blocks.push(...articleBlocks(e, bib)); });
-    secPage.set('reports', flow('Reportages', blocks, refs)[0]);
+    reps.forEach((e, i) => blocks.push(...articleBlocks(e, bib, { prefix: i ? '<div class="sep"></div>' : '', lab: 'Reportages' })));
+    blocks[0].refs.push('sec:reports');
+    flow(blocks, { label: 'Reportages', cols: 3, refs });
+    secPage.set('reports', refs.get('sec:reports'));
   }
   // chiffres
   const st = plan.stats;
@@ -543,7 +629,10 @@ async function renderPaper(model) {
     <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l"><h4 class="t">Par rubrique</h4>${lineSvg(st.sectionSeries, st.dayKeys)}</div><div class="r"><h4 class="t">Tous les éléments retenus</h4>${barsSvg(st.byDay, st.dayKeys)}<div class="legend"><span>${st.total} éléments · ${plan.subjects.length} sujets distincts</span></div></div></div>
     <div class="dbl"></div>
     <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l"><h4 class="t">Les comptes les plus enregistrés</h4><table><tr><th>Compte</th><th class="n">Éléments</th><th class="n">Évolution</th></tr>${st.topAccounts.map((a) => `<tr><td>@${esc(a.handle)}</td><td class="n">${a.n}</td><td class="n ${a.d > 0 ? 'up' : a.d < 0 ? 'dn' : ''}">${a.d > 0 ? '▲ ' + a.d : a.d < 0 ? '▼ ' + -a.d : '='}</td></tr>`).join('')}</table></div>
-    <div class="r"><h4 class="t">Les mots qui montent</h4><table><tr><th>Mot</th><th class="n">Cette semaine</th><th class="n">Avant</th></tr>${st.rising.map((w) => `<tr><td>${esc(w.word)}</td><td class="n">${w.n}</td><td class="n">${w.prev}</td></tr>`).join('') || '<tr><td colspan="3">Rien ne se détache nettement.</td></tr>'}</table></div></div>`);
+    <div class="r"><h4 class="t">Les mots qui montent</h4><table><tr><th>Mot</th><th class="n">Cette semaine</th><th class="n">Avant</th></tr>${st.rising.map((w) => `<tr><td>${esc(w.word)}</td><td class="n">${w.n}</td><td class="n">${w.prev}</td></tr>`).join('') || '<tr><td colspan="3">Rien ne se détache nettement.</td></tr>'}</table></div></div>
+    <div class="dbl"></div>
+    <div class="g2" style="grid-template-columns:1.5fr 1fr"><div class="l"><h4 class="t">Quand vous enregistrez <small class="src">(par jour et par heure)</small></h4>${heatHtml(st)}</div>
+    <div class="r"><h4 class="t">Les sites les plus cités</h4>${domainsHtml(st)}</div></div>`);
   secPage.set('stats', chiffres);
   // vidéos
   const repIds = new Set(reps.map((e) => e.subject.rep.id));
@@ -558,8 +647,8 @@ async function renderPaper(model) {
   if (editorial?.glossary.length) { blocks.push({ html: '<h4 class="t" style="column-span:all">Lexique</h4>' }); editorial.glossary.forEach((g) => blocks.push({ html: `<p class="gloss"><b>${esc(g.term)}</b> — ${esc(g.def)}</p>` })); }
   blocks.push({ html: '<h4 class="t" style="column-span:all">Index des sources</h4>' });
   for (const s of bib.list) blocks.push({ html: `<p class="bibl"><b>${s.n}.</b> ${s.kind === 'tweet' ? `@${esc(s.handle)} (${esc(s.date)})` : s.kind === 'video' ? `${esc(s.title)} (${esc(s.channel || 'YouTube')})` : esc(s.title)} — <a href="${esc(s.url)}">${esc(s.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 70))}</a></p>` });
-  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${reps.length ? ` ${reps.length} reportage(s) rédigé(s) d’après la transcription de vidéos.` : ''}${model.trCount ? ` ${model.trCount} sujet(s) complété(s) par des extraits de transcriptions.` : ''}${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
-  const lp = flow('Lexique et sources', blocks);
+  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src" style="column-span:all;text-align:left">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${reps.length ? ` ${reps.length} reportage(s) rédigé(s) d’après la transcription de vidéos.` : ''}${model.trCount ? ` ${model.trCount} sujet(s) complété(s) par des extraits de transcriptions.` : ''}${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
+  const lp = flow(blocks, { label: 'Lexique et sources', cols: 3 });
   secPage.set('sources', lp[0]);
 
   // une
@@ -567,6 +656,7 @@ async function renderPaper(model) {
   const pages = () => [...paper.children];
   const front = document.createElement('section');
   front.className = 'page';
+  front.style.setProperty('--s', String(curScale));
   paper.prepend(front);
   const numOf = (pg) => pages().indexOf(pg) + 1;
   const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Reportages', secPage.get('reports')], ['Chiffres', secPage.get('stats')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
@@ -581,6 +671,18 @@ async function renderPaper(model) {
   const fb = front.querySelector('.body');
   for (let n = 130; n > 30 && fb.scrollHeight > fb.clientHeight + 2; n -= 15) fb.innerHTML = buildFront(n);
   pages().forEach((pg, i) => { pg.querySelector('.pn span').textContent = String(i + 1); });
+}
+
+// Mise en pages avec budget de pages : si l'édition dépasse le nombre de pages visé, le texte est réduit par paliers (jamais sous ≈ 8,6 pt).
+async function renderPaper(model) {
+  const target = model.maxPages || 0;
+  let used = 1;
+  for (const sc of [1, 0.95, 0.91, 0.87]) {
+    curScale = sc; used = sc;
+    await renderOnce(model);
+    if (!target || paper.children.length <= target) break;
+  }
+  return { scale: used, pages: paper.children.length, over: !!target && paper.children.length > target };
 }
 
 // ---------- éditions enregistrées ----------
@@ -628,3 +730,6 @@ $('j-est').onclick = async () => {
 };
 
 loadUi().then(renderList);
+
+// Banc d'essai de la mise en pages (tests) : journal.html?layouttest
+if (new URLSearchParams(location.search).has('layouttest')) window.__xbsLayout = { renderPaper, paper };

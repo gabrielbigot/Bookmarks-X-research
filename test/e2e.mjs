@@ -1185,6 +1185,71 @@ const estLog = await journal.locator('#j-log').innerText();
 const weekLabel1 = (estLog.match(/Semaine (du [^:]+) :/) || [])[1];
 assert.ok(!weekLabel0 || !weekLabel1 || weekLabel0 !== weekLabel1, 'la semaine précédente a une autre période : ' + weekLabel0 + ' / ' + weekLabel1);
 assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine précédente (la vidéo a été regardée aujourd’hui)');
+// ---- mise en pages sur une grosse édition synthétique : budget de pages, pas de débordement, une page imprimée par page
+{
+  await journal.goto(`chrome-extension://${extId}/journal.html?layouttest=1`);
+  await journal.waitForFunction(() => window.__xbsLayout, null, { timeout: 15000 });
+  const lay = await journal.evaluate(async () => {
+    const { renderPaper } = window.__xbsLayout;
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const V = 'le modèle ouvert agent robot humanoïde benchmark contexte paramètres lancement annonce développeurs entreprise plateforme données recherche calcul puce mémoire marché prix usage'.split(' ');
+    const words = (n) => Array.from({ length: n }, () => V[Math.floor(rnd() * V.length)]).join(' ');
+    const para = (n, num) => words(n).replace(/^./, (c) => c.toUpperCase()) + (num ? ` pour ${Math.round(rnd() * 900 + 20)} milliards de dollars et ${Math.round(rnd() * 90)} %` : '') + '. ' + words(Math.round(n / 2)) + ' [T1].';
+    const svg = (w, h, c) => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="${c}"/><text x="20" y="40" font-size="28">${w}x${h}</text></svg>`);
+    const imgs = [[800, 450], [400, 600], [1200, 300], [600, 600], [1000, 420]];
+    const mkSources = (n, kind = 'tweet') => Array.from({ length: n }, (_, i) => ({ id: (kind === 'video' ? 'V' : 'T') + (i + 1), kind, handle: 'user' + i, url: 'https://x.com/u/status/' + Math.floor(rnd() * 1e9), date: '2026-10-12', title: 'Vidéo test', channel: 'Chaîne Test', text: 'Un texte exact de la source numéro ' + i, host: 'exemple.fr' }));
+    const mkArticle = (words0, nPar, tier) => ({ title: 'Un titre informatif de ' + words(6), dek: 'Chapeau ' + words(14) + ' [T1]', paragraphs: Array.from({ length: nPar }, (_, i) => para(Math.round(words0 / nPar * 0.67), i === 1)), pull: tier === 'brief' ? '' : 'Une citation courte et exacte de la source numéro 1', pullSource: 'T1', points: ['Premier point ' + words(10) + ' [T1]', 'Deuxième point ' + words(10), 'Troisième point ' + words(10)] });
+    const win = { from: '2026-10-11', to: '2026-10-17', days: 7, label: 'du 11 au 17 octobre 2026', week: 42, year: 2026, prevFrom: '2026-10-04', prevTo: '2026-10-10' };
+    const dayKeys = ['2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17'];
+    const sections = ['Lancements', 'Robotique', 'IA modèles', 'Recherche'].map((name, i) => ({ id: 's' + i, name }));
+    const subjects = [], entries = [], briefEntries = [];
+    sections.forEach((sec, si) => {
+      const mk = (tier, nWords, nPar, k) => {
+        const rep = { id: `${sec.id}${tier}${k}`, handle: 'user' + k, name: 'User ' + k, text: 'Tweet', createdAt: '2026-10-1' + (2 + (k % 5)) + 'T10:00:00Z' };
+        const subject = { id: rep.id, section: sec.id, sectionName: sec.name, firstDay: '2026-10-1' + (2 + (k % 5)), lastDay: '2026-10-16', members: [rep], rep, images: [], links: [] };
+        subjects.push(subject);
+        const im = imgs[(si + k) % imgs.length];
+        const image = tier === 'brief' ? null : (rnd() < 0.8 ? { url: svg(im[0], im[1], ['#ddd', '#cdd', '#dcd', '#ddc'][k % 4]), alt: 'Image', handle: 'user' + k, ratio: im[0] / im[1] } : null);
+        return { subject, tier, pack: { sources: mkSources(3) }, article: mkArticle(nWords, nPar, tier), image };
+      };
+      entries.push(mk('lead', 700, 7, 0));
+      for (let k = 1; k <= 3; k++) entries.push(mk('article', 300, 4, k));
+      for (let k = 4; k <= 11; k++) briefEntries.push(mk('brief', 45, 1, k));
+    });
+    const reportEntries = [0, 1, 2].map((i) => {
+      const paragraphs = [], heads = {}, headTimes = {};
+      paragraphs.push(para(60));
+      for (let g = 0; g < 6; g++) { heads[paragraphs.length] = 'Partie ' + (g + 1) + ' ' + words(3); headTimes[paragraphs.length] = g * 600; for (let k = 0; k < 4; k++) paragraphs.push(para(75)); }
+      const rep = { id: 'yt:r' + i, name: 'Chaîne Test', text: 'Vidéo ' + i, durationText: '1:25:36', watched: [], playlists: [] };
+      return { tier: 'report', pack: { sources: mkSources(1, 'video') }, article: { title: 'Un grand reportage ' + words(5), dek: 'Chapeau ' + words(12) + ' [V1]', paragraphs: paragraphs.map((p) => p.replace(/\[T1\]/g, '[V1]')), heads, headTimes, pull: 'Un texte exact de la source numéro 0', pullSource: 'V1', points: ['Point un ' + words(9) + ' [V1]', 'Point deux ' + words(9), 'Point trois ' + words(9)] }, image: { url: svg(1280, 720, '#ccd'), alt: 'Miniature', card: true, ratio: 16 / 9 }, subject: { id: 'r:yt:r' + i, section: 'reports', sectionName: 'Reportage vidéo', firstDay: '2026-10-14', rep, members: [rep], images: [], links: [] } };
+    });
+    const stats = { total: 281, dayKeys, byDay: [20, 60, 62, 55, 52, 14, 0], sectionSeries: sections.map((s, i) => ({ id: s.id, name: s.name, vals: dayKeys.map((_, d) => Math.round(rnd() * 30 + i)) })), topAccounts: Array.from({ length: 8 }, (_, i) => ({ handle: 'compte' + i, n: 20 - i, d: i % 3 - 1 })), rising: Array.from({ length: 9 }, (_, i) => ({ word: 'mot' + i, n: 12 + i, prev: i })), domains: Array.from({ length: 8 }, (_, i) => ({ host: `site${i}.example.com`, n: 30 - 3 * i })), heat: dayKeys.map(() => Array.from({ length: 24 }, () => Math.floor(rnd() * 9))) };
+    const plan = { win, subjects, sections, stats, videos: Array.from({ length: 6 }, (_, i) => ({ id: 'yt:v' + i, text: 'Une vidéo de la semaine ' + i, name: 'Chaîne', durationText: '12:0' + i, url: 'https://www.youtube.com/watch?v=v' + i, watched: i % 2 ? ['2026-10-12'] : [], playlists: [] })) };
+    const editorial = { title: 'La semaine de test', paragraphs: [para(90), para(90), para(90)], ideas: ['Idée un ' + words(12), 'Idée deux ' + words(12), 'Idée trois ' + words(12)], week: dayKeys.map((d) => ({ day: d, text: words(30) })), glossary: [{ term: 'VLM', def: words(14) }, { term: 'MoE', def: words(14) }] };
+    const model = { plan, entries, briefEntries, editorial, cost: 0.3, fallbacks: 0, budget: 1, budgetHit: false, webCount: 2, removedTotal: 0, reportEntries, trCount: 2, maxPages: 30 };
+    const rr = await renderPaper(model);
+    const bad = [...document.querySelectorAll('#paper .page .body.flow')].filter((b) => b.scrollWidth > b.clientWidth + 2 || b.scrollHeight > b.clientHeight + 2).length;
+    const fixedBad = [...document.querySelectorAll('#paper .page .body:not(.flow)')].filter((b) => b.scrollHeight > b.clientHeight + 2 && !b.style.zoom).length;
+    // pages presque vides (moins d'un cinquième rempli) : signe de trous de mise en pages
+    const sparse = [...document.querySelectorAll('#paper .page .body.flow')].filter((b) => { const kids = [...b.children]; const bottom = Math.max(0, ...kids.map((k) => k.getBoundingClientRect().bottom)) - b.getBoundingClientRect().top; return bottom < b.clientHeight * 0.2; }).length;
+    return { ...rr, bad, fixedBad, sparse, count: document.querySelectorAll('#paper .page').length, html: document.getElementById('paper').outerHTML };
+  });
+  const fs = await import('node:fs');
+  const lfile = (process.env.DUMP_LAYOUT || tmpdir() + '/xbs-layout.html');
+  fs.writeFileSync(lfile, '<!doctype html><html lang="fr"><head><meta charset="utf-8"><link rel="stylesheet" href="file://' + process.cwd() + '/src/journal.css"></head><body><main>' + lay.html + '</main></body></html>');
+  console.log('mise en pages synthétique :', lay.count, 'pages, échelle', lay.scale, ', pages clairsemées', lay.sparse);
+  assert.equal(lay.bad, 0, 'aucune page ne déborde');
+  assert.equal(lay.fixedBad, 0, 'les pages fixes tiennent');
+  assert.ok(lay.count <= 30 || lay.over, 'budget de pages : ' + lay.count);
+  assert.ok(lay.sparse <= 2, 'pas de pages quasi vides : ' + lay.sparse);
+  const hb2 = await chromium.launch(), hp2 = await hb2.newPage();
+  await hp2.goto('file://' + lfile);
+  const pdf2 = await hp2.pdf({ format: 'A4', printBackground: true });
+  await hb2.close();
+  const printed2 = (pdf2.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+  assert.equal(printed2, lay.count, 'impression de la grosse édition : une page imprimée par page : ' + printed2 + ' / ' + lay.count);
+}
+
 
 console.log('E2E OK');
 await ctx.close();

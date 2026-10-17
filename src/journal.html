@@ -20,6 +20,7 @@
       <p id="j-status" class="warn" hidden></p>
       <label class="wk">Période <small>(7 jours consécutifs ; les éléments retenus et les vidéos regardées ou ajoutées ces jours-là)</small><select id="j-week"></select></label>
       <label class="wk">Ancienneté maximale <small>(éléments publiés plus de N jours avant la fin de la période : écartés des sujets et des reportages ; une vidéo ancienne regardée cette semaine figure seulement dans « À voir et à écouter »)</small><select id="j-age"><option value="14">14 jours</option><option value="45">45 jours</option><option value="120">120 jours</option><option value="0">Aucune limite</option></select></label>
+      <label class="wk">Nombre de pages visé <small>(si l’édition dépasse, le texte est réduit par paliers — jamais sous ≈ 8,6 pt ; 0 = pas de limite)</small><input id="j-pages" type="number" min="0" max="120" step="1"></label>
       <div class="grid">
         <label>Modèle de rédaction <small>grands sujets</small><input id="j-writer" placeholder="vide = modèle de l’IA (⚙)"></label>
         <label>Modèle assistant <small>articles, brèves, éditorial</small><input id="j-assist" placeholder="vide = modèle de l’IA (⚙)"></label>

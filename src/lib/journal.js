@@ -95,7 +95,7 @@ export function assignTiers(subjects, { leads = 4, articles = 14, briefs = 30, m
 // ---------- statistiques de la semaine ----------
 export function weekStats(items, { sv, sections, win }) {
   const byDay = new Map(), sectionDays = new Map(sections.map((s) => [s.id, new Map()]));
-  const accounts = new Map(), accountsPrev = new Map(), words = new Map(), wordsPrev = new Map();
+  const accounts = new Map(), accountsPrev = new Map(), words = new Map(), wordsPrev = new Map(), domains = new Map(), heat = new Map();
   let total = 0;
   for (const t of items) {
     if (isVideoItem(t) || t.off) continue;
@@ -109,6 +109,9 @@ export function weekStats(items, { sv, sections, win }) {
     for (const w of groupKeys('word', t)) target[1].set(w, (target[1].get(w) || 0) + 1);
     if (cur) {
       total++;
+      const ms = sv?.valid ? sv.at(t) : t.createdAt ? Date.parse(t.createdAt) : null; // heure d'enregistrement (carte de chaleur)
+      if (ms != null && Number.isFinite(ms)) { const d = new Date(ms), k = dayKey(ms) + '|' + d.getHours(); heat.set(k, (heat.get(k) || 0) + 1); }
+      for (const l of externalLinks(t)) { try { const h = new URL(l).hostname.replace(/^www\./, ''); domains.set(h, (domains.get(h) || 0) + 1); } catch { /* adresse illisible */ } }
       for (const d of ds) if (inWindow(d, win)) { byDay.set(d, (byDay.get(d) || 0) + 1); for (const s of inSec) { const m = sectionDays.get(s.id); m.set(d, (m.get(d) || 0) + 1); } }
     }
   }
@@ -116,7 +119,25 @@ export function weekStats(items, { sv, sections, win }) {
   for (let i = win.days - 1; i >= 0; i--) dayKeys.push(dayKey(Date.parse(win.to + 'T12:00:00') - i * DAY));
   const topAccounts = [...accounts].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([handle, n]) => ({ handle, n, d: n - (accountsPrev.get(handle) || 0) }));
   const rising = [...words].filter(([, n]) => n >= 3).map(([w, n]) => ({ word: w, n, prev: wordsPrev.get(w) || 0 })).map((x) => ({ ...x, d: x.n - x.prev })).filter((x) => x.d > 0).sort((a, b) => b.d - a.d || b.n - a.n).slice(0, 10);
-  return { total, dayKeys, byDay: dayKeys.map((k) => byDay.get(k) || 0), sectionSeries: sections.map((s) => ({ id: s.id, name: s.name, vals: dayKeys.map((k) => sectionDays.get(s.id).get(k) || 0) })), topAccounts, rising };
+  return { total, dayKeys, byDay: dayKeys.map((k) => byDay.get(k) || 0), sectionSeries: sections.map((s) => ({ id: s.id, name: s.name, vals: dayKeys.map((k) => sectionDays.get(s.id).get(k) || 0) })), topAccounts, rising, domains: [...domains].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([host, n]) => ({ host, n })), heat: dayKeys.map((k) => Array.from({ length: 24 }, (_, h) => heat.get(k + '|' + h) || 0)) };
+}
+
+// Chiffres marquants d'un texte (encadré « En chiffres ») : [{ num, text }] — le texte est la phrase d'origine, sans renvois de sources.
+const UNIT = '(?:%|milliards?|millions?|mille|dollars?|\\$|€|euros?|fois|Go|Mo|To|tokens?|jours?|mois|ans|heures?|minutes?|paramètres?|étoiles?|vues?|abonnés?|M\\b|B\\b|k\\b)';
+export function numberFacts(paragraphs, max = 4) {
+  const out = [], seen = new Set();
+  const re = new RegExp('(\\d[\\d\\s\\u00a0\\u202f.,]*\\d|\\d)\\s?(' + UNIT + ')', 'i');
+  for (const p of paragraphs) {
+    for (const sent of splitSentences(String(p).replace(/\s*\[[TLWV][\d,TLWV\s]*\]/g, ''))) {
+      const m = re.exec(sent);
+      if (!m) continue;
+      const num = clean(m[0]).replace(/\s+/g, ' ');
+      if (/^\d{4}$/.test(m[1]) || seen.has(num)) continue; // une année seule n'est pas un chiffre marquant
+      seen.add(num);
+      out.push({ num, text: sent.length > 120 ? sent.slice(0, 117).replace(/\s+\S*$/, '') + '…' : sent, w: /%|milliard|million|\$|€|dollar|euro|fois/i.test(num) ? 2 : 1 });
+    }
+  }
+  return out.sort((a, b) => b.w - a.w).slice(0, max).map(({ num, text }) => ({ num, text }));
 }
 
 // ---------- texte des pages liées ----------
@@ -252,12 +273,27 @@ export function reportageMessages(video, pack) {
 
 // Reportage long, en sections : la longueur suit la durée de la vidéo.
 export const DEPTH = { short: { perMin: 20, max: 1400, min: 450 }, normal: { perMin: 32, max: 2400, min: 600 }, detailed: { perMin: 48, max: 3400, min: 800 } };
-export function reportagePlan(video, depth = 'detailed') {
+export function reportagePlan(video, depth = 'detailed', cap = 0) {
   const d = DEPTH[depth] || DEPTH.detailed;
   const minutes = Math.max(5, (video.durationSec || 0) / 60 || 12);
-  const words = Math.round(Math.max(d.min, Math.min(d.max, minutes * d.perMin)) / 50) * 50;
+  let words = Math.round(Math.max(d.min, Math.min(d.max, minutes * d.perMin)) / 50) * 50;
+  if (cap > 0) words = Math.max(300, Math.min(words, cap));
   const sections = Math.max(1, Math.min(7, Math.round(words / 520)));
   return { words, sections, perSection: Math.round(words / sections / 10) * 10 };
+}
+// Budget de pages : combien de mots de reportage tiennent dans `maxPages` une fois le reste de l'édition compté (estimation prudente,
+// texte à ≈ 90 %). Renvoie { reports, reportWords } : nombre de reportages gardés et mots maximum par reportage (0 = pas de limite).
+export function pageBudget({ maxPages, leads = 0, articles = 0, briefs = 0, reportages = 0, sections = 1 }) {
+  if (!maxPages || !reportages) return { reports: reportages, reportWords: 0, mainPages: 0 };
+  const mainWords = leads * TIER.lead.words + articles * TIER.article.words + briefs * 45 + 450;
+  const mainPages = Math.ceil(mainWords / 480) + Math.ceil(sections / 2); // + débuts de rubrique
+  const fixed = 5; // une, chiffres, vidéos, lexique et sources (≈ 2)
+  const free = Math.max(0, maxPages - fixed - mainPages);
+  const total = free * 560; // mots de reportage par page (3 colonnes)
+  let reports = reportages;
+  while (reports > 1 && total / reports < 700) reports--;
+  const perReport = Math.floor(total / reports / 50) * 50;
+  return { reports: total < 450 ? 0 : reports, reportWords: Math.max(300, perReport), mainPages };
 }
 // Points horodatés répartis en `n` groupes consécutifs (même nombre de points par groupe).
 export function splitPoints(summaries, n) {
