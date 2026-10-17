@@ -189,7 +189,7 @@ async function generate() {
     const ask = async (messages, { model, maxTokens, plugins, extra = 0, full = false }) => {
       const e = estimateCall(JSON.stringify(messages).length, Math.round(maxTokens * 0.6), prices).dollars + extra;
       if (spent + e > cfg.budget) { budgetHit = true; throw new Error('budget'); }
-      const r = await chatFull(settings.llm, messages, { model, maxTokens, temperature: plugins ? 0.1 : 0.3, signal: abort.signal, plugins });
+      const r = await chatFull(settings.llm, messages, { model, maxTokens, temperature: plugins ? 0.1 : 0.3, signal: abort.signal, plugins, noThink: true });
       spent += r.usage.cost != null ? r.usage.cost : costOf(r.usage, prices) + extra;
       return full ? r : r.text;
     };

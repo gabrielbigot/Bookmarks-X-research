@@ -8,28 +8,49 @@ export async function chat(llm, messages, opts = {}) {
 
 // Comme chat(), mais retourne aussi l'usage (tokens, et le coût réel si le fournisseur le donne : OpenRouter).
 // opts.model remplace le modèle configuré ; opts.maxTokens borne la sortie ; opts.temperature.
-export async function chatFull(llm, messages, { json = false, signal, model, maxTokens, temperature = 0.2, plugins } = {}) {
+export async function chatFull(llm, messages, { json = false, signal, model, maxTokens, temperature = 0.2, plugins, noThink = false } = {}) {
   const url = llm.baseUrl.replace(/\/+$/, '') + '/chat/completions';
   const body = { model: model || llm.model, messages, temperature, stream: false };
   if (maxTokens) body.max_tokens = maxTokens;
   if (plugins) body.plugins = plugins; // ex. [{ id: 'web', max_results: 5 }] (recherche web OpenRouter)
   if (/openrouter\.ai/i.test(llm.baseUrl)) body.usage = { include: true }; // coût réel dans la réponse
+  if (noThink && /openrouter\.ai/i.test(llm.baseUrl)) body.reasoning = { enabled: false }; // modèles « à raisonnement » : pas de réflexion qui mange la limite de sortie
   if (json) body.response_format = { type: 'json_object' };
-  const res = await fetch(url, {
-    method: 'POST',
-    signal,
-    headers: { 'content-type': 'application/json', ...(llm.apiKey ? { authorization: `Bearer ${llm.apiKey}` } : {}) },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const t = (await res.text().catch(() => '')).slice(0, 300);
-    throw new Error(`API IA : HTTP ${res.status}${t ? ' — ' + t : ''}`);
+  const call = async (b) => {
+    const res = await fetch(url, {
+      method: 'POST',
+      signal,
+      headers: { 'content-type': 'application/json', ...(llm.apiKey ? { authorization: `Bearer ${llm.apiKey}` } : {}) },
+      body: JSON.stringify(b),
+    });
+    if (!res.ok) {
+      const t = (await res.text().catch(() => '')).slice(0, 300);
+      const err = new Error(`API IA : HTTP ${res.status}${t ? ' — ' + t : ''}`);
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  };
+  let data;
+  try { data = await call(body); } catch (e) {
+    if (!(body.reasoning && e.status === 400)) throw e;
+    const { reasoning, ...rest } = body; // ce modèle refuse le réglage « sans raisonnement » : on réessaie sans
+    data = await call(rest);
   }
-  const data = await res.json();
-  const out = data?.choices?.[0]?.message?.content;
-  if (typeof out !== 'string') throw new Error('API IA : réponse inattendue');
+  let msg = data?.choices?.[0];
+  if (data?.error && !msg) throw new Error('API IA : ' + String(data.error.message || data.error.code || JSON.stringify(data.error)).slice(0, 200));
+  // sortie vide parce que la limite a été consommée par le raisonnement : un seul nouvel essai avec une limite double
+  if (!String(msg?.message?.content ?? '').trim() && msg?.finish_reason === 'length' && maxTokens && maxTokens < 16000) {
+    data = await call({ ...body, max_tokens: maxTokens * 2 });
+    msg = data?.choices?.[0];
+  }
+  const out = msg?.message?.content;
+  if (typeof out !== 'string' || !out.trim()) {
+    const why = msg?.finish_reason === 'length' ? 'limite de sortie atteinte avant la réponse (modèle à raisonnement ?)' : msg?.finish_reason ? 'fin : ' + msg.finish_reason : 'pas de contenu';
+    throw new Error(`API IA : réponse vide (${why})`);
+  }
   const u = data.usage || {};
-  return { text: out, annotations: data?.choices?.[0]?.message?.annotations || [], usage: { promptTokens: Number(u.prompt_tokens) || 0, completionTokens: Number(u.completion_tokens) || 0, cost: typeof u.cost === 'number' ? u.cost : null } };
+  return { text: out, annotations: msg?.message?.annotations || [], usage: { promptTokens: Number(u.prompt_tokens) || 0, completionTokens: Number(u.completion_tokens) || 0, cost: typeof u.cost === 'number' ? u.cost : null } };
 }
 
 export function parseJsonLoose(text) {
