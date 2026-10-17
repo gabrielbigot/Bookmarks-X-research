@@ -51,12 +51,14 @@ const dayLabel = (n) => n === 0 ? "Aujourd'hui" : n === 1 ? 'Hier' : DAYS_FR[new
 const dayIso = (n) => { const d = new Date(Date.now() - n * 864e5); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 Object.assign(V, { h2: ['Histoire de Rome en 10 minutes', 'Hist Chan'], h4: ['Conférence sur la mémoire', 'Hist Chan'], h5: ['Tutoriel pâtes fraîches', 'Cuisine Fun'], h6: ['Nouveauté du jour : zorglub', 'Hist Chan'], h7: ['Vieux sujet oublié', 'Hist Chan'] });
 let histNew = false;
+const PAGE_ONLY = new Set(['z9']); // refusé par toutes les voies directes (400) ; seul le lecteur de la page vidéo charge ses sous-titres
 const PLAYER_ONLY = new Set(['p2']); // pas de panneau « Transcription » : sous-titres du lecteur (repli timedtext)
 // transcriptions : [début en ms, texte] ; les vidéos absentes d'ici n'ont pas de transcription
 const TRANSCRIPTS = {
   w1: [[0, 'Bonjour et bienvenue ' + 'blabla '.repeat(70)], [60000, 'Aujourd’hui on parle du cortex ' + 'blabla '.repeat(70)], [125000, 'et surtout du zorglubtranscript, un mot que le titre ne contient pas'], [200000, 'Merci d’avoir regardé jusqu’au bout']],
   p2: [[0, 'Memory is stored in synapses and consolidated during sleep']],
   w3: [[0, 'Les futures et les tâches asynchrones expliquées avec tokio']],
+  z9: [[0, 'Bienvenue dans cette vidéo récente ' + 'sans transcription directe '.repeat(20)], [90000, 'Le lecteur de la page a chargé ces sous-titres lui-même ' + 'pagezorglub '.repeat(10)]],
 };
 const vrd = (id, pct) => ({ videoRenderer: { videoId: id, title: run(V[id][0]), ownerText: { runs: [{ text: V[id][1], navigationEndpoint: { browseEndpoint: { browseId: 'UCh', canonicalBaseUrl: '/@' + V[id][1].toLowerCase().replace(/\s+/g, '-') } } }] },
   lengthText: { simpleText: '8:00' }, viewCountText: { simpleText: '5 000 vues' }, thumbnail: { thumbnails: [{ url: 'https://llm.test/card.png' }] },
@@ -156,6 +158,7 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       req.on('end', () => {
         const body = JSON.parse(raw);
         const ep = url.pathname.split('/').pop();
+        if (PAGE_ONLY.has(body.videoId)) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 400, status: 'FAILED_PRECONDITION' } })); }
         ytLog.push({ auth: req.headers.authorization || '', key: url.searchParams.get('key'), ctx: !!body.context, client: req.headers['x-youtube-client-version'], body: { ep, videoId: body.videoId, params: body.params } });
         res.writeHead(200, { 'content-type': 'application/json' });
         if (ep === 'next') return res.end(JSON.stringify(TRANSCRIPTS[body.videoId] && !PLAYER_ONLY.has(body.videoId) ? { engagementPanels: [{ engagementPanelSectionListRenderer: { content: { continuationItemRenderer: { continuationEndpoint: { getTranscriptEndpoint: { params: btoa('\n\x02' + body.videoId + '\x12\x03asr') } } } } } }] } : {}));
@@ -166,6 +169,14 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
       return;
     }
     if (url.pathname === '/api/timedtext') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ events: (TRANSCRIPTS[url.searchParams.get('v')] || []).map(([ms, t]) => ({ tStartMs: ms, segs: [{ utf8: t }] })) })); }
+    if (url.pathname === '/watch') { // page vidéo factice : un lecteur qui charge ses sous-titres quand on active une piste
+      res.writeHead(200, { 'content-type': 'text/html' });
+      return res.end(`<!doctype html><html><body><div id="movie_player"></div><script>
+        const p = document.getElementById('movie_player'), v = new URLSearchParams(location.search).get('v');
+        p.mute = p.loadModule = p.playVideo = () => {}; p.getOption = () => [{ languageCode: 'en', kind: 'asr' }];
+        p.setOption = (m, k) => { if (k === 'track') fetch('/api/timedtext?v=' + v + '&fmt=json3').then((r) => r.text()); };
+      </script></body></html>`);
+    }
     res.writeHead(200, { 'content-type': 'text/html' });
     return res.end(ytPage());
   }
@@ -723,6 +734,25 @@ await count('has:transcript', 3, 'has:transcript');
 await panel.fill('#q', '');
 await panel.click('#yt-tr');
 await panel.waitForFunction(() => /ont déjà leur transcription/.test(document.getElementById('progress').textContent), null, { timeout: 15000 });
+
+// ------------------------------------------------------------------ 11d2. transcriptions refusées en direct (400) : lecture par la page vidéo
+await panel.evaluate(async () => {
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction('tweets', 'readwrite');
+  tx.objectStore('tweets').put({ id: 'yt:z9', kind: 'video', videoId: 'z9', text: 'Vidéo toute récente', name: 'Chaîne Neuro', handle: 'chaine-neuro', url: 'https://www.youtube.com/watch?v=z9', createdAt: null, sortIndex: '1000000', links: [], media: [], stats: {}, playlists: [{ id: 'PL1', title: 'Neurosciences', pos: 0 }], addedAt: Date.now(), capturedAt: Date.now() });
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
+await panel.reload(); await panel.waitForSelector('.tw');
+await panel.click('#yt-tr');
+const getZ9 = () => panel.evaluate(async () => { const db = await new Promise((res) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); }); return await new Promise((res) => { const g = db.transaction('tweets').objectStore('tweets').get('yt:z9'); g.onsuccess = () => res(g.result); }); });
+await waitFor(async () => (await getZ9())?.trState === 'ok', 'transcription de z9 récupérée par la page vidéo', 90000);
+await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglets YouTube refermés (page vidéo)', 30000);
+await panel.evaluate(async () => { // nettoyage
+  const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const tx = db.transaction(['tweets', 'transcripts'], 'readwrite');
+  tx.objectStore('tweets').delete('yt:z9'); tx.objectStore('transcripts').delete('yt:z9');
+  await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+});
 
 // ------------------------------------------------------------------ 11e. « Tout mettre à jour » : X + playlists (historique et transcriptions exclus par défaut) + indexation
 ytLog.length = 0;

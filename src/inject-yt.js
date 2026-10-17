@@ -63,19 +63,79 @@ function handleHistory(json) {
 const ackP = (nonce) => new Promise((res) => { waiters.set(nonce, res); setTimeout(() => { if (waiters.delete(nonce)) res(null); }, 20000); });
 
 // ---- interception passive ----
+const PAGE_TR = location.pathname === '/watch' && new URLSearchParams(location.search).get('xbs_tr') === '1';
+const CAP_RE = /\/api\/timedtext|\/youtubei\/v1\/get_transcript/;
+let capture = () => {};
 window.fetch = function (input, init) {
-  let bodyP = null;
+  let bodyP = null, capUrl = null;
   try {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url;
+    if (PAGE_TR && url && CAP_RE.test(url)) capUrl = url;
     if (url && BROWSE_RE.test(url)) {
       if (typeof init?.body === 'string') bodyP = Promise.resolve(init.body);
       else if (input instanceof Request) bodyP = input.clone().text().catch(() => null); // avant que fetch ne consomme le corps
     }
   } catch {}
   const resP = origFetch.apply(this, arguments);
+  if (capUrl) resP.then((res) => res.clone().text().then((t) => capture(capUrl, t)).catch(() => {})).catch(() => {});
   if (bodyP) resP.then((res) => { res.clone().json().then(async (j) => handle(j, safeJson(await bodyP))).catch(() => {}); }).catch(() => {});
   return resP;
 };
+
+if (PAGE_TR) {
+  const xo = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    try { if (CAP_RE.test(String(url))) this.addEventListener('load', () => { try { capture(String(url), this.responseText); } catch {} }); } catch {}
+    return xo.apply(this, arguments);
+  };
+}
+
+// Mode « page vidéo » (onglet ouvert par l'extension avec ?xbs_tr=1) : on laisse le lecteur de YouTube charger lui-même les sous-titres
+// (il a les jetons que nos propres requêtes n'ont plus) et on lit sa réponse au passage.
+async function pageTranscript() {
+  const vid = new URLSearchParams(location.search).get('v');
+  const why = [];
+  let finished = false;
+  const finish = (segs, how) => {
+    if (finished) return;
+    finished = true;
+    const chunks = chunkSegments(segs);
+    if (chunks.length) post('transcript', { id: 'yt:' + vid, state: 'ok', chunks });
+    post('pagetr', { id: 'yt:' + vid, ok: chunks.length > 0, how, why });
+  };
+  capture = (url, text) => {
+    if (finished) return;
+    const panel = /get_transcript/.test(url);
+    let segs = [];
+    try {
+      if (panel) segs = parseTranscript(safeJson(text));
+      else { const j = safeJson(text); segs = j ? parseJson3(j) : []; if (!segs.length) segs = parseTimedTextXml(text); }
+    } catch {}
+    if (segs.length) finish(segs, panel ? 'panneau' : 'lecteur');
+    else why.push(`${panel ? 'panneau' : 'timedtext'}-vide(${String(text || '').length})`);
+  };
+  const t0 = Date.now();
+  let p = null;
+  while (!p && Date.now() - t0 < 20000) { const el = document.getElementById('movie_player'); if (el && typeof el.setOption === 'function' && typeof el.getOption === 'function') p = el; else await sleep(500); }
+  if (!p) { why.push('lecteur-introuvable'); return finish([], ''); }
+  try { p.mute?.(); } catch {}
+  const rank = (t) => (['fr', 'en'].indexOf(String(t.languageCode || '').slice(0, 2)) + 1 || 99) + (t.kind === 'asr' ? 0.5 : 0);
+  for (let attempt = 0; attempt < 5 && !finished; attempt++) {
+    try {
+      p.loadModule?.('captions');
+      const list = p.getOption('captions', 'tracklist') || [];
+      if (list.length) { const t = [...list].sort((a, b) => rank(a) - rank(b))[0]; p.setOption('captions', 'track', { languageCode: t.languageCode, ...(t.kind ? { kind: t.kind } : {}) }); }
+      else { p.toggleSubtitlesOn?.(); if (attempt === 4) why.push('aucune-piste'); }
+      if (attempt === 1) p.playVideo?.(); // certains lecteurs ne chargent les sous-titres qu'en lecture (muette)
+    } catch (e) { why.push('lecteur:' + e.message); }
+    if (attempt === 2) { // à défaut : le panneau « Transcription » de la description
+      try { document.querySelector('#description-inline-expander #expand, tp-yt-paper-button#expand')?.click(); await sleep(800); document.querySelector('ytd-video-description-transcript-section-renderer button')?.click(); } catch {}
+    }
+    await sleep(4000);
+  }
+  if (!finished) { why.push(`captions:${(p.getOption('captions', 'tracklist') || []).length}piste(s)`); finish([], ''); }
+}
+if (PAGE_TR) { const go = () => setTimeout(pageTranscript, 1500); if (document.readyState === 'complete') go(); else window.addEventListener('load', go, { once: true }); }
 
 // Données de la page chargée directement (ytInitialData) : première page d'une playlist / de la liste des playlists.
 let lastInitial = null;
@@ -322,7 +382,8 @@ async function runTranscripts(ids, speed = 'normal') {
   if (busy) return;
   busy = true; stopFlag = false; currentRun = String(Date.now());
   const sp = SPEEDS[speed] || SPEEDS.normal;
-  let done = 0, ok = 0, none = 0, fail = 0, idx = 0, limit = sp.conc, calm = 0, errRun = 0, pauses = 0, abort = null;
+  let done = 0, ok = 0, none = 0, fail = 0, idx = 0, limit = sp.conc, calm = 0, errRun = 0, pauses = 0, abort = null, early = false;
+  const failedIds = [];
   const reasons = new Map();
   let lastWhy = '';
   const t0 = Date.now();
@@ -333,7 +394,7 @@ async function runTranscripts(ids, speed = 'normal') {
     await sleep(45_000); // pause : on laisse YouTube se calmer
   };
   const worker = async (k) => {
-    while (!stopFlag && !abort) {
+    while (!stopFlag && !abort && !early) {
       if (k >= limit) { await sleep(500); continue; }
       const i = idx++;
       if (i >= ids.length) return;
@@ -342,7 +403,7 @@ async function runTranscripts(ids, speed = 'normal') {
         const r = await fetchTranscript(id);
         if (r.state === 'ok') { ok++; errRun = 0; if (++calm >= 60 && limit < sp.conc) { limit++; calm = 0; } }
         else if (r.state === 'none') { none++; errRun = 0; }
-        else { fail++; if (++errRun >= 6) { errRun = 0; await brake('échecs répétés'); } }
+        else { fail++; failedIds.push(id); if (ok === 0 && fail >= 8) early = true; else if (++errRun >= 6) { errRun = 0; await brake('échecs répétés'); } }
         if (r.state !== 'ok') { lastWhy = r.why.join(' | '); for (const w of r.why) reasons.set(w, (reasons.get(w) || 0) + 1); }
         if (r.state !== 'error') post('transcript', { id: 'yt:' + id, state: r.state, chunks: r.chunks });
       } catch (e) {
@@ -358,7 +419,7 @@ async function runTranscripts(ids, speed = 'normal') {
     await Promise.all(Array.from({ length: sp.conc }, (_, k) => worker(k)));
     if (abort) throw abort;
     const top = [...reasons].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, n]) => `${k} ×${n}`).join(' ; ');
-    progress(stopFlag ? 'stopped' : 'done', { transcripts: true, total: ids.length, ok, none, fail, done, reasons: top });
+    progress(stopFlag ? 'stopped' : 'done', { transcripts: true, total: ids.length, ok, none, fail, done, reasons: top, failedIds: stopFlag ? [] : [...failedIds, ...ids.slice(Math.max(idx, 0)).filter((x) => !failedIds.includes(x))].slice(0, 300) });
   } catch (e) {
     progress('error', { message: `${e.message} : arrêt de sécurité, réessaie plus tard ou en vitesse « prudente » (ce qui a été récupéré est conservé).`, transcripts: true });
   } finally {

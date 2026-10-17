@@ -11,6 +11,7 @@ window.addEventListener('message', (ev) => {
   if (d.type === 'videos') chrome.runtime.sendMessage({ type: 'ytCaptured', videos: d.videos, playlist: d.playlist, runId: d.runId }).then((r) => ctl('vidAck', { nonce: d.nonce, fresh: r?.fresh ?? null }), () => ctl('vidAck', { nonce: d.nonce, fresh: null }));
   else if (d.type === 'history') chrome.runtime.sendMessage({ type: 'ytHistory', videos: d.videos, runId: d.runId }).then((r) => ctl('histAck', { nonce: d.nonce, fresh: r?.fresh ?? null }), () => ctl('histAck', { nonce: d.nonce, fresh: null }));
   else if (d.type === 'transcript') send({ type: 'ytTranscript', id: d.id, state: d.state, chunks: d.chunks });
+  else if (d.type === 'pagetr') send({ type: 'ytPageTr', id: d.id, ok: d.ok, how: d.how, why: d.why });
   else if (d.type === 'playlists') send({ type: 'ytPlaylists', playlists: d.playlists });
   else if (d.type === 'sync') { send({ ...d, type: 'ytProgress' }); showStatus(d); }
   else if (d.type === 'diag') send({ type: 'ytDiag', item: { playlistId: d.playlistId, title: d.title, count: d.count, expected: d.expected, pages: d.pages, alt: d.alt, shape: d.shape } });

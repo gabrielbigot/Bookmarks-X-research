@@ -23,6 +23,8 @@ export const DEFAULTS = {
   ytTranscripts: 'playlists', // vidéos dont on récupère la transcription : 'playlists' | 'all' (+ historique)
   threads: 'auto', // calcul CPU : 'auto' (cœurs − 2, max 4) | '1' | '2' | '6'
   ytTrSpeed: 'normal', // récupération des transcriptions : 'prudent' (1 à la fois) | 'normal' (3) | 'rapide' (6)
+  ytTrPage: true, // transcriptions : si la voie directe échoue, ouvrir la page de la vidéo et lire les sous-titres chargés par le lecteur
+  ytTrPageMax: 40, // vidéos par passage par la page vidéo
   ytTrBatch: 0, // vidéos par passage de récupération des transcriptions (0 = toutes ; reprise possible après un arrêt)
   ytTrWords: 20000, // profondeur d'indexation par mots d'une transcription, en caractères (20 000 ≈ 20 min de parole)
   ytTrPassages: 12, // passages vectorisés par vidéo (recherche par sens)

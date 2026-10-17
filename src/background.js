@@ -225,6 +225,46 @@ async function ytReconcile(msg) {
   }
 }
 
+// Transcriptions « par la page vidéo » : la voie directe (get_transcript / timedtext) est refusée par YouTube (jetons de provenance) ;
+// on ouvre la vidéo dans un onglet d'arrière-plan et on lit les sous-titres que le lecteur charge lui-même (voir inject-yt.js).
+let pageTrBusy = false, pageTrStop = false;
+const pageTrWaiters = new Map();
+async function pageTranscripts(ids) {
+  if (pageTrBusy || !ids.length) return;
+  pageTrBusy = true; pageTrStop = false;
+  const st = await getSettings();
+  const list = ids.slice(0, Math.max(1, st.ytTrPageMax || 40));
+  const queue = [...list], t0 = Date.now(), fails = [];
+  let done = 0, ok = 0;
+  const report = (state, extra = {}) => broadcast({ type: 'ytProgress', state, transcripts: true, total: list.length, done, ok, fail: done - ok, none: 0, rate: done / Math.max(1, (Date.now() - t0) / 1000), ...extra });
+  report('running', { last: 'lecture par la page vidéo' });
+  const one = async (id) => {
+    let tab = null;
+    try {
+      const res = new Promise((resolve) => { pageTrWaiters.set('yt:' + id, resolve); setTimeout(() => resolve({ ok: false, why: ['délai dépassé (45 s)'] }), 45_000); });
+      tab = await chrome.tabs.create({ url: `https://www.youtube.com/watch?v=${id}&xbs_tr=1`, active: false });
+      return await res;
+    } catch (e) { return { ok: false, why: [e.message] }; }
+    finally { pageTrWaiters.delete('yt:' + id); if (tab) setTimeout(() => chrome.tabs.remove(tab.id).catch(() => {}), 500); }
+  };
+  const worker = async () => {
+    while (queue.length && !pageTrStop) {
+      const id = queue.shift();
+      const r = await one(id);
+      done++; if (r.ok) ok++; else fails.push({ id, why: (r.why || []).join(' | ') });
+      report('running', { last: r.ok ? '' : (r.why || []).join(' | ') });
+      await new Promise((r2) => setTimeout(r2, 800 + Math.random() * 700));
+    }
+  };
+  try { await Promise.all([worker(), worker()]); } finally {
+    const top = fails.slice(0, 6);
+    getMeta('ytDiag').then((cur) => setMeta('ytDiag', { at: Date.now(), build: __BUILD__, items: { ...((cur && cur.items) || {}), transcripts: { playlistId: 'transcripts', title: 'Transcriptions via la page vidéo', count: ok, expected: list.length, pages: 0, alt: 0, shape: JSON.stringify(top) } } })).catch(() => {});
+    report(pageTrStop ? 'stopped' : 'done', { reasons: ok ? `${ok}/${list.length} récupérées via la page vidéo` : 'aucune via la page vidéo : ' + (top[0]?.why || '?') });
+    pageTrBusy = false;
+    if (ok) { broadcast({ type: 'tweetsUpdated' }); kickIndexing(); }
+  }
+}
+
 async function ytStart(mode, opts = {}) {
   let ids, counts;
   if (!['current', 'history', 'transcripts'].includes(mode)) counts = await playlistCounts(); // « new » : playlists inchangées ignorées ; toutes : incomplètes lues en premier
@@ -312,6 +352,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       })();
       return false;
     }
+    case 'ytPageTr': { pageTrWaiters.get(msg.id)?.({ ok: msg.ok, how: msg.how, why: msg.why || [] }); return false; }
     case 'ytPlaylists': {
       getMeta('ytPlaylists').then(async (cur) => {
         const map = new Map(((cur || [])).map((p) => [p.id, p]));
@@ -322,6 +363,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     case 'ytProgress': {
       if (msg.state === 'playlist-done' && msg.complete && msg.runId) ytReconcile(msg);
+      if (msg.state === 'done' && msg.transcripts && msg.failedIds?.length) getSettings().then((st) => { if (st.ytTrPage !== false) pageTranscripts(msg.failedIds); });
       if (['done', 'error', 'stopped'].includes(msg.state)) {
         if (msg.runId) setTimeout(() => ytRuns.delete(msg.runId), 60_000);
         if (ytAutoTab !== null) { const id = ytAutoTab; ytAutoTab = null; setTimeout(() => chrome.tabs.remove(id).catch(() => {}), 2500); }
@@ -330,13 +372,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
     case 'q:updateAll': { updateAll({ manual: true }).then(sendResponse); return true; }
     case 'q:updateStop': {
-      updateStop = true;
+      updateStop = true; pageTrStop = true;
       chrome.tabs.query({ url: ['https://www.youtube.com/*', ...X_TABS] }).then((tabs) => { for (const t of tabs) { chrome.tabs.sendMessage(t.id, { type: 'ytStop' }).catch(() => {}); chrome.tabs.sendMessage(t.id, { type: 'stopBackfill' }).catch(() => {}); } sendResponse({ ok: true }); });
       return true;
     }
     case 'q:updateStatus': { sendResponse({ updating }); return false; }
     case 'q:ytSync': { ytStart(msg.mode || 'all').then(sendResponse); return true; }
     case 'q:ytStop': {
+      pageTrStop = true;
       chrome.tabs.query({ url: 'https://www.youtube.com/*' }).then((tabs) => { for (const t of tabs) chrome.tabs.sendMessage(t.id, { type: 'ytStop' }).catch(() => {}); sendResponse({ ok: true }); });
       return true;
     }
