@@ -118,3 +118,9 @@ sup.c+sup.c::before{content:",";margin-left:-.1em}
 .colo{column-span:all}
 
 .wk input,.wk select{font:14px system-ui;padding:7px 9px;border:1px solid #bdb6a6;border-radius:8px;font-weight:400}
+
+.ops{display:grid;grid-template-columns:1fr 1fr;gap:6px 22px;text-align:left}
+.op{break-inside:avoid;border-bottom:1px dotted var(--soft);padding:4px 0 6px;font-size:.93em}
+.op p{margin:0}.op .opt{display:flex;gap:8px;align-items:baseline;margin-bottom:2px}
+.chip{font:700 8.5px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;padding:3px 6px;border-radius:2px;color:#fff;background:#6d695e}
+.chip.pos{background:#2e7d5b}.chip.neg{background:#8c1c13}.chip.mix{background:#b8860b}

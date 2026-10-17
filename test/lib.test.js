@@ -313,3 +313,31 @@ test('classements : lecture tolérante des benchmarks OpenRouter, nouveaux modè
   assert.deepEqual(pickRows(b.rows, 'intelligence', cited, { top: 1 }).map((r) => r.name), ['Autre', 'GLM-5.3 (Reasoning)']);
   assert.deepEqual(parseBenchmarks({}).rows, []);
 });
+
+import { parseRankings, topUsage, prettySlug, valueRows, bestValue, parseEndpoints, aliasKeys, countMentions, topMentions, opinionMessages, parseOpinions } from '../src/lib/bench.js';
+test('usage, valeur, vitesse, mentions, avis', () => {
+  const win = { from: '2026-10-11', to: '2026-10-17', prevFrom: '2026-10-04', prevTo: '2026-10-10' };
+  const rk = parseRankings({ data: [
+    { date: '2026-10-12', model_permaslug: 'a/x', total_tokens: '1000' }, { date: '2026-10-13', model_permaslug: 'a/x', total_tokens: '500' }, { date: '2026-10-12', model_permaslug: 'b/y', total_tokens: '300' },
+    { date: '2026-10-05', model_permaslug: 'a/x', total_tokens: '750' }, { date: '2026-10-12', model_permaslug: 'other', total_tokens: '200' },
+  ] }, win);
+  const top = topUsage(rk);
+  assert.deepEqual(top.map((t) => t.slug), ['a/x', 'b/y']);
+  assert.equal(top[0].tokens, 1500); assert.equal(top[0].change, 1); assert.equal(top[1].change, null);
+  assert.ok(Math.abs(top[0].share - 1500 / 2000) < 1e-9);
+  assert.equal(prettySlug('a/x-20250101', new Map([['a/x', 'Lab: Mon Modèle']])), 'Mon Modèle');
+  assert.equal(prettySlug('lab/some-model'), 'Some Model');
+  const rows = [{ name: 'Fort', intelligence: 70, priceIn: 5, priceOut: 25 }, { name: 'Bon marché', intelligence: 60, priceIn: 0.1, priceOut: 0.4 }, { name: 'Gratuit faible', intelligence: 10, priceIn: 0, priceOut: 0 }, { name: 'Sans prix', intelligence: 90 }];
+  assert.equal(valueRows(rows).length, 3);
+  assert.deepEqual(bestValue(rows, 5).map((r) => r.name), ['Bon marché', 'Fort']);
+  assert.deepEqual(parseEndpoints({ data: { endpoints: [{ throughput_last_30m: { p50: 80 }, latency_last_30m: { p50: 900 } }, { throughput_last_30m: { p50: 120 }, latency_last_30m: { p50: 0.6 } }] } }), { tps: 120, lat: 0.6 });
+  assert.equal(parseEndpoints({ data: { endpoints: [] } }), null);
+  assert.deepEqual(aliasKeys('Claude Opus 5.5 (Reasoning)').sort(), ['claudeopus55', 'opus55']);
+  const tw = [{ id: '1', text: 'Opus 5.5 est incroyable pour le code', stats: { likes: 99 } }, { id: '2', text: 'Gemini 4 Argon décevant', stats: {} }, { id: '3', text: 'rien' }];
+  const m = countMentions([{ name: 'Claude Opus 5.5 (Reasoning)' }, { name: 'Gemini 4 Argon' }, { name: 'Absent Modèle' }], tw);
+  assert.deepEqual(topMentions(m).map((x) => x.name), ['Claude Opus 5.5 (Reasoning)', 'Gemini 4 Argon']);
+  assert.ok(m.get('Claude Opus 5.5 (Reasoning)').score > m.get('Gemini 4 Argon').score);
+  assert.equal(opinionMessages([{ name: 'X', extracts: [{ id: 'T1', handle: 'a', text: 'bien' }] }]).length, 2);
+  const ops = parseOpinions('{"models":[{"model":"X","verdict":"Positif","summary":"Les gens apprécient sa vitesse [T1][T9]."},{"model":"Y","verdict":"?","summary":"court"}]}', new Set(['T1']));
+  assert.equal(ops.length, 1); assert.equal(ops[0].verdict, 'positif'); assert.ok(!/T9/.test(ops[0].summary) && /T1/.test(ops[0].summary));
+});

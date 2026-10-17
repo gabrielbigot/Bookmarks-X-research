@@ -5,7 +5,7 @@ import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
 import { isVideoItem } from './lib/youtube.js';
 import { videoPubMs } from './lib/ytdate.js';
-import { parseBenchmarks, newModels, citedModels, pickRows } from './lib/bench.js';
+import { parseBenchmarks, newModels, citedModels, pickRows, parseRankings, topUsage, prettySlug, bestValue, parseEndpoints, countMentions, topMentions, opinionMessages, parseOpinions, modelKey } from './lib/bench.js';
 import { fmtTime, aiTranscriptMessages, parseAiTranscript, chunkSegments } from './lib/transcript.js';
 import { detectorSetFor } from './lib/detsets.js';
 import { chatFull } from './lib/llm.js';
@@ -97,13 +97,14 @@ async function prepare(s, offset = 0) {
     .sort((a, b) => prioOf(a) - prioOf(b) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const prioNoTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState !== 'ok' && prioOf(v) < 99 && inWeek(v) && !tooOld(v));
   const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v) && (prioOf(v) < 99 || onTopic(v))).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
-  const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length, extra: s.journal.benchmarks ? 2 : 0 });
+  const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length, extra: s.journal.benchmarks ? 4 : 0 });
   reportVideos.length = Math.min(reportVideos.length, budget.reports);
   const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
   const eligible = new Set(withTr.filter((v) => day(v) >= recent && day(v) <= win.to).map((v) => v.id));
+  const weekTweets = items.filter((t) => !isVideoItem(t) && !t.off && eventDays(t, sv).some((d) => inWindow(d, win)));
   const oldTweets = minPub ? items.filter((t) => !isVideoItem(t) && t.createdAt && t.createdAt.slice(0, 10) < minPub && eventDays(t, sv).some((d) => inWindow(d, win))).length : 0;
   const oldVideos = withTr.filter((v) => inWeek(v) && tooOld(v)).length;
-  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, offTopic: offTopic.length, needTr, prioNoTr: prioNoTr.map((v) => v.text) };
+  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, weekTweets, offTopic: offTopic.length, needTr, prioNoTr: prioNoTr.map((v) => v.text) };
 }
 
 function estimatePlan(plan, cfg) {
@@ -208,7 +209,7 @@ function planNotes(plan, cfg) {
   if (plan.oldTweets || plan.oldVideos) log(`Écartés car publiés avant le ${plan.minPub} : ${plan.oldTweets} bookmark(s), ${plan.oldVideos} vidéo(s) pour reportage (réglage « Ancienneté maximale »).`);
 }
 
-// Classements : benchmarks et catalogue d'OpenRouter (nécessite OpenRouter ; une panne n'empêche jamais l'édition)
+// Classements : benchmarks, catalogue, usage et vitesse d'OpenRouter ; mentions dans les lectures de la semaine (une panne n'empêche jamais l'édition)
 async function loadBench(settings, plan) {
   if (!/openrouter\.ai/i.test(settings.llm.baseUrl)) return null;
   const base = new URL(settings.llm.baseUrl).origin + '/api/v1';
@@ -222,8 +223,47 @@ async function loadBench(settings, plan) {
   const text = [...plan.subjects.flatMap((s) => s.members.map((m) => m.text)), ...plan.videos.map((v) => v.text)].join(' \n ');
   const cited = citedModels(rows, text);
   const fresh = mj ? newModels(mj, plan.win) : [];
-  log(`Classements : ${rows.length} modèles (Artificial Analysis), ${cited.size} cité(s) cette semaine, ${fresh.length} nouveau(x) modèle(s) au catalogue.`);
-  return { rows, meta, cited, fresh };
+  const catalog = new Map((mj?.data || []).map((m) => [m.id, m.name]));
+  // usage : jetons traités par OpenRouter pendant la période (et la précédente, pour la variation)
+  let usage = null;
+  try {
+    const yesterday = new Date(Date.now() - 864e5).toISOString().slice(0, 10);
+    const rk = parseRankings(await get(`/datasets/rankings-daily?start_date=${plan.win.prevFrom}&end_date=${plan.win.to < yesterday ? plan.win.to : yesterday}`), plan.win);
+    const top = topUsage(rk, 10).map((u) => ({ ...u, name: prettySlug(u.slug, catalog) }));
+    if (top.length) usage = { top, total: rk.totalCur };
+  } catch (e) { log(`⚠ Classements : usage indisponible (${e.message}).`); }
+  // vitesse constatée (débit et latence médians) des meilleurs modèles et des meilleurs rapports qualité/prix
+  const speed = new Map();
+  const wanted = [...new Map([...pickRows(rows, 'intelligence', cited, { top: 10, max: 14 }), ...bestValue(rows, 8)].map((r) => [r.slug, r])).values()].filter((r) => r.slug).slice(0, 18);
+  let qi = 0;
+  const worker = async () => {
+    while (qi < wanted.length && !abort?.signal.aborted) {
+      const r = wanted[qi++];
+      for (const id of [r.slug, r.slug.replace(/-\d{8}$/, ''), r.slug.replace(/:.*$/, '')]) {
+        try { const sp = parseEndpoints(await get(`/models/${id}/endpoints`)); if (sp) { speed.set(r.slug, sp); break; } } catch { /* identifiant inconnu : essai suivant */ }
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  // buzz : les modèles dont parlent le plus les lectures de la semaine (pondéré par l'audience)
+  const names = [...new Set([...rows.map((r) => r.name), ...fresh.map((m) => m.name), ...(usage?.top || []).map((u) => u.name)])];
+  const mention = topMentions(countMentions(names.map((name) => ({ name })), plan.weekTweets), 10);
+  // extraits pour résumer les avis : les 5 modèles les plus commentés (au plus 5 extraits chacun, auteurs distincts)
+  const byId = new Map(plan.weekTweets.map((t) => [t.id, t]));
+  const groups = [], sources = [];
+  for (const m of mention.filter((x) => x.n >= 2).slice(0, 5)) {
+    const seenAuthors = new Set(), extracts = [];
+    for (const t of m.ids.map((id) => byId.get(id)).filter(Boolean).sort((a, b) => (b.stats?.likes || 0) - (a.stats?.likes || 0))) {
+      if (seenAuthors.has(t.handle) || extracts.length >= 5) continue;
+      seenAuthors.add(t.handle);
+      const id = 'T' + (sources.length + 1);
+      sources.push({ id, kind: 'tweet', handle: t.handle, name: t.name, url: t.url || `https://x.com/${t.handle}/status/${t.id}`, date: (t.createdAt || '').slice(0, 10), text: t.text });
+      extracts.push({ id, handle: t.handle, text: t.text });
+    }
+    if (extracts.length) groups.push({ name: m.name, extracts });
+  }
+  log(`Classements : ${rows.length} modèles (Artificial Analysis), ${cited.size} cité(s) cette semaine, ${fresh.length} nouveau(x) modèle(s) au catalogue, usage ${usage ? usage.top.length + ' modèles' : 'indisponible'}, vitesse ${speed.size}, ${mention.length} modèle(s) commenté(s).`);
+  return { rows, meta, cited, fresh, usage, speed, mention, groups, opinionPack: { sources }, opinions: [] };
 }
 
 // ---------- génération ----------
@@ -472,6 +512,13 @@ async function generate() {
 
     // mise en pages
     const bench = cfg.benchmarks ? await loadBench(settings, plan).catch((e) => { if (abort.signal.aborted) throw e; log('⚠ Classements : ' + e.message); return null; }) : null;
+    if (bench?.groups.length) { // ce qu'on dit des modèles les plus commentés : un seul appel, d'après les extraits
+      try {
+        const valid = new Set(bench.opinionPack.sources.map((x) => x.id));
+        bench.opinions = parseOpinions(await ask(opinionMessages(bench.groups), { model: assist, maxTokens: 1500 }), valid);
+        log(`Avis sur les modèles : ${bench.opinions.length} résumé(s).`);
+      } catch (err) { if (abort.signal.aborted) throw err; log(err.message === 'budget' ? 'Avis sur les modèles : plafond atteint, ignorés.' : `⚠ Avis sur les modèles : ${err.message}`); }
+    }
     log('Choix des images…');
     await pickImages(entries);
     log('Mise en pages…');
@@ -639,6 +686,16 @@ function hbarSvg(rows, field, cited, max) {
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
+// barres génériques : items [{ name, v, text, hot }]
+function barsLabelSvg(items) {
+  const W = 300, rowH = 17, left = 112, top = 4, H = top + items.length * rowH + 4, max = Math.max(1e-9, ...items.map((i) => i.v));
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${items.map((r, i) => {
+    const y = top + i * rowH, w = Math.max(1, ((W - left - 70) * r.v) / max);
+    return `<text x="${left - 6}" y="${y + 11}" font-size="9.5" text-anchor="end" fill="${r.hot ? '#8c1c13' : '#141210'}" font-family="Arial" font-weight="${r.hot ? 700 : 400}">${esc(r.name.length > 24 ? r.name.slice(0, 23) + '…' : r.name)}</text><rect x="${left}" y="${y + 2}" width="${w.toFixed(1)}" height="11" fill="${r.hot ? '#8c1c13' : '#141210'}" opacity="${r.hot ? 1 : 0.82}"/><text x="${left + w + 4}" y="${y + 11}" font-size="9" fill="#4a4640" font-family="Arial">${esc(r.text)}</text>`;
+  }).join('')}</svg>`;
+}
+const fmtTok = (n) => (n >= 1e12 ? (n / 1e12).toFixed(1) + ' T' : n >= 1e9 ? (n / 1e9).toFixed(1) + ' Md' : n >= 1e6 ? Math.round(n / 1e6) + ' M' : String(Math.round(n)));
+const fmtUsdM = (v) => (v == null ? '—' : v === 0 ? 'gratuit' : v < 1 ? '$' + v.toFixed(2) : '$' + (Math.round(v * 10) / 10));
 function scatterSvg(rows, cited) {
   const pts = rows.filter((r) => r.intelligence != null && (r.priceOut ?? r.priceIn) > 0).map((r) => ({ r, p: r.priceOut ?? r.priceIn }));
   if (pts.length < 3) return '<p class="src">Prix indisponibles.</p>';
@@ -746,6 +803,30 @@ async function renderOnce(model) {
         <table><tr><th>Modèle</th><th>Ajouté le</th><th class="n">Contexte</th><th class="n">Entrée</th><th class="n">Sortie</th></tr>${bn.fresh.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.day.split('-').reverse().join('/'))}</td><td class="n">${m.ctx ? Math.round(m.ctx / 1000) + ' k' : '—'}</td><td class="n">${fmtP(m.priceIn)}</td><td class="n">${fmtP(m.priceOut)}</td></tr>`).join('')}</table>`));
     }
   }
+  // usage, buzz et avis ; qualité / prix / vitesse
+  if (bn && (bn.usage || bn.mention.length)) {
+    const cardOf = (o) => `<div class="op"><p class="opt"><b>${esc(o.model)}</b><span class="chip ${o.verdict === 'positif' ? 'pos' : o.verdict === 'négatif' ? 'neg' : 'mix'}">${esc(o.verdict)}</span></p><p>${citeHtml(o.summary, bn.opinionPack, bib)}</p></div>`;
+    const usageItems = (bn.usage?.top || []).map((u) => ({ name: u.name, v: u.tokens, text: `${fmtTok(u.tokens)} · ${Math.round(u.share * 100)} %${u.change != null ? (u.change >= 0 ? ' ▲' : ' ▼') + Math.abs(Math.round(u.change * 100)) + ' %' : ''}` }));
+    const buzzItems = bn.mention.map((m) => ({ name: m.name, v: m.score, text: `${m.n} mention${m.n > 1 ? 's' : ''}`, hot: true }));
+    secPage.set('usage', fixedPage('Usage et avis', `<p class="kick">Usage et avis</p><h2 class="t">Ce qui s’utilise, ce dont on parle</h2><p class="dek">Les modèles qui ont traité le plus de jetons sur OpenRouter cette semaine, et ceux qui reviennent le plus dans vos lectures, avec ce qu’on en dit.</p>
+      <div class="g2" style="grid-template-columns:1fr 1fr"><div class="l"><h4 class="t">Les plus utilisés (jetons, part, évolution)</h4>${usageItems.length ? barsLabelSvg(usageItems) : '<p class="src">Données d’usage indisponibles.</p>'}</div>
+      <div class="r"><h4 class="t">Les plus commentés dans vos lectures</h4>${buzzItems.length ? barsLabelSvg(buzzItems) : '<p class="src">Aucun modèle cité plusieurs fois.</p>'}</div></div>
+      ${bn.opinions.length ? `<div class="dbl"></div><h4 class="t">Ce qu’on en dit</h4><div class="ops">${bn.opinions.map(cardOf).join('')}</div>` : ''}
+      <p class="src" style="margin-top:8px">Usage : OpenRouter (rankings, licence CC BY 4.0), jetons des 7 jours, variation par rapport aux 7 jours précédents. Avis : résumés automatiques des tweets enregistrés ; les numéros renvoient à l’index des sources.</p>`));
+  }
+  if (bn) {
+    const vr = bestValue(bn.rows, 10);
+    const hasSpeed = vr.some((r) => bn.speed.has(r.slug));
+    if (vr.length >= 3) {
+      const fast = [...bn.speed].map(([slug, sp]) => ({ r: bn.rows.find((x) => x.slug === slug), sp })).filter((x) => x.r && x.sp.tps != null && (x.r.intelligence || 0) >= Math.max(...bn.rows.map((y) => y.intelligence || 0)) * 0.6).sort((a, b) => b.sp.tps - a.sp.tps).slice(0, 6);
+      const sp = (r) => bn.speed.get(r.slug);
+      secPage.set('value', fixedPage('Qualité, prix, vitesse', `<p class="kick">Rapport qualité / prix</p><h2 class="t">Les meilleurs choix de la semaine</h2><p class="dek">Intelligence (Artificial Analysis) rapportée au prix, en écartant les modèles trop faibles ; prix mixte = 3 parts d’entrée pour 1 de sortie, en dollars par million de tokens.${hasSpeed ? ' Vitesse : médiane constatée sur OpenRouter.' : ''}</p>
+        <h4 class="t">Meilleur rapport intelligence / prix</h4>
+        <table><tr><th>Modèle</th><th class="n">Intelligence</th><th class="n">Prix mixte</th><th class="n">Points par $</th>${hasSpeed ? '<th class="n">Débit</th><th class="n">Latence</th>' : ''}</tr>${vr.map((r) => `<tr><td>${esc(r.name)}</td><td class="n">${Math.round(r.intelligence * 10) / 10}</td><td class="n">${fmtUsdM(r.blended)}</td><td class="n">${Math.round(r.perDollar)}</td>${hasSpeed ? `<td class="n">${sp(r)?.tps != null ? Math.round(sp(r).tps) + ' tok/s' : '—'}</td><td class="n">${sp(r)?.lat != null ? sp(r).lat.toFixed(1) + ' s' : '—'}</td>` : ''}</tr>`).join('')}</table>
+        ${fast.length ? `<div class="dbl"></div><h4 class="t">Les plus rapides parmi les modèles de haut niveau</h4><table><tr><th>Modèle</th><th class="n">Intelligence</th><th class="n">Débit</th><th class="n">Latence</th><th class="n">Prix mixte</th></tr>${fast.map(({ r, sp: s2 }) => `<tr><td>${esc(r.name)}</td><td class="n">${Math.round(r.intelligence * 10) / 10}</td><td class="n">${Math.round(s2.tps)} tok/s</td><td class="n">${s2.lat != null ? s2.lat.toFixed(1) + ' s' : '—'}</td><td class="n">${r.priceIn != null && r.priceOut != null ? fmtUsdM((3 * r.priceIn + r.priceOut) / 4) : '—'}</td></tr>`).join('')}</table>` : ''}
+        <p class="src" style="margin-top:8px">Sources : Artificial Analysis (indices, prix), OpenRouter (vitesse constatée). Les débits dépendent du fournisseur et de l’heure.</p>`));
+    }
+  }
   // vidéos
   const repIds = new Set(reps.map((e) => e.subject.rep.id));
   const vlist = plan.videos.filter((v) => !repIds.has(v.id));
@@ -771,7 +852,7 @@ async function renderOnce(model) {
   front.style.setProperty('--s', String(curScale));
   paper.prepend(front);
   const numOf = (pg) => pages().indexOf(pg) + 1;
-  const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Reportages', secPage.get('reports')], ['Chiffres', secPage.get('stats')], ['Classements des modèles', secPage.get('bench')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
+  const toc = [['Éditorial', secPage.get('edito')], ...plan.sections.map((s) => [s.name, secPage.get(s.id)]), ['Reportages', secPage.get('reports')], ['Chiffres', secPage.get('stats')], ['Classements des modèles', secPage.get('bench')], ['Usage et avis', secPage.get('usage')], ['Qualité, prix, vitesse', secPage.get('value')], ['À voir et à écouter', secPage.get('videos')], ['Lexique et sources', secPage.get('sources')]].filter(([, pg]) => pg);
   const others = entries.filter((e) => e !== lead && e.tier === 'lead').concat(entries.filter((e) => e !== lead && e.tier === 'article')).slice(0, 3);
   const leadWords = (n) => lead.article.paragraphs.join(' ').split(/\s+/).slice(0, n).join(' ').replace(/\s*\[[TLWV][\d,TLWV]*\]/g, '');
   const buildFront = (n) => `<h1 class="mast">${esc(NAME)}</h1><div class="tag">Ce que vous avez gardé cette semaine — rédigé d’après vos bookmarks X et YouTube</div><div class="dbl" style="margin:4px 0 0"></div>

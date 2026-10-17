@@ -99,12 +99,20 @@ const jevLog = [];
 const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: readFileSync(`${tmp}/c.pem`) }, (req, res) => {
   const url = new URL(req.url, 'https://x.com');
   // --- faux fournisseur d'IA (compatible OpenAI), avec CORS ---
+  if (url.pathname === '/api/v1/datasets/rankings-daily' || /^\/api\/v1\/models\/.+\/endpoints$/.test(url.pathname)) { // usage et vitesse
+    const hdr = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'content-type': 'application/json' };
+    if (req.method === 'OPTIONS') { res.writeHead(204, hdr); return res.end(); }
+    res.writeHead(200, hdr);
+    if (url.pathname.endsWith('/endpoints')) return res.end(JSON.stringify({ data: { endpoints: [{ throughput_last_30m: { p50: 90 }, latency_last_30m: { p50: 700 } }] } }));
+    const d = (n) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
+    return res.end(JSON.stringify({ data: [{ date: d(1), model_permaslug: 'lab/m0', total_tokens: '5000000000' }, { date: d(2), model_permaslug: 'lab/m1', total_tokens: '3000000000' }, { date: d(1), model_permaslug: 'other', total_tokens: '100' }, { date: d(9), model_permaslug: 'lab/m0', total_tokens: '2500000000' }] }));
+  }
   if (url.pathname === '/api/v1/benchmarks' || url.pathname === '/api/v1/models') { // classements : benchmarks Artificial Analysis et catalogue d'OpenRouter
     const hdr = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'content-type': 'application/json' };
     if (req.method === 'OPTIONS') { res.writeHead(204, hdr); return res.end(); }
     res.writeHead(200, hdr);
     if (url.pathname === '/api/v1/models') return res.end(JSON.stringify({ data: [{ id: 'lab/fresh-1', name: 'Lab: Fresh 1', created: Math.floor(Date.now() / 1000) - 3600, context_length: 200000, pricing: { prompt: '0.0000005', completion: '0.000002' } }, { id: 'lab/old', name: 'Old', created: 1700000000 }] }));
-    return res.end(JSON.stringify({ data: Array.from({ length: 14 }, (_, i) => ({ source: 'artificial-analysis', model_permaslug: 'lab/m' + i, display_name: 'Modèle test ' + i, intelligence_index: 70 - i * 3, coding_index: 60 - i * 2, agentic_index: 55 - i * 2, pricing: { price_1m_input_tokens: 1 + i, price_1m_output_tokens: 4 + 2 * i } })), meta: { as_of: '2026-10-16', source: 'artificial-analysis' } }));
+    return res.end(JSON.stringify({ data: Array.from({ length: 14 }, (_, i) => ({ source: 'artificial-analysis', model_permaslug: 'lab/m' + i, display_name: i === 0 ? 'Agents' : 'Modèle test ' + i, intelligence_index: 70 - i * 3, coding_index: 60 - i * 2, agentic_index: 55 - i * 2, pricing: { price_1m_input_tokens: 1 + i, price_1m_output_tokens: 4 + 2 * i } })), meta: { as_of: '2026-10-16', source: 'artificial-analysis' } }));
   }
   if (url.pathname === '/v1/chat/completions') {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST,OPTIONS' };
@@ -136,6 +144,8 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         out = JSON.stringify({ title: 'Un reportage sur la vidéo de la semaine et ses idées', dek: 'Chapeau du reportage [V1]', lede: 'Introduction du reportage : la vidéo présente ses idées et son fil directeur à ses spectateurs. [V1]', pull_quote: '', pull_source: 'V1', key_points: ['Premier point [V1]', 'Deuxième point', 'Troisième point'] });
       } else if (sys.includes('grand reportage sur une vidéo')) {
         out = JSON.stringify({ heading: 'Une partie du reportage', paragraphs: [1, 2, 3].map((n) => 'Paragraphe ' + n + ' de la partie : la vidéo développe ses idées dans l’ordre, vers ' + n + ':00. [V1]') });
+      } else if (sys.includes('ce que les gens en disent')) {
+        out = JSON.stringify({ models: [{ model: 'Agents', verdict: 'positif', summary: 'Les lecteurs apprécient surtout la mémoire des agents [T1].' }] });
       } else if (sys.includes('journaliste pour un journal hebdomadaire') && sys.includes('Pour chaque entrée')) {
         const ids = [...usr.matchAll(/ENTRÉE (B\d+) /g)].map((m) => m[1]);
         out = JSON.stringify({ briefs: ids.map((id) => ({ id, title: 'Brève ' + id, text: 'Une brève rédigée à partir du tweet source, avec sa citation [T1].' })) });
@@ -928,7 +938,7 @@ assert.match(await stats.locator('.tip').first().innerText(), /Auteur A/);
 // clic sur la 1re barre d'auteur -> ouvre le panneau avec from:@a
 const [popup] = await Promise.all([ctx.waitForEvent('page'), authorCard.locator('.mk').first().click()]);
 await popup.waitForLoadState();
-assert.equal(await popup.locator('#q').inputValue(), 'from:@a', 'la requête passe au panneau');
+await waitFor(async () => (await popup.locator('#q').inputValue().catch(() => '')) === 'from:@a', 'la requête passe au panneau', 15000);
 await popup.waitForSelector('.tw');
 assert.equal(await popup.locator('.tw .hd .nm', { hasText: 'Auteur A' }).count() > 0, true);
 await popup.close();
@@ -1195,6 +1205,11 @@ const paperText = await journal.locator('#paper').innerText();
 assert.match(jlog, /Classements : 14 modèles \(Artificial Analysis\)/, jlog);
 assert.match(paperText, /Les modèles de la semaine/);
 assert.match(paperText, /Artificial Analysis/);
+assert.match(paperText, /Ce qui s’utilise, ce dont on parle/);
+assert.match(paperText, /Les plus utilisés/i);
+assert.match(paperText, /Ce qu’on en dit[\s\S]*apprécient surtout la mémoire/i);
+assert.match(paperText, /Les meilleurs choix de la semaine/);
+assert.match(paperText, /90 tok\/s/);
 assert.match(paperText, /Nouveaux modèles de la semaine[\s\S]*Fresh 1/);
 assert.match(paperText, /Une partie du reportage/i, 'le reportage vidéo est rendu avec son intertitre');
 assert.match(paperText, /Reportage vidéo/i);
