@@ -478,7 +478,7 @@ function articleBlocks(e, bib) {
 
 // graphiques SVG de la page de chiffres
 function lineSvg(series, keys) {
-  const W = 300, H = 150, m = { l: 26, r: 6, t: 8, b: 20 };
+  const W = 300, H = 150, m = { l: 26, r: 14, t: 8, b: 20 };
   const max = Math.max(4, ...series.flatMap((s) => s.vals));
   const x = (i) => m.l + ((W - m.l - m.r) / Math.max(1, keys.length - 1)) * i, y = (v) => H - m.b - (v / max) * (H - m.t - m.b);
   const C = ['#1f4e79', '#b5532a', '#2e7d5b', '#b8860b', '#8a4f7d'];
@@ -490,10 +490,11 @@ function lineSvg(series, keys) {
 }
 function barsSvg(vals, keys) {
   const W = 300, H = 150, m = { l: 26, r: 6, t: 8, b: 20 }, max = Math.max(4, ...vals), bw = 22;
+  const cx0 = (i) => m.l + ((W - m.l - m.r) * (i + 0.5)) / Math.max(1, vals.length); // barres centrées dans leur case : rien ne déborde, rien ne recouvre l'axe
   const y = (v) => H - m.b - (v / max) * (H - m.t - m.b);
   let g = '';
   for (let t = 0; t <= 4; t++) { const v = (max / 4) * t; g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="#d9d2c3"/><text x="${m.l - 4}" y="${y(v) + 3}" font-size="9" text-anchor="end" fill="#4a4640" font-family="Arial">${Math.round(v)}</text>`; }
-  vals.forEach((v, i) => { const cx = m.l + ((W - m.l - m.r) / Math.max(1, vals.length - 1)) * i - bw / 2; g += `<rect x="${cx}" y="${y(v)}" width="${bw}" height="${y(0) - y(v)}" fill="#141210"/><text x="${cx + bw / 2}" y="${H - 6}" font-size="8.5" text-anchor="middle" fill="#4a4640" font-family="Arial">${esc(dayLabel(keys[i]).split(' ')[0].replace('.', ''))}</text>`; });
+  vals.forEach((v, i) => { const cx = cx0(i) - bw / 2; g += `<rect x="${cx}" y="${y(v)}" width="${bw}" height="${y(0) - y(v)}" fill="#141210"/><text x="${cx + bw / 2}" y="${H - 6}" font-size="8.5" text-anchor="middle" fill="#4a4640" font-family="Arial">${esc(dayLabel(keys[i]).split(' ')[0].replace('.', ''))}</text>`; });
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
 

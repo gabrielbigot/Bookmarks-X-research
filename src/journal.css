@@ -78,7 +78,8 @@ td{border-bottom:1px solid var(--soft);padding:6px}td.n,th.n{text-align:right}
 .vid .im{aspect-ratio:16/9}.vid h3.t{font-size:18px}
 .src{font:600 9.5px/1.35 "Helvetica Neue",Arial,sans-serif;color:var(--ink2);letter-spacing:.03em}
 @page{size:A4;margin:0}
-@media print{html{background:#fff}.noprint{display:none!important}main{padding:0}.page{margin:0;box-shadow:none;page-break-after:always;break-after:page}}
+@page{size:A4;margin:0}
+@media print{html,body{background:#fff;margin:0;padding:0}#paper{margin:0}.noprint{display:none!important}main{padding:0;margin:0;max-width:none}.page{margin:0;box-shadow:none;break-after:page;break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact}.page:last-child{break-after:auto}}
 
 .chk{display:flex;gap:8px;align-items:center;font-size:13px;margin:6px 0}.chk small{color:#6d695e}
 .g2 .im{aspect-ratio:16/9}
@@ -86,3 +87,5 @@ td{border-bottom:1px solid var(--soft);padding:6px}td.n,th.n{text-align:right}
 h4.t.sub{font:700 15px/1.2 Didot,"Bodoni 72",Georgia,serif;letter-spacing:0;text-transform:none;border:0;border-top:1px solid var(--ink);padding:7px 0 0;margin:12px 0 5px;break-after:avoid}
 .wk{display:flex;flex-direction:column;gap:3px;font-weight:600;font-size:13px;margin:10px 0}
 .wk small{font-weight:400;color:#6d695e}
+
+sup.c+sup.c::before{content:",";margin-left:-.1em}

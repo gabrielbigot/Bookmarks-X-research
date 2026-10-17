@@ -1152,6 +1152,18 @@ assert.match(jlog, /Relecture : [1-9]\d* phrase\(s\) non étayée\(s\) retirée\
 assert.match(jlog, /Transcriptions : \d+ sujet/, jlog);
 assert.match(jlog, /Reportages : 1\./, jlog);
 console.log('journal :', jlog.split('\n').filter((l) => /Reportage|Transcriptions/.test(l)).join(' | '));
+{ // impression : une page imprimée par page du journal (pas de page blanche ni de débordement)
+  const fs = await import('node:fs'), os = await import('node:os');
+  const file = (process.env.DUMP_PAPER || os.tmpdir() + '/xbs-paper.html');
+  fs.writeFileSync(file, '<!doctype html><html lang="fr"><head><meta charset="utf-8"><link rel="stylesheet" href="file://' + process.cwd() + '/src/journal.css"></head><body><main>' + await journal.locator('#paper').evaluate((e) => e.outerHTML) + '</main></body></html>');
+  const hb = await chromium.launch(), hp = await hb.newPage();
+  await hp.goto('file://' + file);
+  const nPages = await hp.evaluate(() => document.querySelectorAll('.page').length);
+  const pdf = await hp.pdf({ format: 'A4', printBackground: true });
+  await hb.close();
+  const printed = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+  assert.equal(printed, nPages, 'une page imprimée par page du journal : ' + printed + ' / ' + nPages);
+}
 const paperText = await journal.locator('#paper').innerText();
 assert.match(paperText, /Une partie du reportage/i, 'le reportage vidéo est rendu avec son intertitre');
 assert.match(paperText, /Reportage vidéo/i);
