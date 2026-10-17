@@ -117,3 +117,5 @@ Calculer des embeddings pour des dizaines de milliers de tweets est lourd. Par d
 - Dossiers de bookmarks de X : format GraphQL non vérifié, non implémenté.
 - Jev : les types de question `score` et `noul` (format de réponse non vérifié) ne sont pas utilisés.
 - L'IA locale dans le navigateur (WebGPU) n'est pas implémentée ; passer par Ollama.
+
+- **Tri par date des vidéos** : le menu de tri propose « Publiés récemment / il y a longtemps » et « Ajoutés récemment / il y a longtemps ». La date de publication des vidéos est déduite du texte relatif de YouTube (« il y a 3 jours ») au moment de la capture, donc approximative (± la précision de YouTube : plus la vidéo est ancienne, plus c'est grossier) ; la date d'ajout est celle de la première capture par l'extension (YouTube ne donne pas la vraie date d'ajout à une playlist).

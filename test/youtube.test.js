@@ -362,3 +362,33 @@ test('pagination : le jeton de la liste de vidéos prime sur un autre jeton de l
   assert.equal(parseYoutube({ a: [pvr('ccccccccccc', 'Trois'), contItem('TOKEN_ONLY_ONE_FFFFFFFFFFFFFFFFFFFFFF')] }).continuation, 'TOKEN_ONLY_ONE_FFFFFFFFFFFFFFFFFFFFFF');
   assert.deepEqual(allContinuations({ a: decoyBefore, b: { contents: list }, c: decoyAfter }), ['TOKEN_DECOY_BEFORE_THE_LIST_CCCCCCCCC', 'TOKEN_THE_REAL_LIST_AAAAAAAAAAAAAAAA', 'TOKEN_DECOY_AFTER_THE_LIST_BBBBBBBBBB']);
 });
+
+import { parsePublished, videoPubMs } from '../src/lib/ytdate.js';
+import { sortRows } from '../src/lib/search.js';
+test('dates relatives des vidéos', () => {
+  const ref = Date.UTC(2026, 9, 17, 12);
+  assert.equal(parsePublished('il y a 18 heures', ref), ref - 18 * 3_600_000);
+  assert.equal(parsePublished('il y a 1 j', ref), ref - 86_400_000);
+  assert.equal(parsePublished('18 k vues • il y a 3 ans', ref) != null, true);
+  assert.equal(parsePublished('Streamed 2 weeks ago', ref), ref - 14 * 86_400_000);
+  assert.equal(parsePublished('Diffusé il y a 2 mois', ref) < ref - 55 * 86_400_000, true);
+  assert.equal(new Date(parsePublished('12 janv. 2024', ref)).toISOString().slice(0, 10), '2024-01-12');
+  assert.equal(parsePublished('', ref), null);
+  assert.equal(videoPubMs({ publishedText: 'il y a 1 j', addedAt: ref }), ref - 86_400_000);
+});
+test('tri par date : publication et ajout, vidéos et tweets mélangés', () => {
+  const X = 1288834974657n, snow = (ms) => ((BigInt(ms) - X) << 22n).toString();
+  const base = Date.UTC(2026, 0, 1);
+  const tw = [
+    { id: 't1', createdAt: new Date(base).toISOString(), sortIndex: snow(base + 5 * 86_400_000) },
+    { id: 'yt:a', publishedText: 'il y a 10 j', addedAt: base + 30 * 86_400_000, sortIndex: '999999' },
+    { id: 'yt:b', publishedText: 'il y a 3 j', addedAt: base + 30 * 86_400_000, sortIndex: '999998' },
+    { id: 'yt:c', publishedText: '', addedAt: base + 40 * 86_400_000, sortIndex: '1' },
+  ];
+  const rows = tw.map((_, i) => [i, 0]);
+  const ids = (how) => sortRows(rows, tw, how).map((r) => tw[r[0]].id);
+  assert.deepEqual(ids('newest'), ['yt:b', 'yt:a', 't1', 'yt:c']);
+  assert.deepEqual(ids('oldest'), ['t1', 'yt:a', 'yt:b', 'yt:c']);
+  assert.deepEqual(ids('addednew'), ['yt:c', 'yt:a', 'yt:b', 't1']);
+  assert.deepEqual(ids('addedold'), ['t1', 'yt:b', 'yt:a', 'yt:c']);
+});

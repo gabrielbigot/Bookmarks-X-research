@@ -1,6 +1,7 @@
 // Recherche hybride : BM25 (mots-clés) + similarité cosinus (embeddings), fusionnées par RRF.
 import { decodeEntities, isStopword } from './text.js';
-import { savedAtOf, dayKey } from './time.js';
+import { savedAtOf, dayKey, snowflakeMs } from './time.js';
+import { videoPubMs } from './ytdate.js';
 import { videoText, isVideoItem } from './youtube.js';
 export const DIM = 256;
 
@@ -314,16 +315,26 @@ export function contentWords(text) {
 // Trie des lignes [row, score] par date de publication / likes. Les tweets sans date passent toujours en dernier.
 export function sortRows(rows, tweets, how) {
   const t = (r) => tweets[r[0]];
-  const date = (dir) => (a, b) => {
-    const x = t(a).createdAt, y = t(b).createdAt;
-    if (!x && !y) return 0;
-    if (!x) return 1;
-    if (!y) return -1;
-    return x === y ? 0 : (x < y ? -dir : dir);
+  // clé de date : publication (tweet : createdAt ; vidéo : date estimée) ou ajout (vidéo : première capture ; tweet : ordre du bookmark)
+  const key = (x, added) => {
+    if (isVideoItem(x)) return added ? x.addedAt || null : videoPubMs(x);
+    if (added) return x.sortIndex ? snowflakeMs(x.sortIndex) : null;
+    return x.createdAt ? Date.parse(x.createdAt) : null;
+  };
+  const date = (dir, added) => (a, b) => {
+    const x = key(t(a), added), y = key(t(b), added);
+    if (x == null && y == null) return 0;
+    if (x == null) return 1;
+    if (y == null) return -1;
+    if (x !== y) return (x - y) * dir;
+    const sa = BigInt(t(a).sortIndex || 0), sb = BigInt(t(b).sortIndex || 0); // même instant : ordre de la playlist
+    return sa === sb ? 0 : (sa < sb ? -dir : dir);
   };
   const by = {
-    newest: date(-1), // décroissant
-    oldest: date(1), // croissant
+    newest: date(-1), // publication, décroissant
+    oldest: date(1),
+    addednew: date(-1, true), // ajout, décroissant
+    addedold: date(1, true),
     likes: (a, b) => (t(b).stats?.likes || 0) - (t(a).stats?.likes || 0),
   }[how];
   return by ? [...rows].sort(by) : rows;

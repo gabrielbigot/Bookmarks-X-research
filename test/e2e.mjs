@@ -618,7 +618,7 @@ await waitFor(async () => /Le cerveau expliqué/.test(await panel.locator('.tw.y
 const vc = panel.locator('.tw.yt').first();
 assert.match(await vc.locator('.yt-t').innerText(), /Le cerveau expliqué/);
 assert.equal(await vc.locator('.dur').innerText(), '12:34');
-assert.match(await vc.locator('.yt-m').innerText(), /Chaîne Neuro · 1,2 M de vues · il y a 2 ans/);
+assert.match(await vc.locator('.yt-m').innerText(), /Chaîne Neuro · 1,2 M de vues · publiée ≈ .*2024 · ajoutée ≈/);
 assert.deepEqual((await vc.locator('.chip-pl').allInnerTexts()).sort(), ['Neurosciences', 'À regarder plus tard'], 'une vidéo dans 2 playlists : appartenances fusionnées');
 assert.equal(await vc.locator('a:has-text("Ouvrir sur YouTube")').getAttribute('href'), 'https://www.youtube.com/watch?v=w1');
 await vc.screenshot({ path: 'test/yt-card.png' });

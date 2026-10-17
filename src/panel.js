@@ -13,6 +13,7 @@ import { chat, parseJsonLoose, askMessages, digestMessages, intentMessages, rera
 import { kmeans, labelClusters } from './lib/cluster.js';
 import { bindThemeButton } from './lib/theme.js';
 import { isVideoItem, syncSummary } from './lib/youtube.js';
+import { videoPubMs } from './lib/ytdate.js';
 import { encode, decodeFull, packVectors, unpackVectors } from './lib/backup.js';
 import { score as evalScore, summarize } from './lib/evalbench.js';
 
@@ -308,7 +309,7 @@ async function run(opts = {}) {
   if (how) { // « le plus vieux … » : on trie par date l'ensemble des correspondances (pas seulement les 200 premières)
     const { pool, kind } = selectPool(rows, kwAll, { words: contentWords(text) });
     rows = sortRows(pool, how);
-    label += ` · ${{ oldest: 'du plus ancien au plus récent', newest: 'du plus récent au plus ancien', likes: 'les plus likés d’abord' }[how]} parmi ${pool.length.toLocaleString('fr-FR')} résultats (${kind})`;
+    label += ` · ${{ oldest: 'du plus ancien au plus récent (publication)', newest: 'du plus récent au plus ancien (publication)', addednew: 'derniers ajouts d’abord', addedold: 'plus anciens ajouts d’abord', likes: 'les plus likés d’abord' }[how]} parmi ${pool.length.toLocaleString('fr-FR')} résultats (${kind})`;
   }
   last = { rows, terms, label: label + tag, meta, why };
   render();
@@ -449,7 +450,8 @@ function videoCard([row], terms, pos) {
   el.tabIndex = 0;
   el.dataset.row = row;
   if (pos < 12) el.id = 't-' + (pos + 1);
-  const meta = [t.viewsText, t.publishedText].filter(Boolean).join(' · ');
+  const pm = videoPubMs(t), dfmt = (ms) => new Date(ms).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
+  const meta = [t.viewsText, pm ? `publiée ≈ ${dfmt(pm)}` : t.publishedText, t.addedAt ? `ajoutée ≈ ${dfmt(t.addedAt)}` : ''].filter(Boolean).join(' · ');
   const pls = (t.playlists || []).filter((p) => p.title).slice(0, 4);
   const wd = t.watched || [];
   const seen = wd.length ? `<div class="yt-w" title="${esc(wd.join(', '))}">Vu le ${esc(wd[wd.length - 1])}${wd.length > 1 ? ` · ×${wd.length}` : ''}${t.progress ? ` · ${t.progress} %` : ''}</div>` : '';

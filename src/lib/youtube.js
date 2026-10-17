@@ -1,3 +1,4 @@
+import { parsePublished } from './ytdate.js';
 // Lecteur des réponses « youtubei/v1/browse » de YouTube (playlists, listes de playlists) -> vidéos normalisées.
 // Le format change souvent : on gère l'ancien (playlistVideoRenderer) ET le nouveau (lockupViewModel), on parcourt
 // le JSON en profondeur au lieu de suivre un chemin fixe, et on compte ce qu'on n'a pas su lire (alerte « format changé »).
@@ -240,10 +241,11 @@ export const ytId = (videoId) => 'yt:' + videoId;
 export const isVideoItem = (t) => t.kind === 'video' || (typeof t.id === 'string' && t.id.startsWith('yt:'));
 
 export function toItem(v, playlist, now = Date.now()) {
+  const pubMs = parsePublished(v.published, now);
   return {
     id: ytId(v.videoId), kind: 'video', videoId: v.videoId, text: v.title || '', name: v.channel || '', handle: v.handle || slug(v.channel) || 'youtube',
     channelId: v.channelId || '', url: `https://www.youtube.com/watch?v=${v.videoId}`, thumb: v.thumb || '', durationText: v.durationText || fmtDuration(v.durationSec),
-    durationSec: v.durationSec || 0, viewsText: v.views || '', publishedText: v.published || '', unavailable: !!v.unavailable,
+    durationSec: v.durationSec || 0, viewsText: v.views || '', publishedText: v.published || '', pubMs: pubMs || null, unavailable: !!v.unavailable,
     playlists: playlist?.id ? [{ id: playlist.id, title: playlist.title || '', pos: v.pos || 0 }] : [],
     links: [], media: [], stats: { views: parseViews(v.views) }, lang: '', createdAt: null,
     sortIndex: String(1_000_000 - (v.pos || 0)), // sous tous les tweets dans « récents » ; ordre de la playlist entre vidéos
