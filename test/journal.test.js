@@ -230,3 +230,9 @@ test('reportagePlan : plafond de mots', () => {
   assert.ok(reportagePlan({ durationSec: 3600 }, 'detailed', 900).words <= 900);
   assert.ok(reportagePlan({ durationSec: 3600 }, 'detailed', 900).sections <= 2);
 });
+
+test('chiffres marquants : l’extrait est centré sur le nombre', () => {
+  const f = numberFacts(['Au milieu d’une très longue phrase qui parle de beaucoup de choses sans importance et de détails annexes, le projet a atteint 43 000 étoiles sur GitHub en quelques jours seulement après sa publication par son auteur.']);
+  assert.equal(f.length, 1);
+  assert.ok(/43 000 étoiles/.test(f[0].text) && f[0].text.length <= 125, f[0].text);
+});

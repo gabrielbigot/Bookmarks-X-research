@@ -335,9 +335,18 @@ test('usage, valeur, vitesse, mentions, avis', () => {
   assert.deepEqual(aliasKeys('Claude Opus 5.5 (Reasoning)').sort(), ['claudeopus55', 'opus55']);
   const tw = [{ id: '1', text: 'Opus 5.5 est incroyable pour le code', stats: { likes: 99 } }, { id: '2', text: 'Gemini 4 Argon décevant', stats: {} }, { id: '3', text: 'rien' }];
   const m = countMentions([{ name: 'Claude Opus 5.5 (Reasoning)' }, { name: 'Gemini 4 Argon' }, { name: 'Absent Modèle' }], tw);
-  assert.deepEqual(topMentions(m).map((x) => x.name), ['Claude Opus 5.5 (Reasoning)', 'Gemini 4 Argon']);
+  assert.deepEqual(topMentions(m).map((x) => x.name), ['Claude Opus 5.5', 'Gemini 4 Argon']);
   assert.ok(m.get('Claude Opus 5.5 (Reasoning)').score > m.get('Gemini 4 Argon').score);
-  assert.equal(opinionMessages([{ name: 'X', extracts: [{ id: 'T1', handle: 'a', text: 'bien' }] }]).length, 2);
+  // « Opus 5 » ne compte pas les mentions d'« Opus 5.5 » ; les variantes d'un modèle sont regroupées ; pas d'avis sans extrait exploitable
+{
+  const m2 = countMentions([{ name: 'Claude Opus 5 (Max)' }, { name: 'Claude Opus 5.5 (Max, Default Fallback)' }, { name: 'Claude Opus 5.5' }], [{ id: '1', text: 'Opus 5.5 est unreal', stats: {} }, { id: '2', text: 'Opus 5 reste bon', stats: {} }]);
+  assert.equal(m2.get('Claude Opus 5 (Max)').n, 1);
+  assert.deepEqual(topMentions(m2).map((x) => [x.name, x.n]).sort(), [['Claude Opus 5', 1], ['Claude Opus 5.5', 1]]);
+  assert.equal(citedModels([{ name: 'Claude Opus 5 (Max)', slug: 'a' }], 'Opus 5.5 partout').size, 0);
+  assert.equal(prettySlug('nvidia/nemotron-3-ultra-550b-a55b-20260604:free'), 'Nemotron 3 Ultra 550b A55b (gratuit)');
+  assert.equal(parseOpinions('{"models":[{"model":"N","verdict":"neutre","summary":"Aucun extrait ne mentionne directement ce modèle."}]}', new Set()).length, 0);
+}
+assert.equal(opinionMessages([{ name: 'X', extracts: [{ id: 'T1', handle: 'a', text: 'bien' }] }]).length, 2);
   const ops = parseOpinions('{"models":[{"model":"X","verdict":"Positif","summary":"Les gens apprécient sa vitesse [T1][T9]."},{"model":"Y","verdict":"?","summary":"court"}]}', new Set(['T1']));
   assert.equal(ops.length, 1); assert.equal(ops[0].verdict, 'positif'); assert.ok(!/T9/.test(ops[0].summary) && /T1/.test(ops[0].summary));
 });

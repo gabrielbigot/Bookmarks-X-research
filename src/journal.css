@@ -124,3 +124,8 @@ sup.c+sup.c::before{content:",";margin-left:-.1em}
 .op p{margin:0}.op .opt{display:flex;gap:8px;align-items:baseline;margin-bottom:2px}
 .chip{font:700 8.5px/1 "Helvetica Neue",Arial,sans-serif;letter-spacing:.1em;text-transform:uppercase;padding:3px 6px;border-radius:2px;color:#fff;background:#6d695e}
 .chip.pos{background:#2e7d5b}.chip.neg{background:#8c1c13}.chip.mix{background:#b8860b}
+
+/* reportage : titre à gauche, image à droite */
+.rhead{column-span:all;display:grid;grid-template-columns:minmax(0,1fr) 34%;gap:16px;align-items:start;margin-bottom:6px}
+.rhead .art-head{column-span:none}.rhead .art-head.lead h2.t{font-size:calc(30px*(.75 + .25*var(--s,1)))}.rhead figure{margin:2px 0 0}
+.rhead+.tl{margin-top:4px}

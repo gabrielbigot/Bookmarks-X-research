@@ -138,6 +138,11 @@ Ordre de choix : chaînes prioritaires, puis vidéos regardées avant les vidéo
 - **Normal** : ≈ 32 mots par minute, de 600 à 2 400 mots (≈ 2 pages pour 1 h).
 - **Détaillé** (défaut) : ≈ 48 mots par minute, de 800 à 3 400 mots (≈ 3 à 4 pages pour 1 h).
 
+### Image des reportages
+- **Miniature de la vidéo en haute définition** (défaut) : gratuit ; la miniature est chargée en 1280 px quand YouTube la fournit.
+- **Miniature, sinon illustration IA** : l'IA ne travaille que si la miniature HD est introuvable ou petite.
+- **Illustration générée par l'IA** : une image par reportage (OpenRouter uniquement, modèle de sortie image, ≈ 0,04 $ chacune, comptée dans le plafond). Elle est légendée « Illustration générée par IA » : elle illustre le sujet, elle ne montre pas la vidéo.
+
 La longueur suit la durée de la vidéo ; le nombre de parties va de 1 à 7. Plus c'est détaillé, plus il y a d'appels (donc de coût).
 
 ### Chaînes prioritaires pour les reportages

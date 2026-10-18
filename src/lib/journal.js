@@ -93,6 +93,8 @@ export function assignTiers(subjects, { leads = 4, articles = 14, briefs = 30, m
 }
 
 // ---------- statistiques de la semaine ----------
+// Mots trop courants pour être un « mot qui monte » (verbes, adjectifs et termes génériques anglais des tweets)
+const GENERIC_WORDS = new Set('full read parallel using used make made makes making get got getting need needs want like just still every thing things people time first best great good more most much many some other another work works working new now today week year years said says look looks see seen think thought know known take takes took going gone come comes live free open real true real long high low top next last late early next big small part post posts thread check link links video watch show shows showing find found build built building run running runs ship shipped agent agents data model models'.split(' '));
 export function weekStats(items, { sv, sections, win }) {
   const byDay = new Map(), sectionDays = new Map(sections.map((s) => [s.id, new Map()]));
   const accounts = new Map(), accountsPrev = new Map(), words = new Map(), wordsPrev = new Map(), domains = new Map(), heat = new Map();
@@ -118,12 +120,20 @@ export function weekStats(items, { sv, sections, win }) {
   const dayKeys = [];
   for (let i = win.days - 1; i >= 0; i--) dayKeys.push(dayKey(Date.parse(win.to + 'T12:00:00') - i * DAY));
   const topAccounts = [...accounts].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([handle, n]) => ({ handle, n, d: n - (accountsPrev.get(handle) || 0) }));
-  const rising = [...words].filter(([, n]) => n >= 3).map(([w, n]) => ({ word: w, n, prev: wordsPrev.get(w) || 0 })).map((x) => ({ ...x, d: x.n - x.prev })).filter((x) => x.d > 0).sort((a, b) => b.d - a.d || b.n - a.n).slice(0, 10);
+  const rising = [...words].filter(([w, n]) => n >= 4 && !GENERIC_WORDS.has(w)).map(([w, n]) => ({ word: w, n, prev: wordsPrev.get(w) || 0 })).map((x) => ({ ...x, d: x.n - x.prev })).filter((x) => x.d > 0).sort((a, b) => b.d - a.d || b.n - a.n).slice(0, 10);
   return { total, dayKeys, byDay: dayKeys.map((k) => byDay.get(k) || 0), sectionSeries: sections.map((s) => ({ id: s.id, name: s.name, vals: dayKeys.map((k) => sectionDays.get(s.id).get(k) || 0) })), topAccounts, rising, domains: [...domains].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([host, n]) => ({ host, n })), heat: dayKeys.map((k) => Array.from({ length: 24 }, (_, h) => heat.get(k + '|' + h) || 0)) };
 }
 
 // Chiffres marquants d'un texte (encadré « En chiffres ») : [{ num, text }] — le texte est la phrase d'origine, sans renvois de sources.
 const UNIT = '(?:%|milliards?|millions?|mille|dollars?|\\$|€|euros?|fois|Go|Mo|To|tokens?|jours?|mois|ans|heures?|minutes?|paramètres?|étoiles?|vues?|abonnés?|M\\b|B\\b|k\\b)';
+// Extrait d'une phrase centré sur le chiffre (coupé aux mots), pour que le nombre reste visible dans le texte.
+function aroundNumber(sent, at, len, max = 120) {
+  if (sent.length <= max) return sent;
+  let from = Math.max(0, Math.min(at - 45, sent.length - max)), to = Math.min(sent.length, from + max);
+  if (from > 0) { const sp = sent.indexOf(' ', from); if (sp > -1 && sp < at) from = sp + 1; }
+  if (to < sent.length) { const sp = sent.lastIndexOf(' ', to); if (sp > at + len) to = sp; }
+  return (from > 0 ? '…' : '') + sent.slice(from, to).trim() + (to < sent.length ? '…' : '');
+}
 export function numberFacts(paragraphs, max = 4) {
   const out = [], seen = new Set();
   const re = new RegExp('(\\d[\\d\\s\\u00a0\\u202f.,]*\\d|\\d)\\s?(' + UNIT + ')', 'i');
@@ -134,7 +144,7 @@ export function numberFacts(paragraphs, max = 4) {
       const num = clean(m[0]).replace(/\s+/g, ' ');
       if (/^\d{4}$/.test(m[1]) || seen.has(num)) continue; // une année seule n'est pas un chiffre marquant
       seen.add(num);
-      out.push({ num, text: sent.length > 120 ? sent.slice(0, 117).replace(/\s+\S*$/, '') + '…' : sent, w: /%|milliard|million|\$|€|dollar|euro|fois/i.test(num) ? 2 : 1 });
+      out.push({ num, text: aroundNumber(sent, m.index, m[0].length), w: /%|milliard|million|\$|€|dollar|euro|fois/i.test(num) ? 2 : 1 });
     }
   }
   return out.sort((a, b) => b.w - a.w).slice(0, max).map(({ num, text }) => ({ num, text }));
@@ -266,7 +276,7 @@ export function reportageEvidence(video, summaries) {
 }
 export function reportageMessages(video, pack) {
   return [
-    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu rédiges un reportage sur une vidéo à partir de ses points clés horodatés : raconte ce que dit la vidéo, dans l’ordre, en mentionnant les moments importants avec leur horodatage (par exemple « vers 12:40 »). Réponds uniquement en JSON : {"title": "titre informatif de 8 à 14 mots", "dek": "chapeau d’une phrase", "paragraphs": ["…"], "pull_quote": "citation exacte tirée des extraits exacts, ou chaîne vide", "pull_source": "V1", "key_points": ["3 points à retenir"]}. Rédige environ 500 mots en 5 à 7 paragraphes.` },
+    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu rédiges un reportage sur une vidéo à partir de ses points clés horodatés : raconte ce que dit la vidéo, dans l’ordre, en situant les passages dans la vidéo : un horodatage (par exemple « vers 12:40 ») au plus par paragraphe, jamais à chaque phrase. Réponds uniquement en JSON : {"title": "titre informatif de 8 à 14 mots", "dek": "chapeau d’une phrase", "paragraphs": ["…"], "pull_quote": "citation exacte tirée des extraits exacts, ou chaîne vide", "pull_source": "V1", "key_points": ["3 points à retenir"]}. Rédige environ 500 mots en 5 à 7 paragraphes.` },
     { role: 'user', content: `DOSSIER :\n${pack.text}` },
   ];
 }
@@ -318,7 +328,7 @@ export function reportageIntroMessages(video, pack) {
 }
 export function reportageSectionMessages(video, group, { index, total, words }) {
   return [
-    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu rédiges la partie ${index + 1} sur ${total} d’un grand reportage sur une vidéo, à partir des points clés horodatés de cette partie uniquement. Raconte ce que dit la vidéo dans l’ordre, avec le plus de précision possible : chiffres, noms, étapes, arguments, exemples, en situant les moments importants (par exemple « vers 12:40 »). ${index ? 'N’introduis pas la vidéo : l’introduction est déjà écrite.' : 'L’introduction est déjà écrite : entre directement dans le contenu.'} Réponds uniquement en JSON : {"heading": "intertitre de 3 à 8 mots", "paragraphs": ["…"]}. Rédige environ ${words} mots en ${Math.max(3, Math.round(words / 110))} paragraphes.` },
+    { role: 'system', content: `Tu es journaliste pour un journal hebdomadaire sur l’IA et la robotique. ${STYLE}\n${RULES}\nTu rédiges la partie ${index + 1} sur ${total} d’un grand reportage sur une vidéo, à partir des points clés horodatés de cette partie uniquement. Raconte ce que dit la vidéo dans l’ordre, avec le plus de précision possible : chiffres, noms, étapes, arguments, exemples, en situant les passages : un horodatage (par exemple « vers 12:40 ») au plus par paragraphe, jamais à chaque phrase, et des tournures variées plutôt que « Vers … » en début de phrase. ${index ? 'N’introduis pas la vidéo : l’introduction est déjà écrite.' : 'L’introduction est déjà écrite : entre directement dans le contenu.'} Réponds uniquement en JSON : {"heading": "intertitre de 3 à 8 mots", "paragraphs": ["…"]}. Rédige environ ${words} mots en ${Math.max(3, Math.round(words / 110))} paragraphes.` },
     { role: 'user', content: `DOSSIER :\n${groupText(video, group)}` },
   ];
 }

@@ -44,7 +44,7 @@ const V = { w1: ['Le cerveau expliqué', 'Chaîne Neuro'], w2: ['Recette de rame
 const PLAYLISTS = { WL: ['w1', 'w2', 'w3'], LL: ['l1'], PL1: ['w1', 'p2'], PL2: ['w2', 'c1'], PL3: ['m1'] };
 let ytDrop = null; // vidéo retirée de TOUTES les playlists (simule « retirée côté YouTube »)
 const ytLog = [];
-const aiLog = [];
+const aiLog = []; const imgLog = [];
 const ytItems = (pid) => PLAYLISTS[pid].filter((v) => v !== ytDrop).map((v, i) => pvr(v, V[v][0], V[v][1], i + 1));
 // historique : 4 pages (HP1 -> HC1 -> HC2 -> HC3), groupées par jour avec les libellés français de YouTube
 const DAYS_FR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -126,6 +126,11 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         const lines = Array.from({ length: 14 }, (_, i) => `[${Math.floor(i / 2)}:${i % 2 ? '30' : '00'}] Passage ${i} de la transcription générée par le modèle, avec un peu de texte pour la vidéo.`).join('\n');
         res.writeHead(200, { ...cors, 'content-type': 'application/json' });
         return res.end(JSON.stringify({ choices: [{ message: { content: lines } }], usage: { prompt_tokens: 100, completion_tokens: 50 } }));
+      }
+      if (body.modalities) { // illustration générée par l'IA
+        imgLog.push(body.messages[0].content.slice(0, 80));
+        res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ choices: [{ message: { content: '', images: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' } }] } }], usage: { prompt_tokens: 10, completion_tokens: 10, cost: 0.04 } }));
       }
       const sys = body.messages[0].content, usr = body.messages.at(-1).content;
       llmLog.push({ sys: sys.slice(0, 40), auth: req.headers.authorization });
@@ -527,6 +532,7 @@ const setModel = (key) => panel.evaluate(async (k) => {
 }, key);
 await setModel('gemma2');
 await panel.waitForFunction(() => /0 indexés sémantiquement \(EmbeddingGemma 2\)/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
+await panel.waitForFunction(() => document.querySelectorAll('.tw .sim').length === 0, null, { timeout: 10000 }).catch(() => {});
 assert.equal(await panel.locator('.tw .sim').count(), 0, 'plus de « Similaires » sans vecteur du bon modèle');
 await panel.evaluate(async () => {
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -876,7 +882,7 @@ await panel.evaluate(async () => {
   const names = { a: 'Auteur A', b: 'Auteur B', c: 'Auteur C', d: 'Auteur D', e: 'Auteur E', f: 'Auteur F' };
   for (let i = 0; i < 300; i++) {
     const handle = i % 5 === 0 ? 'a' : i % 7 === 0 ? 'b' : ['c', 'd', 'e', 'f'][i % 4];
-    const saved = now - (i % 100) * DAY - ((i * 7) % 20) * 3_600_000; // 3 tweets par jour, à des heures variées
+    const saved = now - (i % 100) * DAY - Math.min((i * 7) % 20, new Date(now).getHours()) * 3_600_000; // 3 tweets par jour, à des heures variées (sans changer de jour, même juste après minuit)
     const pub = saved - (1 + (i % 9)) * DAY;
     tx.objectStore('tweets').put({ id: 's' + i, name: names[handle], handle, lang: i % 2 ? 'fr' : 'en', createdAt: new Date(pub).toISOString(), sortIndex: snow(saved),
       text: `Tweet numéro ${i} sur les agents et la mémoire ${i % 6 === 0 ? '#ia' : ''}`, url: `https://x.com/${handle}/status/s${i}`,
@@ -1177,8 +1183,9 @@ await journal.click('#j-est');
 await waitFor(async () => /Coût estimé :/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'estimation du coût du journal', 60000);
 assert.match(await journal.locator('#j-log').innerText(), /vidéo\(s\) de la semaine écartée\(s\) des reportages : hors des rubriques/, 'la vidéo hors rubriques est écartée des reportages');
 await journal.evaluate(() => { const c = document.getElementById('j-topic'); c.checked = false; c.dispatchEvent(new Event('change')); });
+await journal.selectOption('#j-img', 'auto');
 await journal.click('#j-go');
-await waitFor(async () => /Édition terminée/.test(await journal.locator('#j-log').innerText().catch(() => '')) || /⚠/.test(await journal.locator('#j-log').innerText().catch(() => '')), 'fin de la génération du journal', 200000);
+await waitFor(async () => { const t = await journal.locator('#j-log').innerText().catch(() => ''); return /Édition terminée/.test(t) || /^⚠/m.test(t); }, 'fin de la génération du journal', 200000);
 const jlog = await journal.locator('#j-log').innerText();
 assert.match(jlog, /Édition terminée : (\d+) pages/, jlog);
 assert.match(jlog, /Recherche web : [1-9]\d* sujet\(s\) complété/, jlog);
@@ -1210,7 +1217,10 @@ assert.match(paperText, /Les plus utilisés/i);
 assert.match(paperText, /Ce qu’on en dit[\s\S]*apprécient surtout la mémoire/i);
 assert.match(paperText, /Les meilleurs choix de la semaine/);
 assert.match(paperText, /90 tok\/s/);
-assert.match(paperText, /Nouveaux modèles de la semaine[\s\S]*Fresh 1/);
+assert.match(paperText, /Nouveaux modèles au catalogue d’OpenRouter[\s\S]*Fresh 1/i);
+assert.ok(imgLog.length >= 1 && /Illustration éditoriale/.test(imgLog[0]), 'illustration IA demandée : ' + imgLog);
+assert.match(paperText, /Illustration générée par IA/);
+assert.match(jlog, /illustration IA du reportage/, jlog);
 assert.match(paperText, /Une partie du reportage/i, 'le reportage vidéo est rendu avec son intertitre');
 assert.match(paperText, /Reportage vidéo/i);
 assert.match(paperText, /ref\.example/, 'la page web consultée figure dans l’index des sources');
@@ -1272,7 +1282,18 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
     const stats = { total: 281, dayKeys, byDay: [20, 60, 62, 55, 52, 14, 0], sectionSeries: sections.map((s, i) => ({ id: s.id, name: s.name, vals: dayKeys.map((_, d) => Math.round(rnd() * 30 + i)) })), topAccounts: Array.from({ length: 8 }, (_, i) => ({ handle: 'compte' + i, n: 20 - i, d: i % 3 - 1 })), rising: Array.from({ length: 9 }, (_, i) => ({ word: 'mot' + i, n: 12 + i, prev: i })), domains: Array.from({ length: 8 }, (_, i) => ({ host: `site${i}.example.com`, n: 30 - 3 * i })), heat: dayKeys.map(() => Array.from({ length: 24 }, () => Math.floor(rnd() * 9))) };
     const plan = { win, subjects, sections, stats, videos: Array.from({ length: 6 }, (_, i) => ({ id: 'yt:v' + i, text: 'Une vidéo de la semaine ' + i, name: 'Chaîne', durationText: '12:0' + i, url: 'https://www.youtube.com/watch?v=v' + i, watched: i % 2 ? ['2026-10-12'] : [], playlists: [] })) };
     const editorial = { title: 'La semaine de test', paragraphs: [para(90), para(90), para(90)], ideas: ['Idée un ' + words(12), 'Idée deux ' + words(12), 'Idée trois ' + words(12)], week: dayKeys.map((d) => ({ day: d, text: words(30) })), glossary: [{ term: 'VLM', def: words(14) }, { term: 'MoE', def: words(14) }] };
-    const model = { plan, entries, briefEntries, editorial, cost: 0.3, fallbacks: 0, budget: 1, budgetHit: false, webCount: 2, removedTotal: 0, reportEntries, trCount: 2, maxPages: 30 };
+    // reportages : image 16/9 (titre à gauche, image à droite) ; classements et usage avec des noms de variantes longs
+    reportEntries.slice(0, 2).forEach((e, i) => { e.image = { url: svg(1280, 720, ['#cdd', '#dcd'][i]), alt: 'Vidéo', card: true, ratio: 16 / 9 }; });
+    plan.hiddenVideos = 2; plan.videos.forEach((v) => { v.thumb = svg(480, 270, '#ddd'); });
+    const names = ['Claude Opus 5.5 (Max, Default Fallback)', 'Claude Sonnet 5.5 (Max, Reasoning)', 'Claude Fable 5.1 (Max, Optimized)', 'Qwen3.8 Max', 'GPT-6 Astra (Max)', 'Gemini 4 Argon (High)', 'GPT-6.1 Sol (Max)', 'Muse Spark 1.3 (Max)', 'GLM-5.3 (Max)', 'DeepSeek V4 Flash Vision (Max)', 'Nemotron 3 Ultra 550b A55b (gratuit)', 'MiMo-V2.6-Pro', 'Grok 4.7 (Xhigh)', 'Kimi K3 (Max)', 'GLM-5.3-Flash'];
+    const rows = names.map((name, i) => ({ slug: 'lab/m' + i, name, intelligence: 58 - i * 1.3, coding: 80 - i * 1.5, agentic: 57 - i, priceIn: 0.1 + i * 0.9, priceOut: 0.4 + i * 3.1 }));
+    const bench = { rows, meta: { as_of: '2026-10-17' }, cited: new Set(rows.filter((_, i) => i % 3 === 0).map((r) => r.slug)), top: 15,
+      fresh: Array.from({ length: 12 }, (_, i) => ({ id: 'a/' + i, name: 'Lab: Nouveau modèle ' + i, day: '2026-10-1' + (i % 8), ctx: 128000, priceIn: i % 4 ? 0.5 : 0, priceOut: i % 4 ? 2 : 0 })),
+      usage: { top: names.map((name, i) => ({ name, tokens: 2.6e13 / (i + 1), share: 0.21 / (i + 1), change: i % 2 ? -0.3 : 0.07 })).slice(0, 15), total: 1e14 },
+      speed: new Map(rows.slice(0, 8).map((r, i) => [r.slug, { tps: 100 + i * 9, lat: 0.5 + i / 3 }])),
+      mention: names.map((name, i) => ({ name, n: 50 - i * 3, score: 60 - i * 3 })).slice(0, 15), opinionPack: { sources: [{ id: 'T1', kind: 'tweet', handle: 'user1', url: 'https://x.com/u/status/1', date: '2026-10-12', text: 'x' }] },
+      opinions: [0, 1, 2].map((i) => ({ model: names[i], verdict: ['positif', 'mitigé', 'négatif'][i], summary: 'Les retours sont partagés : ' + words(30) + ' [T1].' })) };
+    const model = { bench, plan, entries, briefEntries, editorial, cost: 0.3, fallbacks: 0, budget: 1, budgetHit: false, webCount: 2, removedTotal: 0, reportEntries, trCount: 2, maxPages: 30 };
     const rr = await renderPaper(model);
     const bad = [...document.querySelectorAll('#paper .page .body.flow')].filter((b) => b.scrollWidth > b.clientWidth + 2 || b.scrollHeight > b.clientHeight + 2).length;
     const fixedBad = [...document.querySelectorAll('#paper .page .body:not(.flow)')].filter((b) => b.scrollHeight > b.clientHeight + 2 && !b.style.zoom).length;

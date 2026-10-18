@@ -69,6 +69,21 @@ export async function chatFull(llm, messages, { json = false, signal, model, max
   return { text: out, annotations: msg?.message?.annotations || [], usage: { promptTokens: Number(u.prompt_tokens) || 0, completionTokens: Number(u.completion_tokens) || 0, cost: typeof u.cost === 'number' ? u.cost : null } };
 }
 
+// Génération d'image (OpenRouter : modèles de sortie « image », par exemple google/gemini-2.5-flash-image) -> { url: 'data:image/…', cost }
+export async function chatImage(llm, prompt, { model, signal } = {}) {
+  const res = await fetch(llm.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
+    method: 'POST', signal,
+    headers: { 'content-type': 'application/json', ...(llm.apiKey ? { authorization: `Bearer ${llm.apiKey}` } : {}) },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], modalities: ['image', 'text'], stream: false, usage: { include: true } }),
+  });
+  if (!res.ok) throw new Error(`API IA : HTTP ${res.status} — ${(await res.text().catch(() => '')).slice(0, 200)}`);
+  const data = await res.json();
+  const m = data?.choices?.[0]?.message;
+  const img = (m?.images || []).map((i) => i?.image_url?.url || i?.url).find((u) => typeof u === 'string' && /^(data:image|https?:)/.test(u));
+  if (!img) throw new Error('API IA : aucune image dans la réponse');
+  return { url: img, cost: typeof data.usage?.cost === 'number' ? data.usage.cost : null };
+}
+
 export function parseJsonLoose(text) {
   const t = text.replace(/```(?:json)?/gi, '');
   const a = t.indexOf('{'), b = t.lastIndexOf('}');

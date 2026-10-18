@@ -40,6 +40,9 @@
           <label>Coût estimé <small>$ par minute de vidéo</small><input id="j-aipm" type="number" min="0" step="0.001"></label></div>
         <div class="grid"><label>Reportages vidéo<input id="j-reports" type="number" min="0" max="8"></label>
           <label>Détail des reportages<select id="j-depth"><option value="short">Court (≈ 1 page)</option><option value="normal">Normal (≈ 2 pages pour 1 h)</option><option value="detailed">Détaillé (≈ 3 à 4 pages pour 1 h)</option></select></label></div>
+        <div class="grid"><label>Image des reportages<select id="j-img"><option value="thumb">Miniature de la vidéo en haute définition</option><option value="auto">Miniature, sinon illustration IA</option><option value="ai">Illustration générée par l’IA</option></select></label>
+          <label>Modèle d’image <small>OpenRouter, sortie image</small><input id="j-imgmodel" placeholder="google/gemini-2.5-flash-image"></label>
+          <label>Coût estimé <small>$ par illustration</small><input id="j-imgprice" type="number" min="0" step="0.005"></label></div>
         <label class="wk">Chaînes prioritaires pour les reportages <small>(noms ou @identifiants séparés par des virgules ; leurs vidéos de la semaine passent en premier)</small><input id="j-prio" type="text" placeholder="ex. Silicon Carne, @hey_initium"></label>
         <label class="chk"><input id="j-topic" type="checkbox"> Reportages : seulement les vidéos qui correspondent aux rubriques cochées <small>(sauf chaînes prioritaires ; évite un match de foot dans un journal IA)</small></label>
         <label class="chk"><input id="j-search" type="checkbox"> Recherche web sur les grands sujets <small>(OpenRouter : ajoute des sources et du contexte ; payant, voir le prix par recherche)</small></label>

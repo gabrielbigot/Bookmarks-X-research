@@ -43,10 +43,23 @@ export function newModels(json, win, limit = 12) {
   return out.sort((a, b) => b.day.localeCompare(a.day)).slice(0, limit);
 }
 
-// Modèles cités dans les lectures de la semaine : le nom (sans parenthèses, sans ponctuation) figure dans le texte.
+// Texte normalisé pour la recherche de noms : minuscules, sans accents ni ponctuation (le point reste entre deux chiffres : « 5.5 »).
+const normText = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9.]+/g, ' ').replace(/(?<!\d)\.|\.(?!\d)/g, ' ').replace(/\s+/g, ' ').trim();
+const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// « opus 5 » ne doit pas se retrouver dans « opus 5.5 » : le nom doit finir là où finit le mot (ni lettre, ni chiffre, ni « .chiffre »).
+const patternOf = (words) => new RegExp('(?:^| )' + normText(words).split(' ').filter(Boolean).map(escRe).join(' ?') + '(?![a-z0-9]|\\.\\d)');
+export function aliasPatterns(name) {
+  const clean0 = String(name || '').replace(/\([^)]*\)/g, ' ').replace(/^[^:]+:\s*/, '').trim();
+  const out = [];
+  if (modelKey(clean0).length >= 4) out.push(patternOf(clean0));
+  const words = clean0.split(/\s+/);
+  if (words.length >= 2 && VENDORS.has(words[0].toLowerCase())) { const rest = words.slice(1).join(' '); if (modelKey(rest).length >= 5) out.push(patternOf(rest)); }
+  return out;
+}
+// Modèles cités dans les lectures de la semaine : le nom (sans parenthèses) figure dans le texte, en mot entier.
 export function citedModels(rows, text) {
-  const t = modelKey(text);
-  return new Set(rows.filter((r) => { const k = modelKey(r.name); return k.length >= 4 && t.includes(k); }).map((r) => r.slug || r.name));
+  const t = normText(text);
+  return new Set(rows.filter((r) => aliasPatterns(r.name).some((re) => re.test(t))).map((r) => r.slug || r.name));
 }
 
 // Lignes à tracer pour un indice : les meilleures + les modèles cités (au plus `max`), triées par score décroissant.
@@ -81,8 +94,9 @@ export function topUsage(rk, limit = 10) {
 // Nom lisible d'un identifiant (catalogue, sinon identifiant mis en forme)
 export function prettySlug(slug, catalog = new Map()) {
   const hit = catalog.get(slug) || catalog.get(String(slug).replace(/-\d{8}$/, '')) || catalog.get(String(slug).replace(/:.*$/, ''));
-  if (hit) return hit.replace(/^[^:]+:\s*/, '');
-  return String(slug).split('/').pop().replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const tidy = (x) => x.replace(/[\s-]\d{8}(?=:|$)/, '').replace(/:\s*free$/i, ' (gratuit)').trim();
+  if (hit) return tidy(hit.replace(/^[^:]+:\s*/, ''));
+  return tidy(String(slug).split('/').pop().replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
 }
 
 // ---------- rapport qualité / prix / vitesse ----------
@@ -123,21 +137,32 @@ export function aliasKeys(name) {
 }
 // models : [{ key, name }] ; tweets : [{ id, text, stats }] ; -> Map(name -> { n, score, ids: [id] }) (n = éléments qui en parlent, score pondéré par l'audience)
 export function countMentions(models, tweets) {
-  const prepared = tweets.map((t) => ({ t, k: modelKey(t.text) }));
+  const prepared = tweets.map((t) => ({ t, k: normText(t.text) }));
   const out = new Map();
   for (const m of models) {
-    const keys = aliasKeys(m.name);
+    const keys = aliasPatterns(m.name);
     if (!keys.length) continue;
     let n = 0, score = 0; const ids = [];
     for (const { t, k } of prepared) {
-      if (!keys.some((x) => k.includes(x))) continue;
+      if (!keys.some((re) => re.test(k))) continue;
       n++; score += 1 + Math.log10(1 + (t.stats?.likes || 0) + 2 * (t.stats?.reposts || 0)); ids.push(t.id);
     }
     if (n) out.set(m.name, { n, score, ids });
   }
   return out;
 }
-export const topMentions = (map, limit = 10) => [...map].map(([name, v]) => ({ name, ...v })).sort((a, b) => b.score - a.score).slice(0, limit);
+// Nom sans les variantes entre parenthèses (« Claude Opus 5.5 (Max, Default Fallback) » -> « Claude Opus 5.5 ») ni « :free »
+export const familyName = (name) => String(name || '').replace(/\s*\([^)]*\)/g, '').replace(/:\s*free$/i, '').replace(/\s+/g, ' ').trim();
+// Les variantes d'un même modèle (Max, High, Reasoning…) parlent des mêmes tweets : elles sont regroupées en une seule ligne.
+export function topMentions(map, limit = 10) {
+  const fam = new Map();
+  for (const [name, v] of map) {
+    const k = modelKey(name), cur = fam.get(k);
+    if (!cur) fam.set(k, { name: familyName(name) || name, n: v.n, score: v.score, ids: [...v.ids] });
+    else { cur.n = Math.max(cur.n, v.n); cur.score = Math.max(cur.score, v.score); for (const id of v.ids) if (!cur.ids.includes(id)) cur.ids.push(id); }
+  }
+  return [...fam.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+}
 
 // Avis : extraits (au plus 5 par modèle) -> messages pour le modèle de langue, et lecture de sa réponse.
 // groups : [{ name, extracts: [{ id: 'T1', handle, text }] }]
@@ -151,9 +176,11 @@ export function opinionMessages(groups) {
 export function parseOpinions(text, validIds) {
   const o = parseJsonLoose(text);
   const ok = new Set(['positif', 'mitigé', 'négatif', 'neutre']);
+  const NO_INFO = /aucun(e)? (extrait|message|tweet|texte|avis|information)|(ne|n[’']) ?(mentionn|parl)\w* (pas|directement)|impossible de (dégager|tirer|conclure)|pas (assez )?d[’']informations?/i;
+  const seen = new Set();
   return (Array.isArray(o.models) ? o.models : []).map((m) => ({
     model: String(m?.model || '').trim(),
     verdict: ok.has(String(m?.verdict || '').toLowerCase()) ? String(m.verdict).toLowerCase() : 'neutre',
     summary: String(m?.summary || '').replace(/\[((?:T\d+)(?:\s*[,;]\s*T\d+)*)\]/g, (x, ids) => { const keep = ids.split(/\s*[,;]\s*/).filter((i) => validIds.has(i)); return keep.length ? `[${keep.join(',')}]` : ''; }).replace(/\s{2,}/g, ' ').trim(),
-  })).filter((m) => m.model && m.summary.length > 15);
+  })).filter((m) => m.model && m.summary.length > 15 && !NO_INFO.test(m.summary) && !seen.has(modelKey(m.model)) && seen.add(modelKey(m.model)));
 }

@@ -8,7 +8,7 @@ import { videoPubMs } from './lib/ytdate.js';
 import { parseBenchmarks, newModels, citedModels, pickRows, parseRankings, topUsage, prettySlug, bestValue, parseEndpoints, countMentions, topMentions, opinionMessages, parseOpinions, modelKey } from './lib/bench.js';
 import { fmtTime, aiTranscriptMessages, parseAiTranscript, chunkSegments } from './lib/transcript.js';
 import { detectorSetFor } from './lib/detsets.js';
-import { chatFull } from './lib/llm.js';
+import { chatFull, chatImage } from './lib/llm.js';
 import { isPublicUrl } from './lib/links.js';
 import { handleKey, OFFICIAL_DESC, eventDays } from './lib/widgets.js';
 import {
@@ -33,14 +33,14 @@ const readCfg = () => ({
   budget: Math.max(0, Number($('j-budget').value) || 0),
   leads: Math.max(0, Math.min(8, Math.round(Number($('j-leads').value) || 0))), articles: Math.max(0, Math.min(40, Math.round(Number($('j-articles').value) || 0))), briefs: Math.max(0, Math.min(80, Math.round(Number($('j-briefs').value) || 0))),
   sections: [...document.querySelectorAll('#j-sections input:checked')].map((i) => i.value), readLinks: $('j-links').checked,
-  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, benchmarks: $('j-bench').checked, benchTop: Number($('j-benchtop').value) || 10, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
+  useTranscripts: $('j-tr').checked, reportages: Math.max(0, Math.min(8, Math.round(Number($('j-reports').value) || 0))), reportDepth: $('j-depth').value, reportImage: $('j-img').value, imageModel: $('j-imgmodel').value.trim() || 'google/gemini-2.5-flash-image', imagePrice: Math.max(0, Number($('j-imgprice').value) || 0), maxAge: Number($('j-age').value) || 0, reportTopicOnly: $('j-topic').checked, benchmarks: $('j-bench').checked, benchTop: Number($('j-benchtop').value) || 10, aiTranscribe: $('j-aitr').checked, aiTrModel: $('j-aimodel').value.trim() || 'google/gemini-3-flash-preview', aiTrMaxMin: Math.max(10, Math.min(300, Number($('j-aimax').value) || 150)), aiTrPerMin: Math.max(0, Number($('j-aipm').value) || 0), maxPages: Math.max(0, Math.min(120, Math.round(Number($('j-pages').value) || 0))), priority: $('j-prio').value.trim(), search: $('j-search').checked, searchTop: Math.max(1, Math.min(20, Math.round(Number($('j-top').value) || 6))), searchPrice: Math.max(0, Number($('j-sprice').value) || 0), verify: $('j-verify').checked,
 });
 async function loadUi() {
   settings = await getSettings();
   detectors = (await getMeta('dashDetectors')) || [];
   const j = settings.journal;
   $('j-writer').value = j.writerModel; $('j-assist').value = j.assistModel; $('j-pin').value = j.priceInPerM; $('j-pout').value = j.priceOutPerM; $('j-budget').value = j.budget;
-  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-bench').checked = j.benchmarks !== false; $('j-benchtop').value = String(j.benchTop || 10); $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
+  $('j-links').checked = j.readLinks; $('j-tr').checked = j.useTranscripts; $('j-reports').value = j.reportages; $('j-depth').value = j.reportDepth || 'detailed'; $('j-img').value = j.reportImage || 'thumb'; $('j-imgmodel').value = j.imageModel || ''; $('j-imgprice').value = j.imagePrice ?? 0.04; $('j-age').value = String(j.maxAge ?? 45); $('j-topic').checked = j.reportTopicOnly !== false; $('j-bench').checked = j.benchmarks !== false; $('j-benchtop').value = String(j.benchTop || 10); $('j-aitr').checked = !!j.aiTranscribe; $('j-aimodel').value = j.aiTrModel || ''; $('j-aimax').value = j.aiTrMaxMin ?? 150; $('j-aipm').value = j.aiTrPerMin ?? 0.006; $('j-pages').value = j.maxPages ?? 30; $('j-prio').value = j.priority || ''; $('j-search').checked = j.search; $('j-top').value = j.searchTop; $('j-sprice').value = j.searchPrice; $('j-verify').checked = j.verify; $('j-leads').value = j.leads; $('j-articles').value = j.articles; $('j-briefs').value = j.briefs;
   const cur = $('j-week').value || '0';
   $('j-week').innerHTML = Array.from({ length: 13 }, (_, k) => `<option value="${k}">${k === 0 ? 'Les 7 derniers jours' : k === 1 ? 'Semaine précédente' : 'Il y a ' + k + ' semaines'} (${esc(weekWindow(Date.now() - k * 7 * DAY).label)})</option>`).join('');
   $('j-week').value = cur;
@@ -50,7 +50,7 @@ async function loadUi() {
   st.hidden = llmReady(settings);
   st.textContent = 'Configure d’abord l’IA (⚙ du panneau de recherche › IA : URL, modèle, clé) : c’est elle qui rédige les articles.';
 }
-for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-age', 'j-topic', 'j-bench', 'j-benchtop', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
+for (const id of ['j-tr', 'j-reports', 'j-depth', 'j-img', 'j-imgmodel', 'j-imgprice', 'j-age', 'j-topic', 'j-bench', 'j-benchtop', 'j-aitr', 'j-aimodel', 'j-aimax', 'j-aipm', 'j-pages', 'j-prio', 'j-search', 'j-top', 'j-sprice', 'j-verify', 'j-links', 'j-writer', 'j-assist', 'j-pin', 'j-pout', 'j-budget', 'j-leads', 'j-articles', 'j-briefs']) $(id).addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 $('j-sections').addEventListener('change', async () => { settings = await setSettings({ journal: readCfg() }); });
 
 // ---------- préparation de la semaine ----------
@@ -97,6 +97,8 @@ async function prepare(s, offset = 0) {
     .sort((a, b) => prioOf(a) - prioOf(b) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
   const prioNoTr = items.filter((v) => isVideoItem(v) && !v.unavailable && v.trState !== 'ok' && prioOf(v) < 99 && inWeek(v) && !tooOld(v));
   const reportVideos = withTr.filter((v) => inWeek(v) && !tooOld(v) && (prioOf(v) < 99 || onTopic(v))).sort((a, b) => prioOf(a) - prioOf(b) || ((b.watched || []).length ? 1 : 0) - ((a.watched || []).length ? 1 : 0) || (b.progress || 0) - (a.progress || 0) || day(b).localeCompare(day(a))).slice(0, s.journal.reportages);
+  const pageVideos = items.filter(isVideoItem).filter((v) => inWeek(v) && (prioOf(v) < 99 || onTopic(v))).sort((a, b) => day(b).localeCompare(day(a))).slice(0, 8);
+  const hiddenVideos = items.filter((v) => isVideoItem(v) && inWeek(v) && !(prioOf(v) < 99 || onTopic(v))).length;
   const budget = pageBudget({ maxPages: s.journal.maxPages, leads: tiers.leads.length, articles: tiers.articles.length, briefs: tiers.briefs.length, reportages: reportVideos.length, sections: sections.length, extra: s.journal.benchmarks ? 4 : 0 });
   reportVideos.length = Math.min(reportVideos.length, budget.reports);
   const recent = dayKey(Date.parse(win.to + 'T12:00:00') - 60 * DAY);
@@ -104,7 +106,7 @@ async function prepare(s, offset = 0) {
   const weekTweets = items.filter((t) => !isVideoItem(t) && !t.off && eventDays(t, sv).some((d) => inWindow(d, win)));
   const oldTweets = minPub ? items.filter((t) => !isVideoItem(t) && t.createdAt && t.createdAt.slice(0, 10) < minPub && eventDays(t, sv).some((d) => inWindow(d, win))).length : 0;
   const oldVideos = withTr.filter((v) => inWeek(v) && tooOld(v)).length;
-  return { items, win, sections, subjects, tiers, stats, videos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, weekTweets, offTopic: offTopic.length, needTr, prioNoTr: prioNoTr.map((v) => v.text) };
+  return { items, win, sections, subjects, tiers, stats, videos, pageVideos, hiddenVideos, vecs, chunks, reportVideos, budget, eligible, minPub, oldTweets, oldVideos, weekTweets, offTopic: offTopic.length, needTr, prioNoTr: prioNoTr.map((v) => v.text) };
 }
 
 function estimatePlan(plan, cfg) {
@@ -189,6 +191,31 @@ const probeSize = (url) => {
   return probeCache.get(url);
 };
 const probe = async (url) => !!(await probeSize(url));
+// Miniature YouTube en haute définition : celle des playlists est petite (≈ 336 px) et se pixellise une fois agrandie.
+async function hdThumb(v) {
+  const id = v.videoId || String(v.id).replace(/^yt:/, '');
+  for (const u of [`https://i.ytimg.com/vi/${id}/maxresdefault.jpg`, `https://i.ytimg.com/vi/${id}/hq720.jpg`]) {
+    const sz = await probeSize(u);
+    if (sz && sz.w >= 640) return { url: u, w: sz.w, ratio: sz.w / sz.h };
+  }
+  if (v.thumb) { const sz = await probeSize(v.thumb); if (sz) return { url: v.thumb, w: sz.w, ratio: sz.w / sz.h }; }
+  return null;
+}
+// Image générée par l'IA, recadrée en 16/9 et recompressée (l'édition enregistrée reste légère).
+async function aiIllustration(llm, cfg, article, signal) {
+  const prompt = `Illustration éditoriale pour un article de presse sur la technologie, composition large 16/9, style magazine moderne, sobre, sans aucun texte, lettre, chiffre ni logo, sans visage reconnaissable. Sujet de l’article : ${article.title}. ${article.dek || ''}`.slice(0, 600);
+  const r = await chatImage(llm, prompt, { model: cfg.imageModel, signal });
+  let url = r.url;
+  try {
+    const im = new Image();
+    await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = r.url; });
+    const c = document.createElement('canvas'); c.width = 1280; c.height = 720;
+    const k = Math.max(1280 / im.naturalWidth, 720 / im.naturalHeight), w = im.naturalWidth * k, h = im.naturalHeight * k;
+    c.getContext('2d').drawImage(im, (1280 - w) / 2, (720 - h) / 2, w, h);
+    url = c.toDataURL('image/jpeg', 0.86);
+  } catch { /* image distante non recadrable : utilisée telle quelle */ }
+  return { url, cost: r.cost };
+}
 async function pickImages(entries) {
   let i = 0;
   const worker = async () => {
@@ -475,7 +502,19 @@ async function generate() {
           const article = { ...intro, paragraphs, heads, headTimes, words: paragraphs.join(' ').split(/\s+/).length };
           const day0 = (video.watched || [])[0] || dayKey(video.addedAt || Date.now());
           const entry = { tier: 'report', pack, article, image: null, subject: { id: 'r:' + video.id, section: 'reports', sectionName: 'Reportage vidéo', members: [video], rep: video, firstDay: day0, lastDay: day0, images: [], links: [] } };
-          if (video.thumb) { const sz = await probeSize(video.thumb); if (sz) entry.image = { url: video.thumb, alt: video.text, card: true, ratio: sz.w / sz.h }; }
+          const hd = cfg.reportImage === 'ai' ? null : await hdThumb(video);
+          if (hd) entry.image = { url: hd.url, alt: video.text, card: true, ratio: hd.ratio };
+          if ((cfg.reportImage === 'ai' || (cfg.reportImage === 'auto' && (!hd || hd.w < 1000))) && /openrouter\.ai/i.test(settings.llm.baseUrl)) {
+            if (spent + cfg.imagePrice > cfg.budget) log('  plafond atteint : illustration IA ignorée.');
+            else {
+              try {
+                const ai = await aiIllustration(settings.llm, cfg, article, abort.signal);
+                spent += ai.cost != null ? ai.cost : cfg.imagePrice;
+                entry.image = { url: ai.url, alt: video.text, card: true, ai: true, ratio: 16 / 9 };
+                log(`  illustration IA du reportage « ${article.title.slice(0, 40)} » (${fmtUsd(ai.cost != null ? ai.cost : cfg.imagePrice)}).`);
+              } catch (err) { if (abort.signal.aborted) throw err; log(`⚠ Illustration IA : ${err.message}${entry.image ? ' — miniature de la vidéo conservée' : ''}`); }
+            }
+          }
           reportEntries.push(entry);
         } catch (err) {
           if (abort.signal.aborted) throw err;
@@ -566,8 +605,8 @@ const overflows = (body) => body.scrollWidth > body.clientWidth + 2 || body.scro
 //  - ref / refs : clés retenues avec la page où le bloc a atterri ; lab : intitulé en haut de la page où il commence.
 function flow(blocks, { label, cols = 2, refs } = {}) {
   const pagesOut = [];
-  let pg = null, body = null;
-  const open = (b) => { pg = newPage(b?.lab || label, { cols, accent: b?.accent }); body = pg.querySelector('.body'); pagesOut.push(pg); };
+  let pg = null, body = null, curLab = label, curAccent;
+  const open = (b) => { if (b?.lab) { curLab = b.lab; curAccent = b.accent; } pg = newPage(curLab, { cols, accent: b?.accent || curAccent }); body = pg.querySelector('.body'); pagesOut.push(pg); };
   const pending = [];
   const tryPlace = (html) => {
     const nodes = nodesOf(html);
@@ -587,6 +626,12 @@ function flow(blocks, { label, cols = 2, refs } = {}) {
       for (const r of b.refs || (b.ref ? [b.ref] : [])) if (refs) refs.set(r, pg);
       if (alt.after) queue.unshift(...alt.after);
       continue;
+    }
+    // paragraphe qui ne tient pas en entier : on place les premières phrases en bas de page, la suite ouvre la page suivante
+    if (b.parts && b.parts.length > 3) {
+      let cut = 0;
+      for (let k = b.parts.length - 1; k >= 2 && !cut; k--) if (tryPlace(`${b.pre || ''}<p>${b.parts.slice(0, k).join(' ')}</p>`)) cut = k;
+      if (cut) { queue.unshift({ parts: b.parts.slice(cut), html: `<p>${b.parts.slice(cut).join(' ')}</p>` }); open(null); flushPending(); continue; }
     }
     if (b.defer) { pending.push(b); continue; }
     open(b); flushPending(); queue.unshift(b);
@@ -624,7 +669,7 @@ function articleBlocks(e, bib, { prefix = '', lab = '', accent = '' } = {}) {
   const vs = e.pack.sources.find((x) => x.kind === 'video');
   const by = report ? `Vidéo de ${esc(vs.channel)}${e.subject.rep.durationText ? ' · ' + esc(e.subject.rep.durationText) : ''} · d’après la transcription${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}` : `D’après ${e.pack.sources.filter((s) => s.kind === 'tweet').slice(0, 3).map((s) => '@' + esc(s.handle)).join(', ')} · ${esc(e.subject.firstDay.slice(8))}/${esc(e.subject.firstDay.slice(5, 7))}${e.pack.sources.some((x) => x.kind === 'web') ? ' · recherche web' : ''}${a.fallback ? ' · <span class="fb">version simplifiée</span>' : ''}`;
   const head = `<div class="art-head${lead ? ' lead' : ''}"><p class="kick">${esc(e.subject.sectionName)}${report ? '' : lead ? ' · À la une de la rubrique' : ''}</p>${lead ? `<h2 class="t">${esc(a.title)}</h2>` : `<h3 class="t">${esc(a.title)}</h3>`}${a.dek ? `<p class="dek">${cite(a.dek)}</p>` : ''}<p class="by">${by}</p></div>`;
-  const cap = e.image && e.image.card ? (report ? 'Image de la vidéo' : `Illustration : ${e.image.alt}`) : null;
+  const cap = e.image && e.image.ai ? 'Illustration générée par IA' : e.image && e.image.card ? (report ? 'Image de la vidéo' : `Illustration : ${e.image.alt}`) : null;
   const hasImg = !!(e.image && !a.fallback);
   const p0 = `<p class="${lead ? 'drop ' : ''}">${cite(a.paragraphs[0])}</p>`;
   const blocks = [];
@@ -635,7 +680,9 @@ function articleBlocks(e, bib, { prefix = '', lab = '', accent = '' } = {}) {
     const tl = times.length ? `<div class="tl"><h5>Dans cette vidéo</h5>${times.map((x) => `<span><b>${x.t != null ? fmtTime(x.t) : ''}</b>${esc(x.h)}</span>`).join('')}</div>` : '';
     const kp = a.points.length ? `<div class="kp"><h5>L’essentiel</h5><ul>${a.points.map((p) => `<li>${cite(p)}</li>`).join('')}</ul></div>` : '';
     const rest = tl + kp + p0;
-    blocks.push({ refs: [ref], lab, accent, alts: hasImg ? [{ html: prefix + head + figHtml(e.image, true, cap) + rest }, { html: prefix + head + rest, after: [colFig] }] : [{ html: prefix + head + rest }] });
+    // titre à gauche, image à droite (la miniature n'est jamais agrandie à toute la largeur : plus nette, et ≈ 1/4 de page gagné)
+    const rh = (fig) => `${prefix}<div class="rhead"><div>${head}</div>${fig}</div>`;
+    blocks.push({ refs: [ref], lab, accent, alts: hasImg ? [{ html: rh(figHtml(e.image, false, cap)) + rest }, { html: prefix + head + rest, after: [colFig] }] : [{ html: prefix + head + rest }] });
   } else {
     const first = prefix + head;
     blocks.push({ refs: [ref], lab, accent, alts: hasImg
@@ -643,9 +690,10 @@ function articleBlocks(e, bib, { prefix = '', lab = '', accent = '' } = {}) {
       : [{ html: first + p0 }] });
   }
   const facts = !report && (lead || a.paragraphs.length >= 5) ? numberFacts(a.paragraphs, 4) : [];
+  // paragraphe = phrases séparables (voir flow) ; l'intertitre reste solidaire de son premier paragraphe
+  const pBlock = (text, pre = '') => { const parts = text.split(/(?<=[.!?…»])\s+(?=[A-ZÀ-ÝÉ«“"])/).map(cite); return { pre, parts, html: `${pre}<p>${parts.join(' ')}</p>` }; };
   a.paragraphs.slice(1).forEach((p, i) => {
-    if (a.heads?.[i + 1]) blocks.push({ html: `<h4 class="t sub">${esc(a.heads[i + 1])}</h4>` });
-    blocks.push({ html: `<p>${cite(p)}</p>` });
+    blocks.push(pBlock(p, a.heads?.[i + 1] ? `<h4 class="t sub">${esc(a.heads[i + 1])}</h4>` : ''));
     if (i === 0 && a.pull) blocks.push({ defer: true, html: `<blockquote class="pull">« ${esc(a.pull)} »<cite>${esc(a.pullSource ? (report ? vs.channel : '@' + (e.pack.sources.find((s) => s.id === a.pullSource)?.handle || '')) : '')}</cite></blockquote>` });
     if (i === 1 && facts.length >= 3) blocks.push({ defer: true, html: factsHtml(facts) });
   });
@@ -677,13 +725,22 @@ function barsSvg(vals, keys) {
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
 
+// Nom de modèle raccourci pour un axe : sans le préfixe « Labo: », une seule variante entre parenthèses, puis coupé à la fin.
+function shortModel(name, n = 19) {
+  let t = String(name).replace(/^[^:]+:\s*/, '');
+  if (t.length <= n) return t;
+  t = t.replace(/\s*\(([^),]*)[^)]*\)/, ' ($1)');
+  if (t.length <= n) return t;
+  t = t.replace(/\s*\([^)]*\)/, '');
+  return t.length <= n ? t : t.slice(0, n - 1) + '…';
+}
 // graphiques de la page Classements : barres horizontales (modèles cités en rouge) et nuage prix / qualité
 function hbarSvg(rows, field, cited, max) {
   const W = 300, rowH = 17, left = 112, top = 4, H = top + rows.length * rowH + 4;
   const top0 = Math.max(1, max || Math.max(...rows.map((r) => r[field])));
   const g = rows.map((r, i) => {
     const y = top + i * rowH, w = Math.max(1, ((W - left - 34) * r[field]) / top0), hot = cited.has(r.slug || r.name);
-    return `<text x="${left - 6}" y="${y + 11}" font-size="9.5" text-anchor="end" fill="${hot ? '#8c1c13' : '#141210'}" font-family="Arial" font-weight="${hot ? 700 : 400}">${esc(r.name.length > 24 ? r.name.slice(0, 23) + '…' : r.name)}</text><rect x="${left}" y="${y + 2}" width="${w.toFixed(1)}" height="11" fill="${hot ? '#8c1c13' : '#141210'}" opacity="${hot ? 1 : 0.82}"/><text x="${left + w + 4}" y="${y + 11}" font-size="9.5" fill="#4a4640" font-family="Arial">${Math.round(r[field] * 10) / 10}</text>`;
+    return `<text x="${left - 6}" y="${y + 11}" font-size="9.5" text-anchor="end" fill="${hot ? '#8c1c13' : '#141210'}" font-family="Arial" font-weight="${hot ? 700 : 400}">${esc(shortModel(r.name))}</text><rect x="${left}" y="${y + 2}" width="${w.toFixed(1)}" height="11" fill="${hot ? '#8c1c13' : '#141210'}" opacity="${hot ? 1 : 0.82}"/><text x="${left + w + 4}" y="${y + 11}" font-size="9.5" fill="#4a4640" font-family="Arial">${Math.round(r[field] * 10) / 10}</text>`;
   }).join('');
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
@@ -691,8 +748,8 @@ function hbarSvg(rows, field, cited, max) {
 function barsLabelSvg(items) {
   const W = 300, rowH = 17, left = 112, top = 4, H = top + items.length * rowH + 4, max = Math.max(1e-9, ...items.map((i) => i.v));
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${items.map((r, i) => {
-    const y = top + i * rowH, w = Math.max(1, ((W - left - 70) * r.v) / max);
-    return `<text x="${left - 6}" y="${y + 11}" font-size="9.5" text-anchor="end" fill="${r.hot ? '#8c1c13' : '#141210'}" font-family="Arial" font-weight="${r.hot ? 700 : 400}">${esc(r.name.length > 24 ? r.name.slice(0, 23) + '…' : r.name)}</text><rect x="${left}" y="${y + 2}" width="${w.toFixed(1)}" height="11" fill="${r.hot ? '#8c1c13' : '#141210'}" opacity="${r.hot ? 1 : 0.82}"/><text x="${left + w + 4}" y="${y + 11}" font-size="9" fill="#4a4640" font-family="Arial">${esc(r.text)}</text>`;
+    const y = top + i * rowH, w = Math.max(1, ((W - left - 96) * r.v) / max);
+    return `<text x="${left - 6}" y="${y + 11}" font-size="9.5" text-anchor="end" fill="${r.hot ? '#8c1c13' : '#141210'}" font-family="Arial" font-weight="${r.hot ? 700 : 400}">${esc(shortModel(r.name))}</text><rect x="${left}" y="${y + 2}" width="${w.toFixed(1)}" height="11" fill="${r.hot ? '#8c1c13' : '#141210'}" opacity="${r.hot ? 1 : 0.82}"/><text x="${left + w + 4}" y="${y + 11}" font-size="9" fill="#4a4640" font-family="Arial">${esc(r.text)}</text>`;
   }).join('')}</svg>`;
 }
 const fmtTok = (n) => (n >= 1e12 ? (n / 1e12).toFixed(1) + ' T' : n >= 1e9 ? (n / 1e9).toFixed(1) + ' Md' : n >= 1e6 ? Math.round(n / 1e6) + ' M' : String(Math.round(n)));
@@ -709,8 +766,22 @@ function scatterSvg(rows, cited) {
   for (let v = y0; v <= y1; v += 10) g += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="#d9d2c3"/><text x="${m.l - 4}" y="${Y(v) + 3}" font-size="8.5" text-anchor="end" fill="#4a4640" font-family="Arial">${v}</text>`;
   for (let e = Math.ceil(x0); e <= x1; e++) g += `<line y1="${m.t}" y2="${H - m.b}" x1="${X(10 ** e)}" x2="${X(10 ** e)}" stroke="#ece6d8"/><text x="${X(10 ** e)}" y="${H - 12}" font-size="8.5" text-anchor="middle" fill="#4a4640" font-family="Arial">${10 ** e < 1 ? 10 ** e : '$' + 10 ** e}</text>`;
   g += `<text x="${(W + m.l) / 2}" y="${H - 2}" font-size="8.5" text-anchor="middle" fill="#4a4640" font-family="Arial">prix de sortie ($ par million de tokens, échelle log)</text>`;
-  const label = new Set([...pts].sort((a, b) => b.r.intelligence - a.r.intelligence).slice(0, 3).map((o) => o.r));
-  for (const o of pts) { const hot = cited.has(o.r.slug || o.r.name); g += `<circle cx="${X(o.p).toFixed(1)}" cy="${Y(o.r.intelligence).toFixed(1)}" r="${hot ? 4 : 2.8}" fill="${hot ? '#8c1c13' : '#141210'}" opacity="${hot ? 1 : 0.6}"/>`; if (hot || label.has(o.r)) g += `<text x="${(X(o.p) + 5).toFixed(1)}" y="${(Y(o.r.intelligence) - 4).toFixed(1)}" font-size="8.5" fill="${hot ? '#8c1c13' : '#4a4640'}" font-family="Arial">${esc(o.r.name.length > 20 ? o.r.name.slice(0, 19) + '…' : o.r.name)}</text>`; }
+  const hotOf = (o) => cited.has(o.r.slug || o.r.name);
+  for (const o of pts) g += `<circle cx="${X(o.p).toFixed(1)}" cy="${Y(o.r.intelligence).toFixed(1)}" r="${hotOf(o) ? 4 : 2.8}" fill="${hotOf(o) ? '#8c1c13' : '#141210'}" opacity="${hotOf(o) ? 1 : 0.6}"/>`;
+  // étiquettes : les 3 meilleurs et les modèles cités (8 au plus), sans chevauchement ni dépassement du cadre
+  const wanted = [...pts].sort((a, b) => b.r.intelligence - a.r.intelligence).filter((o, i) => i < 3 || hotOf(o)).slice(0, 8);
+  const boxes = [];
+  for (const o of wanted) {
+    const t = shortModel(o.r.name, 18), w = t.length * 4.5, cx = X(o.p), cy = Y(o.r.intelligence);
+    for (const [dx, dy, anchor] of [[5, -4, 'start'], [-5, -4, 'end'], [5, 10, 'start'], [-5, 10, 'end']]) {
+      const x = cx + dx, x0 = anchor === 'start' ? x : x - w, x1 = x0 + w, y = cy + dy;
+      if (x0 < m.l || x1 > W - 2 || y < 8 || y > H - m.b - 2) continue;
+      if (boxes.some((b) => x0 < b.x1 + 1 && x1 > b.x0 - 1 && Math.abs(y - b.y) < 9)) continue;
+      boxes.push({ x0, x1, y });
+      g += `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="${anchor}" font-size="8.5" fill="${hotOf(o) ? '#8c1c13' : '#4a4640'}" font-family="Arial">${esc(t)}</text>`;
+      break;
+    }
+  }
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%">${g}</svg>`;
 }
 
@@ -788,6 +859,7 @@ async function renderOnce(model) {
   secPage.set('stats', chiffres);
   // classements des modèles (Artificial Analysis via OpenRouter)
   const bn = model.bench;
+  let freshHtml = '';
   if (bn && bn.rows.length) {
     const ci = bn.cited, pI = pickRows(bn.rows, 'intelligence', ci, { top: bn.top, max: bn.top }), pC = pickRows(bn.rows, 'coding', ci, { top: bn.top, max: bn.top }), pA = pickRows(bn.rows, 'agentic', ci, { top: bn.top, max: bn.top });
     const asOf = bn.meta?.as_of ? ` (état au ${esc(String(bn.meta.as_of).slice(0, 10))})` : '';
@@ -800,8 +872,9 @@ async function renderOnce(model) {
     secPage.set('bench', bp);
     if (bn.fresh.length) {
       const fmtP = (v) => (v == null ? '—' : v === 0 ? 'gratuit' : '$' + (Math.round(v * 100) / 100));
-      secPage.set('bench2', fixedPage('Nouveaux modèles', `<p class="kick">Catalogue</p><h2 class="t">Nouveaux modèles de la semaine</h2><p class="dek">Modèles ajoutés au catalogue d’OpenRouter pendant la période (prix en dollars par million de tokens).</p>
-        <table><tr><th>Modèle</th><th>Ajouté le</th><th class="n">Contexte</th><th class="n">Entrée</th><th class="n">Sortie</th></tr>${bn.fresh.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.day.split('-').reverse().join('/'))}</td><td class="n">${m.ctx ? Math.round(m.ctx / 1000) + ' k' : '—'}</td><td class="n">${fmtP(m.priceIn)}</td><td class="n">${fmtP(m.priceOut)}</td></tr>`).join('')}</table>`));
+      const fresh = bn.fresh.slice(0, 12), half = Math.ceil(fresh.length / 2);
+      const tbl = (rows) => `<table><tr><th>Modèle</th><th>Ajouté</th><th class="n">Entrée / sortie</th></tr>${rows.map((m) => `<tr><td>${esc(m.name)}</td><td>${esc(m.day.split('-').reverse().slice(0, 2).join('/'))}</td><td class="n">${fmtP(m.priceIn)} / ${fmtP(m.priceOut)}</td></tr>`).join('')}</table>`;
+      freshHtml = `<div class="dbl"></div><h4 class="t">Nouveaux modèles au catalogue d’OpenRouter</h4><div class="g2" style="grid-template-columns:1fr 1fr"><div class="l">${tbl(fresh.slice(0, half))}</div><div class="r">${half < fresh.length ? tbl(fresh.slice(half)) : ''}</div></div><p class="src" style="margin-top:6px">Modèles ajoutés pendant la période ; prix en dollars par million de tokens.</p>`;
     }
   }
   // usage, buzz et avis ; qualité / prix / vitesse
@@ -816,32 +889,37 @@ async function renderOnce(model) {
       <p class="src" style="margin-top:8px">Usage : OpenRouter (rankings, licence CC BY 4.0), jetons des 7 jours, variation par rapport aux 7 jours précédents. Avis : résumés automatiques des tweets enregistrés ; les numéros renvoient à l’index des sources.</p>`));
   }
   if (bn) {
-    const vr = bestValue(bn.rows, bn.top);
+    const vr = bestValue(bn.rows, freshHtml ? Math.min(bn.top, 12) : bn.top);
     const hasSpeed = vr.some((r) => bn.speed.has(r.slug));
     if (vr.length >= 3) {
-      const fast = [...bn.speed].map(([slug, sp]) => ({ r: bn.rows.find((x) => x.slug === slug), sp })).filter((x) => x.r && x.sp.tps != null && (x.r.intelligence || 0) >= Math.max(...bn.rows.map((y) => y.intelligence || 0)) * 0.6).sort((a, b) => b.sp.tps - a.sp.tps).slice(0, 6);
+      const fast = [...bn.speed].map(([slug, sp]) => ({ r: bn.rows.find((x) => x.slug === slug), sp })).filter((x) => x.r && x.sp.tps != null && (x.r.intelligence || 0) >= Math.max(...bn.rows.map((y) => y.intelligence || 0)) * 0.6).sort((a, b) => b.sp.tps - a.sp.tps).slice(0, freshHtml ? 5 : 6);
       const sp = (r) => bn.speed.get(r.slug);
       secPage.set('value', fixedPage('Qualité, prix, vitesse', `<p class="kick">Rapport qualité / prix</p><h2 class="t">Les meilleurs choix de la semaine</h2><p class="dek">Intelligence (Artificial Analysis) rapportée au prix, en écartant les modèles trop faibles ; prix mixte = 3 parts d’entrée pour 1 de sortie, en dollars par million de tokens.${hasSpeed ? ' Vitesse : médiane constatée sur OpenRouter.' : ''}</p>
         <h4 class="t">Meilleur rapport intelligence / prix</h4>
         <table><tr><th>Modèle</th><th class="n">Intelligence</th><th class="n">Prix mixte</th><th class="n">Points par $</th>${hasSpeed ? '<th class="n">Débit</th><th class="n">Latence</th>' : ''}</tr>${vr.map((r) => `<tr><td>${esc(r.name)}</td><td class="n">${Math.round(r.intelligence * 10) / 10}</td><td class="n">${fmtUsdM(r.blended)}</td><td class="n">${Math.round(r.perDollar)}</td>${hasSpeed ? `<td class="n">${sp(r)?.tps != null ? Math.round(sp(r).tps) + ' tok/s' : '—'}</td><td class="n">${sp(r)?.lat != null ? sp(r).lat.toFixed(1) + ' s' : '—'}</td>` : ''}</tr>`).join('')}</table>
         ${fast.length ? `<div class="dbl"></div><h4 class="t">Les plus rapides parmi les modèles de haut niveau</h4><table><tr><th>Modèle</th><th class="n">Intelligence</th><th class="n">Débit</th><th class="n">Latence</th><th class="n">Prix mixte</th></tr>${fast.map(({ r, sp: s2 }) => `<tr><td>${esc(r.name)}</td><td class="n">${Math.round(r.intelligence * 10) / 10}</td><td class="n">${Math.round(s2.tps)} tok/s</td><td class="n">${s2.lat != null ? s2.lat.toFixed(1) + ' s' : '—'}</td><td class="n">${r.priceIn != null && r.priceOut != null ? fmtUsdM((3 * r.priceIn + r.priceOut) / 4) : '—'}</td></tr>`).join('')}</table>` : ''}
-        <p class="src" style="margin-top:8px">Sources : Artificial Analysis (indices, prix), OpenRouter (vitesse constatée). Les débits dépendent du fournisseur et de l’heure.</p>`));
+        <p class="src" style="margin-top:8px">Sources : Artificial Analysis (indices, prix), OpenRouter (vitesse constatée). Les débits dépendent du fournisseur et de l’heure.</p>${freshHtml}`));
+      freshHtml = '';
     }
+    if (freshHtml) secPage.set('bench2', fixedPage('Nouveaux modèles', `<p class="kick">Catalogue</p><h2 class="t">Nouveaux modèles de la semaine</h2>${freshHtml}`));
   }
   // vidéos
   const repIds = new Set(reps.map((e) => e.subject.rep.id));
-  const vlist = plan.videos.filter((v) => !repIds.has(v.id));
+  const vlist = (plan.pageVideos || plan.videos).filter((v) => !repIds.has(v.id));
   if (vlist.length) {
     const vids = await Promise.all(vlist.map(async (v) => ({ v, ok: v.thumb ? await probe(v.thumb) : false })));
-    const vp = fixedPage('À voir et à écouter', `<p class="kick">Vidéos</p><h2 class="t">À voir et à écouter</h2><p class="dek">Les vidéos ajoutées à vos playlists ou regardées cette semaine.</p>${vids.map(({ v, ok }) => `<div class="vid"><span class="im">${ok ? `<img src="${esc(v.thumb)}" alt="" referrerpolicy="no-referrer">` : ''}</span><div><p class="kick">${esc(v.durationText || 'Vidéo')}${(v.watched || []).length ? ' · regardée' : ''}</p><h3 class="t">${esc(v.text)}</h3><p class="src">${esc(v.name)}${(v.playlists || []).length ? ' · ' + esc(v.playlists[0].title) : ''} · <a href="${esc(v.url)}">${esc(v.url.replace('https://www.', ''))}</a></p></div></div>`).join('')}`);
+    const vp = fixedPage('À voir et à écouter', `<p class="kick">Vidéos</p><h2 class="t">À voir et à écouter</h2><p class="dek">Les vidéos ajoutées à vos playlists ou regardées cette semaine${plan.hiddenVideos ? ` (${plan.hiddenVideos} hors sujet non listée${plan.hiddenVideos > 1 ? 's' : ''})` : ''}.</p>${vids.map(({ v, ok }) => `<div class="vid"><span class="im">${ok ? `<img src="${esc(v.thumb)}" alt="" referrerpolicy="no-referrer">` : ''}</span><div><p class="kick">${esc(v.durationText || 'Vidéo')}${(v.watched || []).length ? ' · regardée' : ''}</p><h3 class="t">${esc(v.text)}</h3><p class="src">${esc(v.name)}${(v.playlists || []).length ? ' · ' + esc(v.playlists[0].title) : ''} · <a href="${esc(v.url)}">${esc(v.url.replace('https://www.', ''))}</a></p></div></div>`).join('')}`);
     secPage.set('videos', vp);
   }
   // lexique et sources
   const blocks = [];
   if (editorial?.glossary.length) { blocks.push({ html: '<h4 class="t" style="column-span:all">Lexique</h4>' }); editorial.glossary.forEach((g) => blocks.push({ html: `<p class="gloss"><b>${esc(g.term)}</b> — ${esc(g.def)}</p>` })); }
   blocks.push({ html: '<h4 class="t" style="column-span:all">Index des sources</h4>' });
-  for (const s of bib.list) blocks.push({ html: `<p class="bibl"><b>${s.n}.</b> ${s.kind === 'tweet' ? `@${esc(s.handle)} (${esc(s.date)})` : s.kind === 'video' ? `${esc(s.title)} (${esc(s.channel || 'YouTube')})` : esc(s.title)} — <a href="${esc(s.url)}">${esc(s.url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 70))}</a></p>` });
-  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src" style="column-span:all;text-align:left">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${plan.videos.length} vidéo(s). Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${reps.length ? ` ${reps.length} reportage(s) rédigé(s) d’après la transcription de vidéos.` : ''}${model.trCount ? ` ${model.trCount} sujet(s) complété(s) par des extraits de transcriptions.` : ''}${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
+  // index compact : une ligne par source ; l'adresse complète reste dans le lien cliquable
+  const shortUrl = (u) => { try { const x = new URL(u), host = x.hostname.replace(/^www\./, ''), path = x.pathname + x.search; return host + (path.length > 1 ? '/…' + path.slice(-6) : ''); } catch { return String(u).slice(0, 24); } };
+  const clip = (t, n) => (String(t).length > n ? String(t).slice(0, n - 1).trimEnd() + '…' : String(t));
+  for (const s of bib.list) blocks.push({ html: `<p class="bibl"><b>${s.n}.</b> ${s.kind === 'tweet' ? `@${esc(s.handle)} (${esc(s.date.slice(5).split('-').reverse().join('/'))})` : s.kind === 'video' ? `${esc(clip(s.title, 44))} (${esc(clip(s.channel || 'YouTube', 18))})` : esc(clip(s.title, 52))} — <a href="${esc(s.url)}">${esc(shortUrl(s.url))}</a></p>` });
+  blocks.push({ html: `<h4 class="t" style="column-span:all">Colophon</h4><p class="src" style="column-span:all;text-align:left">Édition ${model.plan.win.label}, générée le ${new Date().toLocaleDateString('fr-FR')} à partir de ${plan.stats.total} éléments (X) et ${vlist.length} vidéo(s) à voir. Articles rédigés automatiquement d’après vos bookmarks et les pages liées ; coût de génération : ${fmtUsd(model.cost)} (plafond ${fmtUsd(model.budget)}).${reps.length ? ` ${reps.length} reportage(s) rédigé(s) d’après la transcription de vidéos.` : ''}${model.trCount ? ` ${model.trCount} sujet(s) complété(s) par des extraits de transcriptions.` : ''}${model.webCount ? ` Recherche web pour ${model.webCount} sujet(s) (seules les pages réellement consultées sont citées).` : ''}${model.removedTotal ? ` Relecture automatique : ${model.removedTotal} phrase(s) non étayée(s) retirée(s).` : ''}${model.fallbacks ? ` ${model.fallbacks} sujet(s) présenté(s) sous forme simplifiée (plafond atteint ou erreur).` : ''} Les informations ne sont pas vérifiées indépendamment : consultez les sources.</p>` });
   const lp = flow(blocks, { label: 'Lexique et sources', cols: 3 });
   secPage.set('sources', lp[0]);
 
@@ -863,7 +941,12 @@ async function renderOnce(model) {
     ${others.map((e) => `<div style="margin-bottom:10px;text-align:left"><p class="kick">${esc(e.subject.sectionName)}</p><h3 class="t">${esc(e.article.title)}</h3><p class="src">page ${numOf(refs.get(e.subject.id) || secPage.get(e.subject.section))}</p></div>`).join('')}</div></div>`;
   front.innerHTML = `<div class="run"><span>Édition du week-end</span><span>${esc(plan.win.label)}</span><span>Édition n° ${plan.win.week}</span></div><div class="body">${buildFront(130)}</div><div class="pn"><b>${esc(NAME)}</b><span></span></div>`;
   const fb = front.querySelector('.body');
-  for (let n = 130; n > 30 && fb.scrollHeight > fb.clientHeight + 2; n -= 15) fb.innerHTML = buildFront(n);
+  // l'extrait de la une remplit la place disponible (il grandit tant que la page tient, puis recule d'un cran)
+  const avail = lead.article.paragraphs.join(' ').split(/\s+/).length;
+  let n0 = 60;
+  fb.innerHTML = buildFront(n0);
+  while (n0 < Math.min(avail, 600)) { fb.innerHTML = buildFront(n0 + 30); if (fb.scrollHeight > fb.clientHeight + 2) { fb.innerHTML = buildFront(n0); break; } n0 += 30; }
+  for (let n = n0; n > 30 && fb.scrollHeight > fb.clientHeight + 2; n -= 15) fb.innerHTML = buildFront(n);
   pages().forEach((pg, i) => { pg.querySelector('.pn span').textContent = String(i + 1); });
 }
 
