@@ -79,6 +79,8 @@ export function parseQuery(q) {
 
 // Compte / chaîne : « @siliconcarnepod », « Silicon Carne » ou « silicon-carne » désignent la même chaîne. On compare des clés sans accents,
 // sans emoji ni ponctuation ; égalité, ou inclusion dans un sens ou l'autre quand le plus court a au moins 5 caractères.
+// Identifiant d'un compte X ou d'une chaîne YouTube (sert au sélecteur « Comptes » et au filtre filters.accounts)
+export const acctId = (t) => (isVideoItem(t) ? 'yt:' : 'x:') + String(t.handle || t.channelId || t.name || '').toLowerCase();
 export const acctKey = (s) => normalizeText(String(s || '')).replace(/[^a-z0-9]+/g, '');
 export function matchAccount(t, token) {
   const k = acctKey(String(token).replace(/^@/, ''));
@@ -98,6 +100,7 @@ export function passesFilters(t, f) {
   if (f.viewed !== undefined) { if (!isVideo) return false; if (!!(t.watched || []).length !== f.viewed) return false; }
   if (f.watched) { if (!(t.watched || []).some((d) => d >= f.watched.from && d <= f.watched.to)) return false; }
   if (f.playlist) { const w = normalizeText(f.playlist); if (!(t.playlists || []).some((p) => normalizeText(p.title || '').includes(w) || p.id.toLowerCase() === f.playlist)) return false; }
+  if (f.accounts && !f.accounts.has(acctId(t))) return false;
   if (f.from && (isVideo ? !matchAccount(t, f.from) : t.handle.toLowerCase() !== f.from)) return false;
   if (f.fromAny && !f.fromAny.includes(t.handle.toLowerCase()) && !(isVideo && f.fromTokens?.some((k) => matchAccount(t, k)))) return false;
   if (f.lang && t.lang !== f.lang) return false;

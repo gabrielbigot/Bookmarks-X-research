@@ -30,41 +30,66 @@
         <select id="source" title="Source des résultats">
           <option value="all">Tout</option><option value="x">𝕏 Bookmarks</option><option value="youtube">▶ YouTube</option>
         </select>
+        <div class="menu" id="acct-menu">
+          <button type="button" class="menu-btn" id="acct-btn" title="Ne voir que certains comptes X ou certaines chaînes YouTube">👤 Comptes <span class="badge" id="acct-n" hidden></span> ▾</button>
+          <div class="pop" id="acct-pop" hidden>
+            <input id="acct-q" type="search" placeholder="Chercher un compte ou une chaîne…" autocomplete="off">
+            <div class="acct-head"><span id="acct-count"></span><button type="button" class="ghost" id="acct-clear">Tout désélectionner</button></div>
+            <div id="acct-list" class="acct-list"></div>
+          </div>
+        </div>
         <select id="range" title="Période de publication">
           <option value="all">Toute période</option><option value="7">7 jours</option><option value="30">30 jours</option><option value="365">1 an</option>
-        </select>
-        <button class="chip" data-type="link">Liens</button>
-        <button class="chip" data-type="media">Médias</button>
-        <button class="chip" data-type="video">Vidéos</button>
-        <button class="chip" id="imgmode" hidden title="Recherche dans le contenu des images (CLIP, requêtes en anglais)">🖼 Images</button>
-        <select id="view" title="Affichage">
-          <option value="list">▤ Liste</option><option value="2">▦ Grille ×2</option><option value="3">▦ Grille ×3</option><option value="4">▦ Grille ×4</option>
-        </select>
-        <select id="blend" title="Équilibre entre mots exacts et sens (la recherche par le sens retrouve aussi les autres langues : « cerveau » ↔ « brain »)">
-          <option value="balanced">⚖ Sens + mots</option><option value="semantic">🌐 Sens d’abord (multilingue)</option><option value="keywords">🔤 Mots exacts d’abord</option>
         </select>
         <select id="sort" title="Tri">
           <option value="relevance">Pertinence</option><option value="newest">Publiés récemment</option><option value="oldest">Publiés il y a longtemps</option><option value="addednew">Ajoutés récemment</option><option value="addedold">Ajoutés il y a longtemps</option><option value="likes">Plus likés</option>
         </select>
-        <button class="ghost chip" id="dedupe" title="Regrouper les quasi-doublons : même tweet cité, même page citée ou sens quasi identique à quelques jours d’écart (opérateur dedupe:oui)">⧉ Regrouper les doublons</button>
+        <select id="view" title="Affichage">
+          <option value="list">▤ Liste</option><option value="2">▦ Grille ×2</option><option value="3">▦ Grille ×3</option><option value="4">▦ Grille ×4</option>
+        </select>
+        <div class="menu" id="flt-menu">
+          <button type="button" class="menu-btn" id="flt-btn" title="Type de contenu, mode de recherche, doublons">⚙ Filtres <span class="badge" id="flt-n" hidden></span> ▾</button>
+          <div class="pop" hidden>
+            <div class="pop-title">Contenu</div>
+            <div class="pop-chips">
+              <button class="chip" data-type="link">Liens</button>
+              <button class="chip" data-type="media">Médias</button>
+              <button class="chip" data-type="video">Vidéos</button>
+              <button class="chip" id="imgmode" hidden title="Recherche dans le contenu des images (CLIP, requêtes en anglais)">🖼 Images</button>
+            </div>
+            <div class="pop-title">Recherche</div>
+            <select id="blend" title="Équilibre entre mots exacts et sens (la recherche par le sens retrouve aussi les autres langues : « cerveau » ↔ « brain »)">
+              <option value="balanced">⚖ Sens + mots</option><option value="semantic">🌐 Sens d’abord (multilingue)</option><option value="keywords">🔤 Mots exacts d’abord</option>
+            </select>
+            <button class="chip" id="dedupe" title="Regrouper les quasi-doublons : même tweet cité, même page citée ou sens quasi identique à quelques jours d’écart (opérateur dedupe:oui)">⧉ Regrouper les doublons</button>
+          </div>
+        </div>
+        <div class="menu" id="disc-menu">
+          <button type="button" class="menu-btn" title="Redécouvrir tes bookmarks">✨ Découvrir ▾</button>
+          <div class="pop" hidden>
+            <button class="item" id="rand" title="Redécouvrir des bookmarks au hasard">🎲 Au hasard</button>
+            <button class="item" id="yearago" title="Ce que tu sauvegardais il y a un an">📅 Il y a 1 an</button>
+            <button class="item" id="themes" title="Regroupement automatique par thèmes">☰ Thèmes</button>
+            <button class="item" id="digest" title="Résumé IA de ta semaine de veille" hidden>📰 Résumé de la semaine</button>
+          </div>
+        </div>
         <span class="spacer"></span>
-        <button class="ghost" id="rand" title="Redécouvrir des bookmarks au hasard">🎲 Au hasard</button>
-        <button class="ghost" id="yearago" title="Ce que tu sauvegardais il y a un an">📅 Il y a 1 an</button>
-        <button class="ghost" id="themes" title="Regroupement automatique par thèmes">☰ Thèmes</button>
-        <button class="ghost" id="digest" title="Résumé IA de ta semaine de veille" hidden>📰 Résumé</button>
-      </div>
-      <div id="saved" class="saved"></div>
-      <div class="bar">
-        <span id="stats">Chargement…</span>
-        <span class="spacer"></span>
-        <button id="update-all" class="primary" title="Récupère ce qui est nouveau : bookmarks X et playlists YouTube (historique et transcriptions si activés dans ⚙), puis indexe">⟳ Tout mettre à jour</button>
-        <button id="news" class="ghost" title="Récupère seulement les nouveaux bookmarks">↻ Nouveautés</button>
-        <button id="yt-sync" class="ghost" title="Remonte « À regarder plus tard », « J'aime » et toutes tes playlists YouTube (dans un onglet en arrière-plan)">▶ Playlists YouTube</button>
-        <button id="yt-hist" class="ghost" title="Remonte ton historique de visionnage YouTube (profondeur réglable dans ⚙)">▶ Historique YouTube</button>
-        <button id="yt-tr" class="ghost" title="Récupère les transcriptions (texte parlé) des vidéos, pour les chercher par ce qui s'y dit">▶ Transcriptions</button>
-        <button id="sync" class="ghost" title="Remonte tout l'historique (plus long)">⟳ Tout synchroniser</button>
+        <button id="update-all" class="primary" title="Récupère ce qui est nouveau : bookmarks X et playlists YouTube (historique et transcriptions si activés dans ⚙), puis indexe">⟳ Mettre à jour</button>
         <button id="stop" class="ghost" hidden>■ Stop</button>
+        <div class="menu" id="sync-menu">
+          <button type="button" class="menu-btn" title="Autres actions de synchronisation">⋯</button>
+          <div class="pop right" hidden>
+            <button class="item" id="news" title="Récupère seulement les nouveaux bookmarks">↻ Nouveautés X</button>
+            <button class="item" id="yt-sync" title="Remonte « À regarder plus tard », « J'aime » et toutes tes playlists YouTube (dans un onglet en arrière-plan)">▶ Playlists YouTube</button>
+            <button class="item" id="yt-hist" title="Remonte ton historique de visionnage YouTube (profondeur réglable dans ⚙)">▶ Historique YouTube</button>
+            <button class="item" id="yt-tr" title="Récupère les transcriptions (texte parlé) des vidéos, pour les chercher par ce qui s'y dit">▶ Transcriptions</button>
+            <button class="item" id="sync" title="Remonte tout l'historique (plus long)">⟳ Tout synchroniser</button>
+          </div>
+        </div>
       </div>
+      <div id="active" class="active" hidden></div>
+      <div id="saved" class="saved"></div>
+      <div class="bar"><span id="stats">Chargement…</span></div>
       <div class="bar sub"><span id="progress"></span></div>
       <div class="bar sub"><span id="index"></span><button id="idx-now" class="ghost" hidden></button><button id="retry" class="ghost" hidden>Réessayer</button></div>
       <div id="banners"></div>

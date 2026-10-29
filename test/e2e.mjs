@@ -277,6 +277,12 @@ const waitFor = async (fn, what, ms = 45000) => {
     await new Promise((r) => setTimeout(r, 200));
   }
 };
+
+// les actions secondaires vivent dans des menus déroulants : on les ouvre comme un utilisateur
+const openMenuOf = async (sel) => { if (!(await panel.locator(sel).isVisible())) await panel.locator('.menu', { has: panel.locator(sel) }).locator(':scope > .menu-btn').click(); };
+const closeMenusUi = async () => { if (await panel.locator('.menu.open').count()) await panel.keyboard.press('Escape'); };
+const mclick = async (sel) => { await openMenuOf(sel); await panel.click(sel); await closeMenusUi(); };
+const mselect = async (sel, v) => { await openMenuOf(sel); await panel.selectOption(sel, v); await closeMenusUi(); };
 const sameHits = (a) => JSON.stringify(hits) === JSON.stringify(a);
 
 // ------------------------------------------------------------------ 1. capture + synchro complète (fetch)
@@ -345,10 +351,10 @@ assert.match(await panel.locator('#results').innerText(), /Aucun résultat/);
 
 // filtres de la barre d'outils + tri
 await panel.fill('#q', '');
-await panel.click('.chip[data-type="link"]');
+await mclick('.chip[data-type="link"]');
 await panel.waitForTimeout(300);
 assert.equal(await panel.locator('.tw').count(), 2, 'filtre « Liens » : deux tweets avec lien (tokio + carte)');
-await panel.click('.chip[data-type="link"]');
+await mclick('.chip[data-type="link"]');
 await panel.selectOption('#sort', 'likes');
 await panel.waitForTimeout(300);
 assert.ok((await panel.locator('.tw').count()) >= 6);
@@ -368,11 +374,11 @@ await panel.fill('#q', 'tokio');
 await panel.click('#save');
 await panel.waitForSelector('.saved .s');
 assert.equal(await panel.locator('.saved .s').count(), 1);
-await panel.click('#rand');
+await mclick('#rand');
 assert.ok((await panel.locator('.tw').count()) > 0, 'au hasard');
-await panel.click('#yearago');
+await mclick('#yearago');
 assert.match(await panel.locator('#mode').innerText(), /Il y a un an|Rien de sauvegardé/);
-await panel.click('#themes');
+await mclick('#themes');
 await panel.waitForTimeout(400);
 assert.match(await panel.locator('#mode').innerText(), /Pas assez de bookmarks indexés/);
 
@@ -406,12 +412,12 @@ assert.ok(!/modèle indisponible/.test(await panel.locator('#mode').innerText())
 // Équilibre : requête « zorglub » dont le sens (axe 1 simulé) pointe vers « beta », mais dont le MOT n'est que dans « kw0 »
 await panel.fill('#q', 'zorglub');
 await waitFor(async () => /zorglub terme littéral/.test((await panel.locator('.tw').first().innerText().catch(() => '')) || ''), 'équilibré : le mot exact + un peu de sens passe en premier', 10000);
-await panel.selectOption('#blend', 'semantic');
+await mselect('#blend', 'semantic');
 await waitFor(async () => /beta/.test(await panel.locator('.tw').first().innerText()), 'sens d’abord : le résultat le plus proche en vecteur passe devant', 8000);
-await panel.selectOption('#blend', 'keywords');
+await mselect('#blend', 'keywords');
 await waitFor(async () => /zorglub terme littéral/.test(await panel.locator('.tw').first().innerText()), 'mots exacts d’abord', 8000);
 assert.equal((await panel.evaluate(() => JSON.parse(localStorage.getItem('xbs.view')))).blend, 'keywords', 'réglage mémorisé');
-await panel.selectOption('#blend', 'balanced');
+await mselect('#blend', 'balanced');
 await panel.fill('#q', '');
 await panel.evaluate(async () => { // nettoyage : ces tweets de test ne doivent pas fausser la suite
   const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
@@ -460,7 +466,7 @@ await panel.fill('#q', 'les tweets les plus anciens de devops à propos de kuber
 await waitFor(async () => /compris par l’IA/.test(await panel.locator('#mode').innerText()), 'intention IA', 15000);
 assert.match(await panel.locator('.tw').first().innerText(), /Kubernetes/);
 await panel.fill('#q', '');
-await panel.click('#digest');
+await mclick('#digest');
 await panel.waitForSelector('.ans a.cite');
 assert.match(await panel.locator('.ans').innerText(), /Infra/);
 
@@ -489,7 +495,7 @@ await panel.screenshot({ path: 'test/panel.png' });
 await p.close();
 hits.length = 0;
 drop = '2002'; // ce bookmark n'existe plus côté X
-await panel.click('#sync');
+await mclick('#sync');
 await waitFor(() => sameHits([null, null, 'CUR_NEXT', 'P3', 'P4']), 'synchro complète depuis le panneau');
 await panel.waitForFunction(() => /Synchro terminée/.test(document.getElementById('progress').textContent), null, { timeout: 30000 });
 await panel.waitForSelector('#banners .bn:has-text("n’existent plus")');
@@ -498,7 +504,7 @@ await panel.waitForFunction(() => /10 bookmarks/.test(document.getElementById('s
 
 // ------------------------------------------------------------------ 7. nouveautés seulement : s'arrête dès que tout est connu
 hits.length = 0;
-await panel.click('#news');
+await mclick('#news');
 await panel.waitForFunction(() => /Nouveautés terminée/.test(document.getElementById('progress').textContent), null, { timeout: 40000 });
 assert.ok(sameHits([null, 'CUR_NEXT']), 'incrémental : 2 pages seulement, obtenu ' + JSON.stringify(hits));
 
@@ -518,7 +524,7 @@ await panel.evaluate(async () => {
 });
 await panel.reload();
 await panel.waitForFunction(() => /45 indexés/.test(document.getElementById('stats').textContent) || /\b4[5-9] indexés|[5-9]\d indexés/.test(document.getElementById('stats').textContent));
-await panel.click('#themes');
+await mclick('#themes');
 await panel.waitForSelector('.th');
 assert.ok((await panel.locator('.th').count()) >= 3, 'au moins 3 thèmes');
 const names = (await panel.locator('.th b').allInnerTexts()).join(' ');
@@ -550,7 +556,7 @@ await panel.evaluate(async () => {
 });
 await panel.reload();
 await panel.waitForFunction(() => /45 indexés sémantiquement \(EmbeddingGemma 2\)/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
-await panel.click('#themes');
+await mclick('#themes');
 await panel.waitForSelector('.th');
 assert.ok((await panel.locator('.th').count()) >= 3, 'thèmes en 768 dimensions');
 await setModel('gemma1');
@@ -651,7 +657,7 @@ assert.equal(await panel.evaluate(() => self.crossOriginIsolated), true, 'page i
 await panel.evaluate(() => localStorage.setItem('xbs.reloadGap', '1500')); // rechargements groupés : délai réduit pour les tests
 await panel.reload(); await panel.waitForSelector('.tw');
 const before = Number((await panel.locator('#stats').innerText()).match(/^([\d\s\u202f\u00a0]+) bookmarks/)[1].replace(/\D/g, ''));
-await panel.click('#yt-sync');
+await mclick('#yt-sync');
 await panel.waitForFunction(() => /YouTube : terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
 assert.match(await panel.locator('#progress').innerText(), /7 vidéos dans 5 playlists|\d+ vidéos dans 5 playlists/);
 await panel.waitForFunction(() => /7 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
@@ -691,7 +697,7 @@ await panel.fill('#q', '');
 // 2e synchro : « Recette de ramen » a été retirée de TOUTES les playlists côté YouTube -> proposée à la suppression
 ytDrop = 'w2';
 ytLog.length = 0;
-await panel.click('#yt-sync');
+await mclick('#yt-sync');
 await panel.waitForFunction(() => /YouTube : terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
 await panel.waitForSelector('#banners .bn:has-text("n’existent plus")', { timeout: 15000 });
 await panel.click('#banners .bn button:has-text("Les retirer")');
@@ -707,7 +713,7 @@ await panel.fill('#q', '');
 
 // ------------------------------------------------------------------ 11c. YouTube : historique de visionnage (4 pages), badges, filtres, synchro incrémentale
 ytLog.length = 0;
-await panel.click('#yt-hist');
+await mclick('#yt-hist');
 await panel.waitForFunction(() => /historique terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
 assert.match(await panel.locator('#progress').innerText(), /9 visionnages lus, 4 nouveaux|\d+ visionnages lus, \d+ nouveaux/);
 await panel.waitForFunction(() => /10 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 15000 });
@@ -734,7 +740,7 @@ await count('mémoire viewed:yes', 1, 'recherche dans l’historique');
 // synchro incrémentale : une nouveauté en tête ; on s’arrête dès qu’on retombe sur du connu (la dernière page n’est pas demandée)
 histNew = true; ytLog.length = 0;
 await panel.fill('#q', '');
-await panel.click('#yt-hist');
+await mclick('#yt-hist');
 await panel.waitForFunction(() => /historique terminé/.test(document.getElementById('progress').textContent) && /11 vidéos YouTube/.test(document.getElementById('stats').textContent), null, { timeout: 90000 });
 assert.deepEqual(hlog(), ['FEhistory', 'HC1', 'HC2'], 'synchro incrémentale : arrêt avant la dernière page : ' + hlog());
 await count('zorglub', 1, 'nouvelle vidéo de l’historique');
@@ -745,7 +751,7 @@ ytLog.length = 0;
 await panel.fill('#q', '');
 // une vidéo à la fois : le jeton appris sur la première sert ensuite aux suivantes (ordre déterministe)
 await panel.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, ytTrSpeed: 'prudent' } }); });
-await panel.click('#yt-tr');
+await mclick('#yt-tr');
 await panel.waitForFunction(() => /transcriptions terminées/.test(document.getElementById('progress').textContent), null, { timeout: 120000 });
 assert.match(await panel.locator('#progress').innerText(), /3 récupérées, 3 sans transcription/);
 const nextIds = ytLog.filter((l) => l.body.ep === 'next').map((l) => l.body.videoId);
@@ -768,7 +774,7 @@ assert.equal(await panel.locator('.tw.yt').first().locator('.yt-trb.ok').count()
 await count('has:transcript', 3, 'has:transcript');
 // deuxième passage : plus rien à récupérer (les vidéos sans transcription ne sont pas redemandées avant 30 jours)
 await panel.fill('#q', '');
-await panel.click('#yt-tr');
+await mclick('#yt-tr');
 await panel.waitForFunction(() => /ont déjà leur transcription/.test(document.getElementById('progress').textContent), null, { timeout: 15000 });
 
 // recherche par chaîne : « @chaineneuropod » (identifiant approchant) retrouve les vidéos de « Chaîne Neuro », et seulement elles
@@ -783,7 +789,7 @@ await panel.evaluate(async () => {
   await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
 });
 await panel.reload(); await panel.waitForSelector('.tw');
-await panel.click('#yt-tr');
+await mclick('#yt-tr');
 const getZ9 = () => panel.evaluate(async () => { const db = await new Promise((res) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); }); return await new Promise((res) => { const g = db.transaction('tweets').objectStore('tweets').get('yt:z9'); g.onsuccess = () => res(g.result); }); });
 await waitFor(async () => (await getZ9())?.trState === 'ok', 'transcription de z9 récupérée par la page vidéo', 90000);
 await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), 'onglets YouTube refermés (page vidéo)', 30000);
@@ -825,7 +831,7 @@ await waitFor(async () => /10 vidéos YouTube/.test(await panel.locator('#stats'
 // synchro : la playlist décochée n'est pas lue
 ytLog.length = 0;
 await panel.fill('#q', '');
-await panel.click('#yt-sync');
+await mclick('#yt-sync');
 await panel.waitForFunction(() => /YouTube : terminé/.test(document.getElementById('progress').textContent), null, { timeout: 90000 });
 const vl = ytLog.map((l) => l.body.browseId).filter((x) => x?.startsWith('VL'));
 assert.ok(vl.includes('VLWL') && !vl.includes('VLPL3'), 'VLPL3 non demandée : ' + vl);
@@ -1383,6 +1389,27 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
     await waitFor(() => got.some((m) => m.id === id), 'réponse après désactivation', 20000);
     assert.equal(got.find((m) => m.id === id).result.isError, true, 'pont désactivé : plus de réponse');
   } finally { srv.kill(); }
+}
+// ------------------------------------------------------------------ sélecteur de comptes / chaînes + barre d'outils épurée
+{
+  await panel.reload(); await panel.waitForSelector('.tw');
+  await panel.click('#acct-btn');
+  assert.ok(await panel.locator('#acct-list .acct').count() >= 4, 'liste des comptes');
+  await panel.fill('#acct-q', 'Auteur B');
+  await panel.locator('#acct-list .acct').first().click();
+  await waitFor(async () => (await panel.locator('#active .afc').count()) === 1, 'puce du compte choisi', 8000);
+  const onlyB = () => panel.evaluate(() => { const c = [...document.querySelectorAll('.tw')]; return { n: c.length, ok: c.every((el) => el.innerText.includes('Auteur B')) }; });
+  await waitFor(async () => { const r = await onlyB(); return r.n > 0 && r.ok; }, 'résultats limités au compte choisi', 10000);
+  const only = await onlyB();
+  assert.ok(only.n > 0 && only.ok, 'seuls les posts du compte choisi : ' + JSON.stringify(only));
+  assert.equal(await panel.locator('#acct-n').innerText(), '1');
+  await panel.keyboard.press('Escape');
+  assert.equal(await panel.locator('#acct-pop').isHidden(), true, 'Échap ferme le menu');
+  await panel.locator('#active .afc button').click();
+  await waitFor(async () => (await panel.locator('#active .afc').count()) === 0, 'filtre retiré', 5000);
+  assert.equal(await panel.locator('#flt-n').isHidden(), true, 'pas de pastille quand aucun filtre n’est actif');
+  await mclick('.chip[data-type="link"]');
+  await waitFor(async () => (await panel.locator('#flt-n').isVisible()) && (await panel.locator('#flt-n').innerText()) === '1', 'pastille « Filtres » = 1', 8000);
 }
 console.log('E2E OK');
 await ctx.close();

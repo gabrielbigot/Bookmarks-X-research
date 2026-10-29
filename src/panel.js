@@ -2,7 +2,7 @@ import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, c
 import { bestChunk, fmtTime } from './lib/transcript.js';
 import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, judgeText, eventDays, clusterCandidates, rankMembers, handleKey, OFFICIAL_DESC, OFFICIAL_MIN } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
-import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool } from './lib/search.js';
+import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool, acctId } from './lib/search.js';
 import { decodeEntities, semanticQuery } from './lib/text.js';
 import { interpret, findAuthors } from './lib/nlq.js';
 import { refresh, fullLoad } from './lib/store.js';
@@ -38,7 +38,7 @@ let shown = PAGE;
 let last = { rows: [], terms: [], label: '', meta: {} };
 let settings;
 const qCache = new Map();
-const state = { range: 'all', types: new Set(), sort: 'relevance', ignoreAuthor: false, themeMask: null, themeLabel: '', imageMode: false };
+const state = { range: 'all', accounts: new Set(), types: new Set(), sort: 'relevance', ignoreAuthor: false, themeMask: null, themeLabel: '', imageMode: false };
 let imgIndex = null; // { ids, matrix }
 
 // ---------- chargement ----------
@@ -76,6 +76,7 @@ function toolbarFilters() {
   const f = {};
   if (state.range !== 'all') f.since = isoDay(Date.now() - Number(state.range) * 86_400_000);
   if (state.types.size) f.has = [...state.types];
+  if (state.accounts.size) f.accounts = new Set(state.accounts); // comptes X / chaînes YouTube choisis dans « Comptes »
   if (view.source && view.source !== 'all') f.source = view.source;
   return f;
 }
@@ -735,6 +736,84 @@ document.querySelectorAll('.chip[data-type]').forEach((b) => {
   };
 });
 $('imgmode').onclick = () => { state.imageMode = !state.imageMode; $('imgmode').classList.toggle('on', state.imageMode); run(); };
+
+// ---------- menus déroulants (Comptes, Filtres, Découvrir, synchro) ----------
+const menus = [...document.querySelectorAll('.menu')];
+const closeMenus = (except) => menus.forEach((m) => { if (m !== except) { m.classList.remove('open'); m.querySelector('.pop').hidden = true; } });
+menus.forEach((m) => {
+  m.querySelector(':scope > .menu-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const pop = m.querySelector('.pop'), open = pop.hidden;
+    closeMenus(m);
+    pop.hidden = !open; m.classList.toggle('open', open);
+    if (open && m.id === 'acct-menu') { renderAccounts(); $('acct-q').focus(); }
+  });
+  // un clic sur une action ferme le menu (pas sur un réglage : les filtres restent ouverts pour en cumuler plusieurs)
+  m.querySelector('.pop').addEventListener('click', (e) => { if (e.target.closest('.item')) closeMenus(); e.stopPropagation(); });
+});
+document.addEventListener('click', () => closeMenus());
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && menus.some((m) => m.classList.contains('open'))) { closeMenus(); e.stopPropagation(); } }, true);
+
+// pastille du bouton « Filtres » : combien de réglages sont actifs
+function updateFilterBadge() {
+  const n = state.types.size + (view.blend !== 'balanced' ? 1 : 0) + (view.dedupe ? 1 : 0) + (state.imageMode ? 1 : 0);
+  $('flt-n').hidden = !n; $('flt-n').textContent = String(n);
+}
+document.querySelectorAll('.chip[data-type], #imgmode, #dedupe, #blend').forEach((b) => b.addEventListener('click', () => setTimeout(updateFilterBadge)));
+$('blend').addEventListener('change', updateFilterBadge);
+updateFilterBadge();
+
+// ---------- sélecteur de comptes X / chaînes YouTube ----------
+let acctCache = null;
+function allAccounts() {
+  const key = `${index.tweets.length}|${view.source}`;
+  if (acctCache?.key === key) return acctCache.list;
+  const map = new Map();
+  for (const t of index.tweets) {
+    const yt = isVideoItem(t);
+    if ((view.source === 'x' && yt) || (view.source === 'youtube' && !yt)) continue;
+    const id = acctId(t);
+    if (id.slice(id.indexOf(':') + 1).length < 1) continue; // sans identifiant
+    const a = map.get(id) || map.set(id, { id, yt, name: t.name || t.handle || id.slice(3), handle: yt ? '' : '@' + t.handle, n: 0, key: '' }).get(id);
+    a.n++;
+  }
+  const list = [...map.values()].map((a) => ({ ...a, key: normalizeText(`${a.name} ${a.handle}`) }));
+  acctCache = { key, list };
+  return list;
+}
+const acctNames = new Map(); // id -> { name, yt } : pour les puces, même si la source affichée change
+function renderAccounts() {
+  const q = normalizeText($('acct-q').value.trim());
+  const all = allAccounts();
+  all.forEach((a) => acctNames.set(a.id, a));
+  const hits = all.filter((a) => !q || a.key.includes(q)).sort((a, b) => (state.accounts.has(b.id) - state.accounts.has(a.id)) || b.n - a.n);
+  $('acct-count').textContent = `${hits.length.toLocaleString('fr-FR')} compte${hits.length > 1 ? 's' : ''} et chaîne${hits.length > 1 ? 's' : ''}${hits.length > 150 ? ' (150 premiers : affine la recherche)' : ''}`;
+  $('acct-list').replaceChildren(...(hits.length ? hits.slice(0, 150).map((a) => {
+    const row = document.createElement('label');
+    row.className = 'acct' + (state.accounts.has(a.id) ? ' on' : '');
+    row.innerHTML = `<input type="checkbox"${state.accounts.has(a.id) ? ' checked' : ''}><span class="ic">${a.yt ? '▶' : '𝕏'}</span><span class="nm">${esc(a.name)}<small>${esc(a.handle)}</small></span><span class="n">${a.n.toLocaleString('fr-FR')}</span>`;
+    row.querySelector('input').onchange = (e) => { e.target.checked ? state.accounts.add(a.id) : state.accounts.delete(a.id); row.classList.toggle('on', e.target.checked); accountsChanged(); };
+    return row;
+  }) : [Object.assign(document.createElement('div'), { className: 'acct-empty', textContent: 'Aucun compte ne correspond.' })]));
+  $('acct-clear').hidden = !state.accounts.size;
+}
+function renderActive() {
+  const box = $('active');
+  box.hidden = !state.accounts.size;
+  $('acct-n').hidden = !state.accounts.size; $('acct-n').textContent = String(state.accounts.size);
+  box.replaceChildren(...[...state.accounts].map((id) => {
+    const a = acctNames.get(id), chip = document.createElement('span');
+    chip.className = 'afc';
+    chip.innerHTML = `${a?.yt ?? id.startsWith('yt:') ? '▶' : '𝕏'} ${esc(a?.name || id.slice(3))}<button type="button" title="Retirer ce filtre" aria-label="Retirer">✕</button>`;
+    chip.querySelector('button').onclick = () => { state.accounts.delete(id); accountsChanged(); };
+    return chip;
+  }), ...(state.accounts.size > 1 ? [Object.assign(document.createElement('button'), { className: 'ghost', textContent: 'Tout effacer', onclick: () => { state.accounts.clear(); accountsChanged(); } })] : []));
+}
+function accountsChanged() { renderActive(); if (!$('acct-pop').hidden) renderAccounts(); run(); }
+$('acct-q').addEventListener('input', renderAccounts);
+$('acct-clear').onclick = () => { state.accounts.clear(); accountsChanged(); };
+$('source').addEventListener('change', () => { acctCache = null; if (!$('acct-pop').hidden) renderAccounts(); });
+
 
 // ---------- historique & recherches enregistrées ----------
 const HKEY = 'xbs.history';
