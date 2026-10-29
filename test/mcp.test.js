@@ -162,15 +162,16 @@ test('serveur MCP : initialize, tools/list, appel relayé à l’extension, jeto
     assert.equal(none.result.isError, true); assert.match(none.result.content[0].text, /n’est pas connectée/);
     // origine refusée (une page web ne peut pas se connecter)
     await assert.rejects(wsClient(port, { origin: 'https://evil.example' }), /403/);
+    await assert.rejects(wsClient(port, { origin: 'http://comet-extension.evil.example' }), /403/);
     await assert.rejects(wsClient(port, { origin: '' }), /403/);
     // jeton incorrect : connexion fermée, pas d'appel possible
     const bad = await wsClient(port, {}); let closed = false; bad.socket.on('close', () => (closed = true));
     bad.send(JSON.stringify({ type: 'hello', token: 'wrong' }));
     for (let i = 0; i < 30 && !closed; i++) await new Promise((r) => setTimeout(r, 50));
     assert.ok(closed, 'jeton incorrect : fermée');
-    // extension simulée
+    // extension simulée (navigateur Comet : l'origine est « comet-extension:// »)
     const seen = [];
-    const ext = await wsClient(port, { onMessage: (t) => { const m = JSON.parse(t); if (m.type === 'pong') return; seen.push(m); ext.send(JSON.stringify({ id: m.id, result: { echo: m.method, args: m.params } })); } });
+    const ext = await wsClient(port, { origin: 'comet-extension://ihkijnjcinobacbdafhcdbgdfemnecoo', onMessage: (t) => { const m = JSON.parse(t); if (m.type === 'pong') return; seen.push(m); ext.send(JSON.stringify({ id: m.id, result: { echo: m.method, args: m.params } })); } });
     assert.equal(ext.accept, crypto.createHash('sha1').update(ext.key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64'));
     ext.send(JSON.stringify({ type: 'hello', token: 'secret' }));
     await new Promise((r) => setTimeout(r, 200));
@@ -216,4 +217,47 @@ test('setup.mjs : ajoute le serveur à une config existante sans rien casser, re
   fs.rmSync(file); // fichier absent : créé
   assert.equal((await run('--token', 't', '--config', file)).code, 0); assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.bookmarks);
   assert.equal((await run('--config', file)).code, 1); // jeton manquant
+});
+
+// ---------- deux assistants (ou une instance en double) : le second se raccorde au premier ----------
+const startServer = (port, token = 'secret') => {
+  const srv = spawn(process.execPath, ['mcp/server.mjs'], { env: { ...process.env, XBS_TOKEN: token, XBS_PORT: String(port) }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const lines = []; let acc = '', log = '';
+  srv.stdout.setEncoding('utf8'); srv.stdout.on('data', (d) => { acc += d; let i; while ((i = acc.indexOf('\n')) >= 0) { lines.push(JSON.parse(acc.slice(0, i))); acc = acc.slice(i + 1); } });
+  srv.stderr.setEncoding('utf8'); srv.stderr.on('data', (d) => (log += d));
+  let n = 1;
+  const call = async (name, args) => { const id = n++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n'); for (let i = 0; i < 100 && !lines.some((l) => l.id === id); i++) await new Promise((r) => setTimeout(r, 100)); return lines.find((l) => l.id === id).result; };
+  return { srv, call, log: () => log };
+};
+test('serveur MCP : une 2e instance sur le même port se raccorde à la première', async () => {
+  const port = await freePort();
+  const A = startServer(port);
+  for (let i = 0; i < 50 && !/en attente/.test(A.log()); i++) await new Promise((r) => setTimeout(r, 100));
+  const ext = await wsClient(port, { onMessage: (t) => { const m = JSON.parse(t); if (m.method) ext.send(JSON.stringify({ id: m.id, result: { via: 'extension', method: m.method } })); } });
+  ext.send(JSON.stringify({ type: 'hello', token: 'secret' }));
+  await new Promise((r) => setTimeout(r, 200));
+  const B = startServer(port);
+  try {
+    const r = await B.call('stats', {});
+    assert.ok(!r.isError, JSON.stringify(r) + B.log());
+    assert.deepEqual(JSON.parse(r.content[0].text), { via: 'extension', method: 'stats' });
+    assert.match(B.log(), /raccordé au serveur déjà actif/);
+    assert.ok(!(await A.call('stats', {})).isError, 'le premier fonctionne toujours');
+    // jeton différent : refusé, avec une explication
+    const C = startServer(port, 'autre');
+    const rc = await C.call('stats', {});
+    assert.equal(rc.isError, true); assert.match(rc.content[0].text, /port \d+ est occupé/);
+    C.srv.kill();
+  } finally { A.srv.kill(); B.srv.kill(); }
+});
+
+test('serveur MCP : port pris par un autre programme -> message clair (et pas « indisponible »)', async () => {
+  const port = await freePort();
+  const blocker = net.createServer((s) => s.destroy()).listen(port, '127.0.0.1');
+  await new Promise((r) => blocker.once('listening', r));
+  const S = startServer(port);
+  try {
+    const r = await S.call('stats', {});
+    assert.equal(r.isError, true); assert.match(r.content[0].text, /occupé par un autre programme/); assert.match(r.content[0].text, /XBS_PORT/);
+  } finally { S.srv.kill(); blocker.close(); }
 });

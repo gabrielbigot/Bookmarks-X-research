@@ -39,9 +39,9 @@ Prérequis : Node 18 ou plus, le dépôt cloné (`git pull && npm run build`, ex
      }
      ```
      </details>
-3. Chrome doit être ouvert avec l'extension active. Dans ⚙ › Pont MCP, l'état passe à « ✓ connecté » quelques secondes après le lancement de l'assistant (l'extension réessaie toutes les 8 s, puis toutes les 30 s).
+3. Le navigateur (Chrome, Comet, Brave, Edge… tout navigateur Chromium) doit être ouvert avec l'extension active. Dans ⚙ › Pont MCP, l'état passe à « ✓ connecté » quelques secondes après le lancement de l'assistant (l'extension réessaie toutes les 8 s, puis toutes les 30 s).
 
-Autre port : `XBS_PORT=48000` côté serveur **et** même valeur dans ⚙. **Un seul assistant à la fois** : un deuxième serveur MCP lancé en parallèle ne pourrait pas utiliser le même port (il le signale dans ses logs).
+Autre port : `XBS_PORT=48000` côté serveur **et** même valeur dans ⚙. Plusieurs assistants peuvent être configurés en même temps (Claude Desktop et Claude Code, par exemple) : le premier serveur lancé tient le port, les suivants se raccordent à lui automatiquement.
 
 ## Outils
 
@@ -63,6 +63,7 @@ Les playlists décochées dans l'extension (« ignorées ») restent exclues, co
 * **Confidentialité** : tout ce que l'assistant lit via ces outils est envoyé à son fournisseur (Anthropic pour Claude), comme n'importe quel texte que tu lui donnes. L'extension, elle, ne sort toujours rien d'elle-même. Ne l'active que si cela te convient.
 * **Mémoire** : au premier appel, l'extension charge l'index (quelques secondes) ; elle le relâche après 15 minutes sans appel.
 * **Recherche par le sens** : elle utilise le modèle d'embedding de l'extension. Si le modèle n'est pas prêt, la réponse le signale (`notes`) et se limite aux mots-clés.
+* **« le port … est occupé »** : un autre programme (ou une ancienne copie du serveur avec un autre jeton) tient le port. Libère-le (`lsof -i :47821` sur macOS / Linux, `netstat -ano | findstr 47821` sous Windows ; une ancienne copie se ferme avec `pkill -f mcp/server.mjs`) ou change de port des deux côtés. Quitte aussi complètement Claude Desktop (pas seulement la fenêtre) avant de relancer.
 * **Dépannage** : « l'extension n'est pas connectée » → Chrome ouvert ? case cochée ? même jeton et même port des deux côtés ? Les logs du serveur (stderr) sont visibles dans les journaux MCP de ton assistant.
 
 ## Lire beaucoup de vidéos sans brûler de tokens : `extract`
