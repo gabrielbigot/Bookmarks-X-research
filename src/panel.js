@@ -705,8 +705,8 @@ function applyView() {
   $('blend').value = view.blend;
   $('source').value = view.source;
   $('dedupe').classList.toggle('on', !!view.dedupe);
-  // colonnes réellement affichées : pas plus que ce que la largeur permet (~320 px minimum par carte)
-  const eff = view.mode === 'grid' ? Math.max(1, Math.min(view.cols, Math.floor(document.body.clientWidth / 320))) : 1;
+  // colonnes réellement affichées : pas plus que ce que la largeur permet (~240 px minimum par carte : « ×4 » tient dès ≈ 960 px)
+  const eff = view.mode === 'grid' ? Math.max(1, Math.min(view.cols, Math.floor(document.body.clientWidth / 240))) : 1;
   document.documentElement.style.setProperty('--cols', eff);
 }
 $('view').onchange = (e) => {

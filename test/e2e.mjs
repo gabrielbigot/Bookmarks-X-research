@@ -1411,6 +1411,14 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   await mclick('.chip[data-type="link"]');
   await waitFor(async () => (await panel.locator('#flt-n').isVisible()) && (await panel.locator('#flt-n').innerText()) === '1', 'pastille « Filtres » = 1', 8000);
 }
+{ // grille ×4 sur une fenêtre de ≈ 1000 px (3 colonnes seulement avant : minimum 320 px par carte)
+  await panel.setViewportSize({ width: 1000, height: 800 });
+  await panel.selectOption('#view', '4');
+  assert.equal(await panel.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--cols').trim()), '4', 'Grille ×4 = 4 colonnes à 1000 px');
+  await panel.setViewportSize({ width: 600, height: 800 });
+  await waitFor(async () => (await panel.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--cols').trim())) === '2', 'fenêtre étroite : le nombre de colonnes est limité', 5000);
+  await panel.selectOption('#view', 'list');
+}
 console.log('E2E OK');
 await ctx.close();
 server.close();
