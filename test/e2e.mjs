@@ -1334,7 +1334,7 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   const call = async (name, args) => { const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n'); await waitFor(() => got.some((m) => m.id === id), 'réponse MCP ' + name, 60000); const r = got.find((m) => m.id === id).result; assert.ok(!r.isError, name + ' : ' + r.content[0].text); return JSON.parse(r.content[0].text); };
   try {
     await new Promise((r) => setTimeout(r, 500));
-    await journal.evaluate(async (p) => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { on: true, port: p, token: 'e2e-token' } } }); }, port);
+    await journal.evaluate(async (p) => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { on: true, port: p, token: 'e2e-token', extractModel: 'fresh 1' } } }); }, port); // nom approximatif : résolu d'après le catalogue
     const stats = await (async () => { for (let i = 0; i < 25; i++) { const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'stats', arguments: {} } }) + '\n'); await waitFor(() => got.some((m) => m.id === id), 'réponse stats', 60000); const r = got.find((m) => m.id === id).result; if (!r.isError) return JSON.parse(r.content[0].text); await new Promise((x) => setTimeout(x, 1000)); } throw new Error('l’extension ne s’est pas connectée au serveur MCP'); })();
     assert.ok(stats.items >= 300 && stats.tweets > 0, 'stats via MCP : ' + JSON.stringify(stats).slice(0, 200));
     const r = await call('search', { query: 'agents mémoire', limit: 5 });
@@ -1351,7 +1351,7 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
     const ex = await call('extract', { question: 'Qui est le conférencier ?', ids: ['yt:jr1'] });
     assert.equal(ex.results[0].answers.length, 1, 'extract : la citation inventée est écartée : ' + JSON.stringify(ex).slice(0, 300));
     assert.equal(ex.results[0].answers[0].value, 'Conférencier Test'); assert.equal(ex.results[0].answers[0].at, '0:00'); assert.equal(ex.rejectedCitations, 1);
-    assert.ok(ex.costUsd > 0 && ex.model);
+    assert.ok(ex.costUsd > 0 && ex.model === 'lab/fresh-1', 'modèle résolu : ' + ex.model);
     const ex2 = await call('extract', { question: 'Qui est le conférencier ?', ids: ['yt:jr1'] });
     assert.equal(ex2.cached, 1, 'extract : réponse relue du cache');
     // banc d'essai des modèles (page dédiée) : une vidéo à identifiant YouTube valide, un modèle résolu d'après le catalogue

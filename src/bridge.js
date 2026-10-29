@@ -7,6 +7,7 @@ import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { getMeta, setMeta, getTranscripts, playlistCatalog } from './lib/db.js';
 import { chatFull } from './lib/llm.js';
+import { resolveModel, perMillion } from './lib/extract.js';
 import { markBulkAdded } from './lib/ytdate.js';
 import { createTools } from './lib/mcp.js';
 
@@ -39,13 +40,24 @@ export function startBridge({ embed }) {
     if (!xcache) xcache = new Map(Object.entries((await getMeta('mcpExtract')) || {}));
     return { get: (k) => xcache.get(k), set: (k, v) => { xcache.delete(k); xcache.set(k, v); if (xcache.size > 4000) xcache.delete(xcache.keys().next().value); clearTimeout(xTimer); xTimer = setTimeout(() => setMeta('mcpExtract', Object.fromEntries(xcache)).catch(() => {}), 2000); } };
   };
+  let catalog = null, catalogAt = 0;
+  const catalogOf = async (llm) => {
+    if (!catalog || Date.now() - catalogAt > 3600_000) { const r = await fetch(new URL(llm.baseUrl).origin + '/api/v1/models'); if (!r.ok) throw new Error('catalogue OpenRouter indisponible (HTTP ' + r.status + ')'); catalog = (await r.json()).data || []; catalogAt = Date.now(); }
+    return catalog;
+  };
   const tools = createTools({
     extractCfg: async () => {
       const s = await getSettings();
       if (!s.llm.baseUrl || !s.llm.apiKey) throw new Error('aucune IA configurée dans l’extension (⚙ › IA) : nécessaire pour la lecture en masse');
-      const model = s.mcp.extractModel || s.journal.assistModel || s.llm.model;
+      let model = s.mcp.extractModel || s.journal.assistModel || s.llm.model, prices = { inPerM: s.mcp.priceIn ?? 0.2, outPerM: s.mcp.priceOut ?? 0.6 };
       if (!model) throw new Error('aucun modèle d’extraction : renseigne-le dans ⚙ › Pont MCP');
-      return { model, budget: s.mcp.extractBudget || 0.3, prices: { inPerM: s.mcp.priceIn ?? 0.2, outPerM: s.mcp.priceOut ?? 0.6 }, cache: await cacheOf(),
+      if (/openrouter\.ai/i.test(s.llm.baseUrl) && !model.includes('/')) { // nom approximatif (« deepseek v4.1 flash ») : résolu d'après le catalogue, avec ses prix réels
+        const hit = resolveModel(await catalogOf(s.llm), model);
+        if (!hit) throw new Error(`modèle « ${model} » introuvable dans le catalogue OpenRouter : indique son identifiant exact (ex. deepseek/deepseek-v4-flash) ou choisis-le avec « Comparer des modèles… »`);
+        model = hit.id;
+        prices = { inPerM: perMillion(hit.pricing?.prompt) ?? prices.inPerM, outPerM: perMillion(hit.pricing?.completion) ?? prices.outPerM };
+      }
+      return { model, budget: s.mcp.extractBudget || 0.3, prices, cache: await cacheOf(),
         llm: async (messages) => { const r = await chatFull(s.llm, messages, { model, maxTokens: 500, temperature: 0, noThink: true }); return { text: r.text, cost: r.usage.cost }; } };
     },
     getIndex,

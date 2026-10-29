@@ -6,6 +6,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { parseBookmarksResponse } from '../src/lib/parse.js';
 import { Index, DIM } from '../src/lib/search.js';
+import { resolveModel, perMillion } from '../src/lib/extract.js';
 import { createTools, bestPassages, htmlToText, itemView } from '../src/lib/mcp.js';
 import { TOOL_DEFS } from '../src/lib/mcp-defs.js';
 import { demoPage } from './fixtures/bookmarks.js';
@@ -260,4 +261,13 @@ test('serveur MCP : port pris par un autre programme -> message clair (et pas «
     const r = await S.call('stats', {});
     assert.equal(r.isError, true); assert.match(r.content[0].text, /occupé par un autre programme/); assert.match(r.content[0].text, /XBS_PORT/);
   } finally { S.srv.kill(); blocker.close(); }
+});
+
+test('resolveModel : un nom approximatif trouve l’identifiant OpenRouter', () => {
+  const cat = [{ id: 'deepseek/deepseek-v4.1-flash', name: 'DeepSeek: DeepSeek V4.1 Flash', pricing: { prompt: '0.00000015', completion: '0.0000006' } }, { id: 'deepseek/deepseek-v4.1-flash:free', name: 'DeepSeek V4.1 Flash (free)' }, { id: 'deepseek/deepseek-v4.1-flash-max', name: 'DeepSeek V4.1 Flash Max' }, { id: 'z-ai/glm-5.3-flash', name: 'Z.ai: GLM-5.3 Flash' }];
+  assert.equal(resolveModel(cat, 'deepseek v4.1 flash').id, 'deepseek/deepseek-v4.1-flash');
+  assert.equal(resolveModel(cat, 'GLM 5.3 flash').id, 'z-ai/glm-5.3-flash');
+  assert.equal(resolveModel(cat, 'z-ai/glm-5.3-flash').id, 'z-ai/glm-5.3-flash');
+  assert.equal(resolveModel(cat, 'modèle inconnu'), null);
+  assert.ok(Math.abs(perMillion(cat[0].pricing.prompt) - 0.15) < 1e-9 && Math.abs(perMillion(cat[0].pricing.completion) - 0.6) < 1e-9);
 });

@@ -2,13 +2,12 @@
 import { getSettings, setSettings } from './lib/settings.js';
 import { getTweets, getTranscripts } from './lib/db.js';
 import { chatFull } from './lib/llm.js';
-import { selectPassages, passagesText, extractMessages, parseExtraction } from './lib/extract.js';
+import { selectPassages, passagesText, extractMessages, parseExtraction, resolveModel, perMillion as perM } from './lib/extract.js';
 import { normalizeText } from './lib/search.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const flat = (s) => normalizeText(String(s || '')).replace(/[^a-z0-9]+/g, ' ').trim();
-const perM = (v) => (v == null ? null : Number(v) < 0.01 ? Number(v) * 1e6 : Number(v)); // OpenRouter : prix par token
 let catalog = [];
 
 async function loadCatalog(llm) {
@@ -16,16 +15,7 @@ async function loadCatalog(llm) {
   const r = await fetch(new URL(llm.baseUrl).origin + '/api/v1/models');
   return (await r.json()).data || [];
 }
-// « deepseek v4 flash » -> le modèle du catalogue dont l'identifiant ou le nom contient tous les mots (le plus court, donc le plus générique)
-function resolve(line) {
-  const l = line.trim();
-  if (!l) return null;
-  const exact = catalog.find((m) => m.id === l);
-  if (exact) return exact;
-  const words = flat(l).split(' ').filter(Boolean);
-  const hits = catalog.filter((m) => { const h = flat(m.id + ' ' + m.name); return words.every((w) => h.includes(w)) && !/:free$/.test(m.id); });
-  return hits.sort((a, b) => a.id.length - b.id.length)[0] || null;
-}
+const resolve = (line) => resolveModel(catalog, line);
 const ytId = (s) => (String(s).match(/(?:v=|youtu\.be\/|shorts\/|^)([\w-]{11})(?:[&?\s]|$)/) || [])[1];
 
 $('go').onclick = async () => {

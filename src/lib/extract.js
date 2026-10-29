@@ -95,3 +95,16 @@ export async function runExtract(ctx, videos, question, { budget = 0.3, estimate
   await Promise.all(Array.from({ length: Math.min(concurrency, prep.length) }, worker));
   return { ...summary, processed: done, rejectedCitations: rejected, invalidReplies: invalid, costUsd: Math.round(spent * 1e4) / 1e4, ...(stopped ? { stoppedByBudget: true } : {}), results: JSON.parse(JSON.stringify(results.filter(Boolean))) };
 }
+
+// Nom approximatif -> modèle du catalogue OpenRouter : « deepseek v4.1 flash » trouve « deepseek/deepseek-v4.1-flash ».
+// Identifiant exact d'abord ; sinon le modèle dont l'identifiant ou le nom contient tous les mots (le plus court, hors variantes « :free »).
+export function resolveModel(catalog, text) {
+  const t = String(text || '').trim();
+  if (!t) return null;
+  const exact = catalog.find((m) => m.id === t);
+  if (exact) return exact;
+  const words = flat(t).split(' ').filter(Boolean);
+  const hits = catalog.filter((m) => { const h = flat(m.id + ' ' + (m.name || '')); return words.every((w) => h.includes(w)) && !/:free$/.test(m.id); });
+  return hits.sort((a, b) => a.id.length - b.id.length)[0] || null;
+}
+export const perMillion = (v) => (v == null || v === '' ? null : Number(v) < 0.01 ? Number(v) * 1e6 : Number(v)); // prix OpenRouter : par token
