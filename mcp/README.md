@@ -47,7 +47,7 @@ Autre port : `XBS_PORT=48000` côté serveur **et** même valeur dans ⚙. **Un 
 
 | Outil | Rôle |
 |---|---|
-| `search` | recherche hybride (sens + mots-clés) ; opérateurs `from:@compte`, `since:`, `until:`, `has:link\|media\|video\|transcript`, `source:youtube`, `playlist:"nom"`, `lang:fr`, `viewed:oui` ; options `source`, `sort` (pertinence, récent, ancien, likes, ajout), `mode`, `limit` (≤ 50). Pour une vidéo, renvoie le passage de transcription le plus proche avec un lien daté |
+| `search` | recherche hybride (sens + mots-clés) ; opérateurs `from:@compte`, `since:`, `until:`, `has:link\|media\|video\|transcript`, `source:youtube`, `playlist:"nom"`, `lang:fr`, `viewed:oui` ; options `source`, `sort` (pertinence, récent, ancien, likes, ajout), `mode`, `limit` (≤ 50), `offset` pour parcourir la suite (`next_offset`), et `brief` (liste compacte jusqu'à 200 éléments par appel, pour parcourir par exemple toutes les vidéos d'une chaîne). Pour une vidéo, renvoie le passage de transcription le plus proche avec un lien daté |
 | `get_item` | détail complet d'un tweet ou d'une vidéo |
 | `get_transcript` | passages d'une vidéo proches d'une question, ou lecture continue à partir d'un instant |
 | `similar` | éléments les plus proches (par le sens) d'un élément donné |

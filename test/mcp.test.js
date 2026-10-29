@@ -45,6 +45,17 @@ test('search : hybride, filtres, passage de transcription, repli sans embedding'
   assert.equal(recent.mode, 'filtre'); assert.equal(recent.results[0].id, 'yt:v1');
 });
 
+test('search : pagination et liste compacte pour parcourir tous les éléments', async () => {
+  const t = createTools(ctx());
+  const p1 = await t.search({ query: 'source:x', limit: 2 });
+  assert.equal(p1.shown, 2); assert.equal(p1.next_offset, 2);
+  const p2 = await t.search({ query: 'source:x', limit: 2, offset: p1.next_offset });
+  assert.ok(p2.results.every((r) => !p1.results.some((x) => x.id === r.id)), 'pas de doublon entre pages');
+  const b = await t.search({ query: 'from:"chaîne test" source:youtube', brief: true });
+  assert.deepEqual(Object.keys(JSON.parse(JSON.stringify(b.results[0]))).sort(), ['duration', 'hasTranscript', 'id', 'published', 'title']);
+  assert.ok(!b.next_offset);
+});
+
 test('get_item, get_transcript, similar, playlists, stats, journal', async () => {
   const t = createTools(ctx());
   assert.match((await t.get_item({ id: '1002' })).text, /tokio/i);

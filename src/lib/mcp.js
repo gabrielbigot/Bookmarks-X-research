@@ -70,7 +70,7 @@ export function createTools(ctx) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(a.since || '')) filters.since = a.since;
     if (/^\d{4}-\d{2}-\d{2}$/.test(a.until || '')) filters.until = a.until;
     if (a.from) filters.from = String(a.from).replace(/^@/, '').toLowerCase();
-    const limit = num(a.limit, 10, 1, 50);
+    const brief = !!a.brief, limit = num(a.limit, brief ? 100 : 10, 1, brief ? 200 : 50), offset = num(a.offset, 0, 0, 100000);
     const text = parsed.text.trim();
     const mask = index.allowedMask(filters);
     let rows, mode = a.mode === 'keywords' || a.mode === 'semantic' ? a.mode : 'hybrid', sort = ['newest', 'oldest', 'likes', 'added'].includes(a.sort) ? a.sort : 'relevance';
@@ -93,15 +93,17 @@ export function createTools(ctx) {
     }
     const total = rows.length;
     if (sort !== 'relevance') rows = sortRows(rows.slice(0, 1500), index.tweets, sort === 'added' ? 'addednew' : sort);
-    const top = rows.slice(0, limit);
+    const top = rows.slice(offset, offset + limit);
     const terms = text ? tokenize(text) : [];
-    const trs = terms.length ? await ctx.getTranscripts(top.map(([r]) => index.tweets[r]).filter((t) => t.trState === 'ok').map((t) => t.id)) : new Map();
+    const trs = terms.length && !brief ? await ctx.getTranscripts(top.map(([r]) => index.tweets[r]).filter((t) => t.trState === 'ok').map((t) => t.id)) : new Map();
     const results = top.map(([r]) => {
-      const t = index.tweets[r], v = itemView(t), ch = trs.get(t.id);
+      const t = index.tweets[r];
+      if (brief) { const v = itemView(t); return { id: v.id, title: clip(t.text, 140), published: v.published, duration: v.duration, hasTranscript: v.hasTranscript, author: isVideoItem(t) ? undefined : v.author }; }
+      const v = itemView(t), ch = trs.get(t.id);
       if (ch) { const p = bestPassages(ch, terms, 1)[0]; if (p) v.passage = { at: fmtTime(p.at), seconds: p.at, text: clip(p.text, 400), link: `${t.url}${t.url.includes('?') ? '&' : '?'}t=${p.at}s` }; }
       return v;
     });
-    return { mode, matches: total, shown: results.length, ...(notes.length ? { notes } : {}), results };
+    return { mode, matches: total, offset, shown: results.length, ...(offset + results.length < Math.min(total, 1500) ? { next_offset: offset + results.length } : {}), ...(notes.length ? { notes } : {}), results };
   }
 
   return {
