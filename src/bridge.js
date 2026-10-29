@@ -5,7 +5,8 @@ import { Index } from './lib/search.js';
 import { fullLoad, refresh } from './lib/store.js';
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
-import { getMeta, getTranscripts, playlistCatalog } from './lib/db.js';
+import { getMeta, setMeta, getTranscripts, playlistCatalog } from './lib/db.js';
+import { chatFull } from './lib/llm.js';
 import { markBulkAdded } from './lib/ytdate.js';
 import { createTools } from './lib/mcp.js';
 
@@ -32,7 +33,21 @@ export function startBridge({ embed }) {
     try { return await loading; } finally { loading = null; }
   }
 
+  // réponses d'extraction déjà payées : jamais relues deux fois (4000 entrées au plus)
+  let xcache = null, xTimer = null;
+  const cacheOf = async () => {
+    if (!xcache) xcache = new Map(Object.entries((await getMeta('mcpExtract')) || {}));
+    return { get: (k) => xcache.get(k), set: (k, v) => { xcache.delete(k); xcache.set(k, v); if (xcache.size > 4000) xcache.delete(xcache.keys().next().value); clearTimeout(xTimer); xTimer = setTimeout(() => setMeta('mcpExtract', Object.fromEntries(xcache)).catch(() => {}), 2000); } };
+  };
   const tools = createTools({
+    extractCfg: async () => {
+      const s = await getSettings();
+      if (!s.llm.baseUrl || !s.llm.apiKey) throw new Error('aucune IA configurée dans l’extension (⚙ › IA) : nécessaire pour la lecture en masse');
+      const model = s.mcp.extractModel || s.journal.assistModel || s.llm.model;
+      if (!model) throw new Error('aucun modèle d’extraction : renseigne-le dans ⚙ › Pont MCP');
+      return { model, budget: s.mcp.extractBudget || 0.3, prices: { inPerM: s.mcp.priceIn ?? 0.2, outPerM: s.mcp.priceOut ?? 0.6 }, cache: await cacheOf(),
+        llm: async (messages) => { const r = await chatFull(s.llm, messages, { model, maxTokens: 500, temperature: 0, noThink: true }); return { text: r.text, cost: r.usage.cost }; } };
+    },
     getIndex,
     embed: async (text) => { const r = await embed(text); if (!r || r.error) throw new Error(r?.error || 'pas de réponse du modèle'); return Float32Array.from(r.vec); },
     getTranscripts: async (ids) => (ids.length ? getTranscripts(ids) : new Map()),
@@ -69,7 +84,7 @@ export function startBridge({ embed }) {
   function scheduleRetry() { clearTimeout(retryTimer); retryTimer = setTimeout(connect, 8000); }
 
   chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) connect(); });
-  chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.settings) { const o = ch.settings.oldValue?.mcp, n = ch.settings.newValue?.mcp; if (JSON.stringify(o) !== JSON.stringify(n)) { disconnect(); connect(); } } });
+  chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.settings) { const o = ch.settings.oldValue?.mcp, n = ch.settings.newValue?.mcp; if (o?.on !== n?.on || o?.port !== n?.port || o?.token !== n?.token) { disconnect(); connect(); } } });
   connect();
   return { status: () => ({ connected: !!ws, indexed: index ? index.tweets.length : 0 }) };
 }

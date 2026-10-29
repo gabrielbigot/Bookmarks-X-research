@@ -56,6 +56,44 @@ test('search : pagination et liste compacte pour parcourir tous les éléments',
   assert.ok(!b.next_offset);
 });
 
+test('extract : un modèle bon marché lit des extraits ; citations vérifiées, cache, plafond, estimation', async () => {
+  const calls = [];
+  const cache = new Map();
+  const mk = (reply, cost = 0.001) => ctx({ extractCfg: async () => ({ model: 'm/x', budget: 0.3, prices: { inPerM: 0.2, outPerM: 0.6 }, cache: { get: (k) => cache.get(k), set: (k, v) => cache.set(k, v) }, llm: async (msgs) => { calls.push(msgs); return { text: reply, cost }; } }) });
+  const good = JSON.stringify({ answers: [{ value: 'Matthieu Rouif', evidence: 'Ici on explique la mémoire des agents' }] });
+  const t = createTools(mk(good));
+  const est = await t.extract({ question: 'Qui est l’invité ?', query: 'source:youtube', estimate: true });
+  assert.equal(est.estimateOnly, true); assert.equal(est.videos, 1); assert.equal(calls.length, 0); assert.ok(est.estimatedUsd > 0 && est.estimatedUsd < 0.01);
+  const r = await t.extract({ question: 'Qui est l’invité ?', query: 'source:youtube' });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0][1].content, /EXTRAITS :[\s\S]*\[0:00\] Bienvenue/); // l'ouverture de la vidéo est toujours montrée
+  assert.ok(!/Conclusion et remerciements/.test(calls[0][1].content) || calls[0][1].content.length < 4000);
+  assert.equal(r.results[0].answers[0].value, 'Matthieu Rouif'); assert.equal(r.results[0].answers[0].at, '2:05'); assert.match(r.results[0].answers[0].link, /t=125s$/);
+  assert.equal(r.costUsd, 0.001); assert.equal(r.rejectedCitations, 0);
+  await t.extract({ question: 'Qui est l’invité ?', query: 'source:youtube' }); // même question : cache, aucun appel de plus
+  assert.equal(calls.length, 1);
+  // citation inventée : la réponse est écartée
+  cache.clear();
+  const bad = createTools(mk(JSON.stringify({ answers: [{ value: 'Quelqu’un', evidence: 'Une phrase que la vidéo ne contient pas du tout' }] })));
+  const rb = await bad.extract({ question: 'Qui ?', ids: ['yt:v1'] });
+  assert.deepEqual(rb.results[0].answers, []); assert.equal(rb.rejectedCitations, 1);
+  // réponse illisible : pas mise en cache
+  cache.clear(); calls.length = 0;
+  const junk = createTools(mk('pas du json'));
+  assert.equal((await junk.extract({ question: 'Qui ?', ids: ['yt:v1'] })).invalidReplies, 1); assert.equal(cache.size, 0);
+  await assert.rejects(t.extract({ question: '' }), /question requise/);
+  assert.equal((await t.extract({ question: 'x', ids: ['1002'] })).videos, 0); // un tweet n'est pas une vidéo
+});
+
+test('extract : le plafond de coût arrête la lecture', async () => {
+  const many = Array.from({ length: 6 }, (_, i) => ({ ...video, id: 'yt:m' + i, videoId: 'm' + i, text: 'Vidéo ' + i, url: 'https://www.youtube.com/watch?v=m' + i }));
+  const ix = new Index(); ix.build(many, new Map());
+  const n = { c: 0 };
+  const t = createTools(ctx({ getIndex: async () => ix, getTranscripts: async (ids) => new Map(ids.map((i) => [i, chunks])), extractCfg: async () => ({ model: 'm', budget: 0.3, prices: { inPerM: 0.2, outPerM: 0.6 }, cache: { get: () => undefined, set() {} }, llm: async () => { n.c++; return { text: '{"answers":[]}', cost: 0.06 }; } }) }));
+  const r = await t.extract({ question: 'Qui ?', query: 'source:youtube', max_cost: 0.1, limit: 6 });
+  assert.equal(r.stoppedByBudget, true); assert.ok(n.c >= 2 && n.c < 6, 'appels : ' + n.c); assert.ok(r.results.some((x) => x.skipped));
+});
+
 test('get_item, get_transcript, similar, playlists, stats, journal', async () => {
   const t = createTools(ctx());
   assert.match((await t.get_item({ id: '1002' })).text, /tokio/i);

@@ -132,6 +132,11 @@ const server = https.createServer({ key: readFileSync(`${tmp}/k.pem`), cert: rea
         res.writeHead(200, { ...cors, 'content-type': 'application/json' });
         return res.end(JSON.stringify({ choices: [{ message: { content: '', images: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' } }] } }], usage: { prompt_tokens: 10, completion_tokens: 10, cost: 0.04 } }));
       }
+      if (String(body.messages[0].content).includes('Tu extrais une information')) { // lecture en masse : le modèle cite la première ligne des extraits
+        const first = String(body.messages.at(-1).content).split('EXTRAITS :\n')[1].split('\n')[0].replace(/^\[[\d:]+\]\s*/, '').slice(0, 60);
+        res.writeHead(200, { ...cors, 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ answers: [{ value: 'Conférencier Test', evidence: first }, { value: 'Invité inventé', evidence: 'Une phrase absente de la vidéo mais plausible' }] }) } }], usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.0004 } }));
+      }
       const sys = body.messages[0].content, usr = body.messages.at(-1).content;
       llmLog.push({ sys: sys.slice(0, 40), auth: req.headers.authorization });
       let out = 'ok', ann;
@@ -1343,6 +1348,28 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
     assert.ok(eds.editions.length >= 1, 'les éditions du journal sont listées');
     const ed = await call('journal_read', { id: eds.editions[0].id, max_chars: 2000 });
     assert.match(ed.text, /Gazette|Édition|ÉDITION|Éditorial/i);
+    const ex = await call('extract', { question: 'Qui est le conférencier ?', ids: ['yt:jr1'] });
+    assert.equal(ex.results[0].answers.length, 1, 'extract : la citation inventée est écartée : ' + JSON.stringify(ex).slice(0, 300));
+    assert.equal(ex.results[0].answers[0].value, 'Conférencier Test'); assert.equal(ex.results[0].answers[0].at, '0:00'); assert.equal(ex.rejectedCitations, 1);
+    assert.ok(ex.costUsd > 0 && ex.model);
+    const ex2 = await call('extract', { question: 'Qui est le conférencier ?', ids: ['yt:jr1'] });
+    assert.equal(ex2.cached, 1, 'extract : réponse relue du cache');
+    // banc d'essai des modèles (page dédiée) : une vidéo à identifiant YouTube valide, un modèle résolu d'après le catalogue
+    await journal.evaluate(async () => {
+      const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+      const tx = db.transaction(['tweets', 'transcripts'], 'readwrite');
+      tx.objectStore('tweets').put({ id: 'yt:abcdefghijk', kind: 'youtube', source: 'youtube', handle: 'chaine', name: 'Chaîne Test', text: 'Un entretien', url: 'https://www.youtube.com/watch?v=abcdefghijk', videoId: 'abcdefghijk', createdAt: null, sortIndex: '1', links: [], media: [], stats: {}, trState: 'ok', playlists: [], watched: [] });
+      tx.objectStore('transcripts').put({ id: 'yt:abcdefghijk', chunks: [{ t: 0, text: 'Bienvenue à tous, aujourd’hui nous recevons un conférencier passionnant.' }, { t: 60, text: 'La suite de l’entretien porte sur autre chose.' }] });
+      await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    });
+    const tp = await ctx.newPage();
+    await tp.goto(`chrome-extension://${extId}/extract-test.html`);
+    await tp.fill('#models', 'fresh 1');
+    await tp.fill('#cases', 'https://www.youtube.com/watch?v=abcdefghijk | Conférencier Test');
+    await tp.click('#go');
+    await waitFor(async () => /Terminé|⚠/.test(await tp.locator('#status').innerText()), 'banc d’essai des modèles', 60000);
+    assert.match(await tp.locator('#out').innerText(), /lab\/fresh-1[\s\S]*1 \/ 1/, await tp.locator('#out').innerText());
+    await tp.close();
     console.log('MCP : stats', stats.items, 'éléments, search', r.mode, r.results.length, 'résultats');
     // désactivé : l'extension se déconnecte et les appels échouent proprement
     await journal.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { ...settings.mcp, on: false } } }); });

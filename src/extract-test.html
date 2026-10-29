@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tester des modèles d’extraction</title>
+<style>
+body{margin:0;font:14px/1.45 system-ui,sans-serif;background:#f4f1e8;color:#141210}
+main{max-width:980px;margin:0 auto;padding:18px 14px 60px}
+h1{font-size:20px;margin:0 0 4px}.hint{color:#5d594f;margin:0 0 12px}
+label{display:block;font-weight:600;margin:12px 0 4px}
+input,textarea{width:100%;box-sizing:border-box;font:13px ui-monospace,Menlo,monospace;padding:8px;border:1px solid #bdb6a6;border-radius:8px;background:#fff}
+textarea{min-height:90px}
+button{font:600 13px system-ui;border:1px solid #bdb6a6;border-radius:999px;background:#fff;padding:7px 14px;cursor:pointer}
+button.primary{background:#141210;color:#fff;border-color:#141210}button:disabled{opacity:.5}
+.row{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+table{border-collapse:collapse;width:100%;background:#fff;margin-top:14px;font-size:13px}
+th,td{border-bottom:1px solid #e3ddcd;padding:6px 8px;text-align:left;vertical-align:top}th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#5d594f}
+.ok{color:#1a6b3a;font-weight:700}.ko{color:#8c1c13;font-weight:700}
+pre{background:#fff;border-radius:8px;padding:8px;white-space:pre-wrap;font-size:12px;max-height:260px;overflow:auto}
+</style>
+</head>
+<body><main>
+<h1>Tester des modèles d’extraction</h1>
+<p class="hint">Le pont MCP (outil <code>extract</code>) fait lire tes vidéos par un modèle peu coûteux. Ici, tu vérifies qu’un modèle en est capable <b>avant</b> de lui faire confiance : tu donnes quelques vidéos dont tu connais la réponse, et chaque modèle est noté sur ton jeu d’essai (justesse, citations exactes, coût, durée). Les vidéos doivent déjà être dans l’extension, avec leur transcription.</p>
+<label for="q">Question</label><input id="q" value="Qui est l’invité de cette vidéo ?">
+<label for="models">Modèles à comparer <small>(un par ligne : identifiant OpenRouter, ou quelques mots du nom — ils sont résolus d’après le catalogue)</small></label>
+<textarea id="models">deepseek v4 flash
+glm 5.3 flash
+mimo flash
+claude haiku</textarea>
+<label for="cases">Vidéos de test <small>(un lien ou un identifiant YouTube, puis « | » et les mots attendus dans la réponse)</small></label>
+<textarea id="cases" placeholder="https://www.youtube.com/watch?v=XXXXXXXXXXX | Matthieu Rouif&#10;YYYYYYYYYYY | Laurent Alexandre"></textarea>
+<div class="row"><button class="primary" id="go">Lancer la comparaison</button><span id="status" class="hint"></span></div>
+<div id="out"></div>
+</main><script src="extract-test.js" type="module"></script></body>
+</html>

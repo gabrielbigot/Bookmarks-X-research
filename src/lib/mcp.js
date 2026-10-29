@@ -6,6 +6,7 @@ import { semanticQuery, decodeEntities } from './text.js';
 import { videoPubMs } from './ytdate.js';
 import { snowflakeMs, dayKey } from './time.js';
 import { fmtTime } from './transcript.js';
+import { bestPassages, runExtract } from './extract.js';
 
 const clip = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
 const day = (ms) => (ms != null && Number.isFinite(ms) ? dayKey(ms) : null);
@@ -38,16 +39,7 @@ export function itemView(t, { full = false } = {}) {
   return JSON.parse(JSON.stringify(out)); // sans les clés vides
 }
 
-// Meilleur passage d'une transcription pour des mots : [{ at, text }] triés par pertinence
-export function bestPassages(chunks, terms, n = 3) {
-  const set = new Set(terms.map((x) => normalizeText(x)));
-  return (chunks || []).map((c) => {
-    const toks = tokenize(c.text);
-    let hits = 0;
-    for (const tk of toks) if (set.has(tk) || [...set].some((q) => q.length >= 4 && tk.startsWith(q))) hits++;
-    return { at: Math.floor(c.t || 0), text: c.text, score: hits / Math.sqrt(1 + toks.length) };
-  }).filter((p) => p.score > 0).sort((a, b) => b.score - a.score).slice(0, n);
-}
+export { bestPassages };
 
 export const htmlToText = (html) => decodeEntities(String(html || '')
   .replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ')
@@ -60,7 +52,8 @@ export const htmlToText = (html) => decodeEntities(String(html || '')
 export function createTools(ctx) {
   const rowOf = async (id) => { const index = await ctx.getIndex(); const row = index.rowById.get(String(id)); if (row === undefined) throw new Error(`élément inconnu : ${id}`); return { index, row, t: index.tweets[row] }; };
 
-  async function search(a) {
+  // sélection d'éléments (filtres + texte) : partagée par search et extract
+  async function pick(a) {
     const index = await ctx.getIndex();
     const parsed = parseQuery(String(a.query || ''));
     const filters = { ...parsed.filters };
@@ -70,7 +63,6 @@ export function createTools(ctx) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(a.since || '')) filters.since = a.since;
     if (/^\d{4}-\d{2}-\d{2}$/.test(a.until || '')) filters.until = a.until;
     if (a.from) filters.from = String(a.from).replace(/^@/, '').toLowerCase();
-    const brief = !!a.brief, limit = num(a.limit, brief ? 100 : 10, 1, brief ? 200 : 50), offset = num(a.offset, 0, 0, 100000);
     const text = parsed.text.trim();
     const mask = index.allowedMask(filters);
     let rows, mode = a.mode === 'keywords' || a.mode === 'semantic' ? a.mode : 'hybrid', sort = ['newest', 'oldest', 'likes', 'added'].includes(a.sort) ? a.sort : 'relevance';
@@ -93,6 +85,12 @@ export function createTools(ctx) {
     }
     const total = rows.length;
     if (sort !== 'relevance') rows = sortRows(rows.slice(0, 1500), index.tweets, sort === 'added' ? 'addednew' : sort);
+    return { index, rows, total, text, mode, notes };
+  }
+
+  async function search(a) {
+    const brief = !!a.brief, limit = num(a.limit, brief ? 100 : 10, 1, brief ? 200 : 50), offset = num(a.offset, 0, 0, 100000);
+    const { index, rows, total, text, mode, notes } = await pick(a);
     const top = rows.slice(offset, offset + limit);
     const terms = text ? tokenize(text) : [];
     const trs = terms.length && !brief ? await ctx.getTranscripts(top.map(([r]) => index.tweets[r]).filter((t) => t.trState === 'ok').map((t) => t.id)) : new Map();
@@ -108,6 +106,28 @@ export function createTools(ctx) {
 
   return {
     search,
+
+    // Lecture en masse par un modèle peu coûteux (réglé dans ⚙ › Pont MCP) : seules les réponses reviennent à l'assistant.
+    async extract(a) {
+      const question = String(a.question || '').trim();
+      if (!question) throw new Error('question requise');
+      let vids, next;
+      if (Array.isArray(a.ids) && a.ids.length) {
+        const index = await ctx.getIndex();
+        vids = a.ids.slice(0, 300).map((id) => index.tweets[index.rowById.get(String(id))]).filter((v) => v && isVideoItem(v));
+      } else {
+        const p = await pick({ ...a, source: 'youtube', query: a.query || '' });
+        const limit = num(a.limit, 60, 1, 300), offset = num(a.offset, 0, 0, 100000);
+        vids = p.rows.slice(offset, offset + limit).map(([r]) => p.index.tweets[r]).filter(isVideoItem);
+        if (offset + limit < Math.min(p.total, 1500)) next = offset + limit;
+      }
+      if (!vids.length) return { videos: 0, note: 'aucune vidéo ne correspond à la sélection' };
+      const cfg = await ctx.extractCfg();
+      const budget = Math.min(5, Math.max(0.01, Number(a.max_cost) || cfg.budget));
+      const r = await runExtract({ llm: cfg.llm, cache: cfg.cache, getTranscripts: ctx.getTranscripts, model: cfg.model, prices: cfg.prices }, vids, question, { budget, estimateOnly: !!a.estimate });
+      if (r.results) { const byId = new Map(vids.map((v) => [v.id, v])); for (const x of r.results) x.published = itemView(byId.get(x.id) || {}).published; }
+      return { ...r, ...(next !== undefined ? { next_offset: next } : {}), budgetUsd: budget };
+    },
 
     async get_item({ id }) { const { t } = await rowOf(id); return itemView(t, { full: true }); },
 

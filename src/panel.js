@@ -1185,7 +1185,8 @@ $('upd-tr').onchange = async (e) => { settings = await setSettings({ updTranscri
 const newToken = () => [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, '0')).join('');
 async function showMcp() {
   const m = settings.mcp || {};
-  $('mcp-on').checked = !!m.on; $('mcp-box').hidden = !m.on;
+  $('mcp-on').checked = !!m.on; $('mcp-box').hidden = !m.on; $('mcp-box2').hidden = !m.on;
+  $('mcp-model').value = m.extractModel || ''; $('mcp-budget').value = m.extractBudget ?? 0.3; $('mcp-pin').value = m.priceIn ?? 0.2; $('mcp-pout').value = m.priceOut ?? 0.6;
   $('mcp-port').value = m.port || 47821; $('mcp-token').value = m.token || '';
   if (!m.on) return;
   const st = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
@@ -1193,6 +1194,11 @@ async function showMcp() {
 }
 const saveMcp = async (patch) => { settings = await setSettings({ mcp: patch }); await showMcp(); setTimeout(showMcp, 2500); };
 $('mcp-on').onchange = (e) => saveMcp({ on: e.target.checked, token: settings.mcp?.token || newToken() });
+$('mcp-model').onchange = (e) => saveMcp({ extractModel: e.target.value.trim() });
+$('mcp-budget').onchange = (e) => saveMcp({ extractBudget: Math.max(0.01, Number(e.target.value) || 0.3) });
+$('mcp-pin').onchange = (e) => saveMcp({ priceIn: Math.max(0, Number(e.target.value) || 0) });
+$('mcp-pout').onchange = (e) => saveMcp({ priceOut: Math.max(0, Number(e.target.value) || 0) });
+$('mcp-test').onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL('extract-test.html') });
 $('mcp-new').onclick = () => saveMcp({ token: newToken() });
 $('mcp-port').onchange = (e) => saveMcp({ port: Math.min(65535, Math.max(1024, Math.round(Number(e.target.value)) || 47821)) });
 const copyText = async (btn, text) => { await navigator.clipboard.writeText(text); const o = btn.textContent; btn.textContent = 'Copié ✓'; setTimeout(() => (btn.textContent = o), 1500); };
