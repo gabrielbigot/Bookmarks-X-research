@@ -1,0 +1,14 @@
+// Description des outils MCP (données pures : partagées par le pont de l'extension et par mcp/server.mjs).
+const SRC = { type: 'string', enum: ['all', 'x', 'youtube'], description: 'Limiter aux tweets (x) ou aux vidéos (youtube)' };
+export const TOOL_DEFS = [
+  { name: 'search', description: 'Recherche dans les bookmarks X et les vidéos YouTube (playlists, historique, transcriptions) de l’utilisateur : par le sens ET par mots-clés. La requête accepte des opérateurs : from:@compte, since:2026-01-01, until:…, has:link|media|video|transcript, source:youtube, playlist:"nom", lang:fr, viewed:oui. Sans mots (opérateurs seuls), liste les derniers éléments ajoutés.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Texte libre (français ou anglais) et opérateurs' }, source: SRC, from: { type: 'string', description: 'Compte X ou chaîne YouTube' }, since: { type: 'string', description: 'AAAA-MM-JJ' }, until: { type: 'string', description: 'AAAA-MM-JJ' }, sort: { type: 'string', enum: ['relevance', 'newest', 'oldest', 'likes', 'added'] }, mode: { type: 'string', enum: ['hybrid', 'semantic', 'keywords'] }, limit: { type: 'integer', minimum: 1, maximum: 50 } }, required: ['query'] } },
+  { name: 'get_item', description: 'Détail complet d’un tweet ou d’une vidéo (id renvoyé par search).', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'get_transcript', description: 'Transcription d’une vidéo YouTube : passages les plus proches d’une question (query), ou lecture continue à partir d’un instant (from_seconds ; next_from_seconds indique la suite).',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, query: { type: 'string' }, from_seconds: { type: 'integer' }, max_chars: { type: 'integer' } }, required: ['id'] } },
+  { name: 'similar', description: 'Éléments les plus proches (par le sens) d’un tweet ou d’une vidéo donné.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, limit: { type: 'integer' }, source: SRC }, required: ['id'] } },
+  { name: 'list_playlists', description: 'Playlists YouTube de l’utilisateur et nombre de vidéos de chacune.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'stats', description: 'Vue d’ensemble : nombre de bookmarks, de vidéos, de transcriptions, comptes les plus enregistrés, volume par mois.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'journal_list', description: 'Éditions du journal hebdomadaire (La Gazette) déjà générées.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'journal_read', description: 'Texte d’une édition du journal (par tranches : next_offset indique la suite).', inputSchema: { type: 'object', properties: { id: { type: 'string' }, offset: { type: 'integer' }, max_chars: { type: 'integer' } }, required: ['id'] } },
+];

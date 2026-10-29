@@ -2,6 +2,7 @@ import { putTweets, putVideos, putHistory, putTranscript, markNoTranscript, pend
 import { toItem, toHistoryItem } from './lib/youtube.js';
 import { getSettings } from './lib/settings.js';
 import { runAutoJev } from './lib/autojev.js';
+import { startBridge } from './bridge.js';
 
 const PANEL_URL = chrome.runtime.getURL('panel.html');
 const X_TABS = ['https://x.com/*', 'https://twitter.com/*'];
@@ -29,6 +30,9 @@ async function getConfig() {
   const hasPerm = await chrome.permissions.contains({ origins: ['https://*/*', 'http://*/*'] }).catch(() => false);
   return { enrichLinks: s.enrichLinks && hasPerm, imageSearch: s.imageSearch, embedModel: s.embedModel, compute: s.compute, indexMode: s.indexMode, trPassages: s.ytTrPassages, threads: s.threads };
 }
+
+// Pont MCP (désactivé par défaut) : l'embedding de la requête passe par le même document hors-écran que le panneau.
+const bridge = startBridge({ embed: async (text) => { await ensureOffscreen(); return chrome.runtime.sendMessage({ type: 'off:embedQuery', text, config: await getConfig() }); } });
 
 // run = demande explicite de l'utilisateur (bouton « Indexer »). En mode manuel, rien ne démarre sans elle :
 // ni au lancement du navigateur, ni sur l'alarme, ni à l'arrivée de nouveaux tweets.
@@ -395,6 +399,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         .then(sendResponse, (e) => sendResponse({ error: String(e) }));
       return true;
     }
+    case 'q:mcpStatus': { sendResponse(bridge.status()); return false; }
     case 'q:index': { kickIndexing(!!(msg.run || msg.force), !!msg.force); return false; }
     case 'q:indexStop': {
       ensureOffscreen().then(() => chrome.runtime.sendMessage({ type: 'off:stop' })).then(sendResponse, (e) => sendResponse({ error: String(e) }));

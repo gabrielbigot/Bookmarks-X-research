@@ -1318,6 +1318,40 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
 }
 
 
+// ------------------------------------------------------------------ pont MCP : serveur Node <-> extension réelle
+{
+  const { spawn } = await import('node:child_process');
+  const port = 47900 + Math.floor(Math.random() * 90);
+  const srv = spawn(process.execPath, ['mcp/server.mjs'], { env: { ...process.env, XBS_TOKEN: 'e2e-token', XBS_PORT: String(port) }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const got = []; let acc = '';
+  srv.stdout.setEncoding('utf8'); srv.stdout.on('data', (d) => { acc += d; let i; while ((i = acc.indexOf('\n')) >= 0) { got.push(JSON.parse(acc.slice(0, i))); acc = acc.slice(i + 1); } });
+  let nid = 100;
+  const call = async (name, args) => { const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n'); await waitFor(() => got.some((m) => m.id === id), 'réponse MCP ' + name, 60000); const r = got.find((m) => m.id === id).result; assert.ok(!r.isError, name + ' : ' + r.content[0].text); return JSON.parse(r.content[0].text); };
+  try {
+    await new Promise((r) => setTimeout(r, 500));
+    await journal.evaluate(async (p) => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { on: true, port: p, token: 'e2e-token' } } }); }, port);
+    const stats = await (async () => { for (let i = 0; i < 25; i++) { const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'stats', arguments: {} } }) + '\n'); await waitFor(() => got.some((m) => m.id === id), 'réponse stats', 60000); const r = got.find((m) => m.id === id).result; if (!r.isError) return JSON.parse(r.content[0].text); await new Promise((x) => setTimeout(x, 1000)); } throw new Error('l’extension ne s’est pas connectée au serveur MCP'); })();
+    assert.ok(stats.items >= 300 && stats.tweets > 0, 'stats via MCP : ' + JSON.stringify(stats).slice(0, 200));
+    const r = await call('search', { query: 'agents mémoire', limit: 5 });
+    assert.ok(r.results.length >= 3 && r.results.every((x) => x.id && x.url), 'search via MCP : ' + JSON.stringify(r).slice(0, 300));
+    assert.ok(['hybrid', 'keywords'].includes(r.mode));
+    const item = await call('get_item', { id: r.results[0].id });
+    assert.equal(item.id, r.results[0].id);
+    const pls = await call('list_playlists', {});
+    assert.ok(Array.isArray(pls.playlists));
+    const eds = await call('journal_list', {});
+    assert.ok(eds.editions.length >= 1, 'les éditions du journal sont listées');
+    const ed = await call('journal_read', { id: eds.editions[0].id, max_chars: 2000 });
+    assert.match(ed.text, /Gazette|Édition|ÉDITION|Éditorial/i);
+    console.log('MCP : stats', stats.items, 'éléments, search', r.mode, r.results.length, 'résultats');
+    // désactivé : l'extension se déconnecte et les appels échouent proprement
+    await journal.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { ...settings.mcp, on: false } } }); });
+    await new Promise((x) => setTimeout(x, 1500));
+    const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'stats', arguments: {} } }) + '\n');
+    await waitFor(() => got.some((m) => m.id === id), 'réponse après désactivation', 20000);
+    assert.equal(got.find((m) => m.id === id).result.isError, true, 'pont désactivé : plus de réponse');
+  } finally { srv.kill(); }
+}
 console.log('E2E OK');
 await ctx.close();
 server.close();

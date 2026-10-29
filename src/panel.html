@@ -175,6 +175,8 @@
         <label class="chk"><input type="checkbox" id="upd-hist"><span>« Tout mettre à jour » inclut l'historique YouTube <span class="hint">(à activer une fois ton historique rattrapé)</span></span></label>
         <label class="chk"><input type="checkbox" id="upd-tr"><span>« Tout mettre à jour » inclut les transcriptions des nouvelles vidéos</span></label>
         <label class="chk"><input type="checkbox" id="opt-tabs"><span>Autoriser la mise à jour automatique à ouvrir un onglet X / YouTube en arrière-plan <span class="hint">(refermé ensuite)</span></span></label>
+        <label class="chk"><input type="checkbox" id="mcp-on"><span>Pont MCP : laisser un assistant IA installé sur cet ordinateur (Claude Desktop, Claude Code…) chercher dans mes bookmarks et mes vidéos <span class="hint">(lecture seule, connexion locale uniquement ; ce que l'assistant lit est envoyé à son fournisseur — voir mcp/README.md)</span></span></label>
+        <div class="chk" id="mcp-box" hidden><span>Port <input id="mcp-port" type="number" min="1024" max="65535" style="width:80px"> · jeton <input id="mcp-token" readonly style="width:150px"></span> <button type="button" id="mcp-cmd">Copier la commande Claude Code</button> <button type="button" id="mcp-tok">Copier le jeton</button> <button type="button" id="mcp-new">Nouveau jeton</button> <span class="hint" id="mcp-state"></span></div>
         <div class="btns"><button type="button" id="reindex">Tout réindexer</button></div>
       </section>
 

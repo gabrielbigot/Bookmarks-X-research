@@ -1076,6 +1076,7 @@ async function openSettings() {
   $('opt-autoindex').checked = settings.indexMode !== 'manual';
   $('opt-tabs').checked = settings.autoTabs;
   $('upd-hist').checked = settings.updHistory;
+  showMcp();
   $('upd-tr').checked = settings.updTranscripts;
   pollStatus();
   $('opt-linkimg').checked = settings.linkImages;
@@ -1180,6 +1181,23 @@ $('threads').onchange = async (e) => { settings = await setSettings({ threads: e
 $('opt-autoindex').onchange = async (e) => { settings = await setSettings({ indexMode: e.target.checked ? 'soft' : 'manual' }); };
 $('upd-hist').onchange = async (e) => { settings = await setSettings({ updHistory: e.target.checked }); };
 $('upd-tr').onchange = async (e) => { settings = await setSettings({ updTranscripts: e.target.checked }); };
+// pont MCP : jeton aléatoire, commande prête à copier, état de la connexion
+const newToken = () => [...crypto.getRandomValues(new Uint8Array(24))].map((x) => x.toString(16).padStart(2, '0')).join('');
+async function showMcp() {
+  const m = settings.mcp || {};
+  $('mcp-on').checked = !!m.on; $('mcp-box').hidden = !m.on;
+  $('mcp-port').value = m.port || 47821; $('mcp-token').value = m.token || '';
+  if (!m.on) return;
+  const st = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
+  $('mcp-state').textContent = st?.connected ? `✓ connecté (${st.indexed.toLocaleString('fr-FR')} éléments en mémoire)` : 'en attente du serveur MCP (lancé par ton assistant ; l’extension réessaie toute seule)';
+}
+const saveMcp = async (patch) => { settings = await setSettings({ mcp: patch }); await showMcp(); setTimeout(showMcp, 2500); };
+$('mcp-on').onchange = (e) => saveMcp({ on: e.target.checked, token: settings.mcp?.token || newToken() });
+$('mcp-new').onclick = () => saveMcp({ token: newToken() });
+$('mcp-port').onchange = (e) => saveMcp({ port: Math.min(65535, Math.max(1024, Math.round(Number(e.target.value)) || 47821)) });
+const copyText = async (btn, text) => { await navigator.clipboard.writeText(text); const o = btn.textContent; btn.textContent = 'Copié ✓'; setTimeout(() => (btn.textContent = o), 1500); };
+$('mcp-tok').onclick = (e) => copyText(e.target, settings.mcp.token);
+$('mcp-cmd').onclick = (e) => copyText(e.target, `claude mcp add bookmarks -e XBS_TOKEN=${settings.mcp.token}${settings.mcp.port && settings.mcp.port !== 47821 ? ' -e XBS_PORT=' + settings.mcp.port : ''} -- node /CHEMIN/VERS/Bookmarks-X-research/mcp/server.mjs`);
 $('opt-tabs').onchange = async (e) => { settings = await setSettings({ autoTabs: e.target.checked }); };
 $('mem-free').onclick = async () => {
   $('mem-info').textContent = 'Libération…';
