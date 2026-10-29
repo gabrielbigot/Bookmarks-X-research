@@ -52,8 +52,8 @@ async function load(full = false) {
 
 function updateStats() {
   const n = index.tweets.length, v = index.vectorCount();
-  const nv = index.tweets.reduce((c, t) => c + (isVideoItem(t) ? 1 : 0), 0);
-  $('stats').textContent = `${(n - nv).toLocaleString('fr-FR')} bookmarks${nv ? ` · ${nv.toLocaleString('fr-FR')} vidéos YouTube` : ''} · ${v.toLocaleString('fr-FR')} indexés sémantiquement (${modelOf(settings.embedModel).label.split(' (')[0]}) · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
+  const nv = index.tweets.reduce((c, t) => c + (isVideoItem(t) ? 1 : 0), 0), ntr = index.tweets.reduce((c, t) => c + (isVideoItem(t) && t.trState === 'ok' ? 1 : 0), 0);
+  $('stats').textContent = `${(n - nv).toLocaleString('fr-FR')} bookmarks${nv ? ` · ${nv.toLocaleString('fr-FR')} vidéos YouTube (${ntr.toLocaleString('fr-FR')} transcrites)` : ''} · ${v.toLocaleString('fr-FR')} indexés sémantiquement (${modelOf(settings.embedModel).label.split(' (')[0]}) · build ${typeof __BUILD__ === 'string' ? __BUILD__ : 'dev'}`;
 }
 
 // ---------- recherche ----------
@@ -455,6 +455,18 @@ function linkCardHtml(c) {
 const avatarUrl = (u) => (u ? u.replace('_normal.', '_bigger.') : '');
 
 // ---------- carte d'une vidéo YouTube ----------
+// Pastille « transcription » de chaque vidéo : récupérée (et d'où), absente chez YouTube, ou pas encore tentée.
+function trBadge(t) {
+  if (t.unavailable) return '';
+  const k = t.trChars ? ` ≈ ${Math.max(1, Math.round(t.trChars / 1000))} k caractères de texte parlé.` : '';
+  const when = t.trAt ? ` Récupérée le ${new Date(t.trAt).toLocaleDateString('fr-FR')}.` : '';
+  if (t.trState === 'ok') return t.trSource === 'ai'
+    ? `<span class="yt-trb ai" title="Transcription générée par une IA (peut contenir des erreurs), cherchée dans le texte parlé.${esc(k + when)}">🤖 Transcription IA</span>`
+    : `<span class="yt-trb ok" title="Transcription de YouTube récupérée : la recherche porte aussi sur ce qui est dit dans la vidéo.${esc(k + when)}">🗒 Transcription</span>`;
+  if (t.trState === 'none') return '<span class="yt-trb none" title="YouTube ne propose pas de transcription pour cette vidéo (nouvel essai automatique après 30 jours). Seuls le titre et la description sont cherchés.">Pas de transcription</span>';
+  return `<span class="yt-trb todo" title="${(t.playlists || []).length ? 'Pas encore récupérée : le bouton « Transcriptions » de la barre du haut la récupère.' : 'Vidéo de l’historique : ses transcriptions ne sont pas récupérées automatiquement (bouton « Transcriptions »).'}">Transcription : à récupérer</span>`;
+}
+
 function videoCard([row], terms, pos) {
   const t = index.tweets[row];
   const el = document.createElement('article');
@@ -470,7 +482,7 @@ function videoCard([row], terms, pos) {
   el.innerHTML = `
     <div class="yt-thumb">${t.thumb ? `<img loading="lazy" referrerpolicy="no-referrer" src="${esc(t.thumb)}" alt="">` : ''}${t.durationText ? `<span class="dur">${esc(t.durationText)}</span>` : ''}${t.progress ? `<span class="prog"><i style="width:${Math.min(100, t.progress)}%"></i></span>` : ''}</div>
     <div class="yt-b">
-      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}${t.trState === 'ok' ? `<span class="yt-tr" title="${t.trSource === 'ai' ? 'Transcription générée par une IA (peut contenir des erreurs) — cherchée dans le texte parlé' : 'Transcription disponible (cherchée dans le texte parlé)'}">${t.trSource === 'ai' ? '🤖' : '🗒'}</span>` : ''}</div>
+      <div class="yt-t"><span class="ytmark">▶</span>${hl(decodeEntities(t.text), terms)}${t.unavailable ? '<span class="yt-na">indisponible</span>' : ''}${trBadge(t)}</div>
       <div class="yt-m"><a href="#" data-q="${esc('from:@' + t.handle)}" title="Voir les vidéos de cette chaîne">${esc(t.name || t.handle)}</a>${meta ? ' · ' + esc(meta) : ''}</div>
       ${seen}
       ${pls.length ? `<div class="yt-pl">${pls.map((p) => `<button class="chip-pl" type="button" data-q="${esc(`playlist:"${p.title}"`)}" title="Voir cette playlist">${esc(p.title)}</button>`).join('')}</div>` : ''}

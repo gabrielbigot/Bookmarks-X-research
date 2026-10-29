@@ -211,3 +211,7 @@ body.grid .yt-thumb{width:100%}
 .mcp-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .mcp-btns button{white-space:nowrap;font-size:12.5px;padding:5px 12px}
 .mcp .hint{margin:8px 0 0}
+
+/* pastille de transcription des vidéos */
+.yt-trb{display:inline-block;margin-left:8px;padding:0 7px;border-radius:999px;border:1px solid currentColor;font-size:11px;font-weight:700;line-height:18px;vertical-align:middle;white-space:nowrap}
+.yt-trb.ok{color:#2e9e63}.yt-trb.ai{color:var(--acc)}.yt-trb.none{color:var(--mut,#71767b)}.yt-trb.todo{color:var(--mut,#71767b);border-style:dashed;font-weight:600}

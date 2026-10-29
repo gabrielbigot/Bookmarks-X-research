@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBookmarksResponse } from '../src/lib/parse.js';
-import { Index, DIM, parseQuery, rrf, tokenize } from '../src/lib/search.js';
+import { Index, DIM, parseQuery, rrf, tokenize, passesFilters } from '../src/lib/search.js';
 import { demoPage } from './fixtures/bookmarks.js';
 
 const { tweets } = parseBookmarksResponse(demoPage());
@@ -39,4 +39,13 @@ test('filtres : from, has, lang, since', () => {
   assert.equal(ids(idx.bm25('agents', idx.allowedMask(parseQuery('from:rustacean').filters))).length, 0);
   assert.equal(parseQuery('from:@x hello world').text, 'hello world');
   assert.ok(idx.allowedMask(parseQuery('has:media').filters)[2]);
+});
+
+test('has:notranscript : vidéos dont la transcription manque', () => {
+  const mk = (id, extra) => ({ id: 'yt:' + id, kind: 'youtube', source: 'youtube', videoId: id, handle: 'c', name: 'C', text: 'v ' + id, url: 'u' + id, links: [], media: [], stats: {}, sortIndex: '1', ...extra });
+  const vids = [mk('a', { trState: 'ok' }), mk('b', { trState: 'none' }), mk('c', {}), mk('d', { unavailable: true })];
+  const ix = new Index(); ix.build([...vids, ...tweets], new Map());
+  const f = parseQuery('has:notranscript').filters;
+  const got = ix.tweets.filter((t) => passesFilters(t, f)).map((t) => t.id).sort();
+  assert.deepEqual(got, ['yt:b', 'yt:c']);
 });

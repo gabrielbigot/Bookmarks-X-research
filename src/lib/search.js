@@ -112,6 +112,7 @@ export function passesFilters(t, f) {
   for (const h of f.has ?? []) {
     if (h === 'link' && !t.links.length && !t.quoted?.links?.length) return false;
     if (h === 'transcript' && t.trState !== 'ok') return false;
+    if (h === 'notranscript' && (!isVideo || t.trState === 'ok' || t.unavailable)) return false; // vidéos dont la transcription manque (absente chez YouTube ou pas encore récupérée)
     if (h === 'media' && !t.media.length) return false;
     if (h === 'image' && !t.media.some((m) => m.type === 'photo')) return false;
     if (h === 'video' && !t.media.some((m) => m.type === 'video' || m.type === 'animated_gif')) return false;

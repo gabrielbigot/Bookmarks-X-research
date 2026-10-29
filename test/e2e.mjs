@@ -718,6 +718,7 @@ await waitFor(() => !ctx.pages().some((p) => p.url().includes('youtube.com')), '
 await panel.fill('#q', 'cerveau');
 await waitFor(async () => /Le cerveau expliqué/.test(await panel.locator('.tw.yt').first().innerText().catch(() => '')), 'cerveau (historique)', 8000);
 const wv = panel.locator('.tw.yt').first();
+assert.equal(await wv.locator('.yt-trb').count(), 1, 'chaque vidéo affiche l’état de sa transcription');
 await waitFor(async () => (await wv.locator('.yt-w').count()) > 0, 'badge « Vu » (rechargement de l’index)', 10000);
 assert.match(await wv.locator('.yt-w').innerText(), new RegExp('Vu le ' + dayIso(0) + ' · 60 %'));
 assert.equal(await wv.locator('.prog i').evaluate((e) => e.style.width), '60%');
@@ -763,7 +764,7 @@ const sn = panel.locator('.tw.yt').first().locator('.yt-sn');
 await waitFor(async () => (await sn.count()) > 0, 'extrait de transcription', 10000);
 assert.match(await sn.innerText(), /▶ 2:05 … .*zorglubtranscript/);
 assert.equal(await sn.locator('a').getAttribute('href'), 'https://www.youtube.com/watch?v=w1&t=125s');
-assert.equal(await panel.locator('.tw.yt').first().locator('.yt-tr').count(), 1, 'badge transcription');
+assert.equal(await panel.locator('.tw.yt').first().locator('.yt-trb.ok').count(), 1, 'pastille transcription');
 await count('has:transcript', 3, 'has:transcript');
 // deuxième passage : plus rien à récupérer (les vidéos sans transcription ne sont pas redemandées avant 30 jours)
 await panel.fill('#q', '');
