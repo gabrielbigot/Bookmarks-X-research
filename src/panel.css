@@ -253,3 +253,7 @@ body.grid .yt-thumb{width:100%}
 .afc button:hover{color:var(--fg)}
 .bar{margin-top:8px}
 .badge[hidden]{display:none}
+
+/* la pastille de transcription est posée sur la miniature : toujours visible, même quand le titre est coupé */
+.yt-thumb .yt-trb{position:absolute;left:6px;top:6px;margin:0;background:#000d;border:1px solid #fff4;font-size:11px;line-height:17px;padding:0 7px;max-width:calc(100% - 12px);overflow:hidden;text-overflow:ellipsis}
+.yt-thumb .yt-trb.ok{color:#5ee0a0}.yt-thumb .yt-trb.ai{color:#7cc8ff}.yt-thumb .yt-trb.none{color:#c9ccd0}.yt-thumb .yt-trb.todo{color:#c9ccd0;border-style:dashed}
