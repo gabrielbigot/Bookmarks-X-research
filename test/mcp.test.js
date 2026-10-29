@@ -145,3 +145,26 @@ test('serveur MCP sans jeton : refuse de démarrer l’écoute et le dit', async
   srv.kill();
   assert.match(err, /XBS_TOKEN manquant/); assert.equal(out.result.isError, true); assert.match(out.result.content[0].text, /jeton/);
 });
+
+test('setup.mjs : ajoute le serveur à une config existante sans rien casser, refuse un JSON invalide', async () => {
+  const fs = await import('node:fs'), os = await import('node:os'), path = await import('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-setup-'));
+  const file = path.join(dir, 'claude_desktop_config.json');
+  const run = (...a) => new Promise((res) => { const p = spawn(process.execPath, ['mcp/setup.mjs', ...a], { stdio: ['ignore', 'pipe', 'pipe'] }); let o = ''; p.stdout.on('data', (d) => (o += d)); p.stderr.on('data', (d) => (o += d)); p.on('close', (code) => res({ code, o })); });
+  fs.writeFileSync(file, JSON.stringify({ theme: 'dark', mcpServers: { autre: { command: 'x' } } }));
+  const r = await run('--token', 'tok123', '--port', '48000', '--config', file);
+  assert.equal(r.code, 0, r.o);
+  const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(cfg.theme, 'dark'); assert.deepEqual(cfg.mcpServers.autre, { command: 'x' });
+  assert.equal(cfg.mcpServers.bookmarks.env.XBS_TOKEN, 'tok123'); assert.equal(cfg.mcpServers.bookmarks.env.XBS_PORT, '48000');
+  assert.ok(path.isAbsolute(cfg.mcpServers.bookmarks.args[0]) && cfg.mcpServers.bookmarks.args[0].endsWith(path.join('mcp', 'server.mjs')));
+  assert.ok(fs.existsSync(file + '.bak'));
+  assert.equal((await run('--remove', '--config', file)).code, 0);
+  assert.ok(!('bookmarks' in JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers));
+  fs.writeFileSync(file, '{ "theme": ');
+  const bad = await run('--token', 't', '--config', file);
+  assert.equal(bad.code, 1); assert.match(bad.o, /pas un JSON valide/); assert.equal(fs.readFileSync(file, 'utf8'), '{ "theme": ');
+  fs.rmSync(file); // fichier absent : créé
+  assert.equal((await run('--token', 't', '--config', file)).code, 0); assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.bookmarks);
+  assert.equal((await run('--config', file)).code, 1); // jeton manquant
+});

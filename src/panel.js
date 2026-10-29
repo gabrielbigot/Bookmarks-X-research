@@ -1197,6 +1197,7 @@ $('mcp-new').onclick = () => saveMcp({ token: newToken() });
 $('mcp-port').onchange = (e) => saveMcp({ port: Math.min(65535, Math.max(1024, Math.round(Number(e.target.value)) || 47821)) });
 const copyText = async (btn, text) => { await navigator.clipboard.writeText(text); const o = btn.textContent; btn.textContent = 'Copié ✓'; setTimeout(() => (btn.textContent = o), 1500); };
 $('mcp-tok').onclick = (e) => copyText(e.target, settings.mcp.token);
+$('mcp-desk').onclick = (e) => copyText(e.target, `node /CHEMIN/VERS/Bookmarks-X-research/mcp/setup.mjs --token ${settings.mcp.token}${settings.mcp.port && settings.mcp.port !== 47821 ? ' --port ' + settings.mcp.port : ''}`);
 $('mcp-cmd').onclick = (e) => copyText(e.target, `claude mcp add bookmarks -e XBS_TOKEN=${settings.mcp.token}${settings.mcp.port && settings.mcp.port !== 47821 ? ' -e XBS_PORT=' + settings.mcp.port : ''} -- node /CHEMIN/VERS/Bookmarks-X-research/mcp/server.mjs`);
 $('opt-tabs').onchange = async (e) => { settings = await setSettings({ autoTabs: e.target.checked }); };
 $('mem-free').onclick = async () => {

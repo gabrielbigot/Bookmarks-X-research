@@ -20,15 +20,25 @@ Prérequis : Node 18 ou plus, le dépôt cloné (`git pull && npm run build`, ex
 2. Déclare le serveur dans ton assistant :
    * **Claude Code** : bouton « Copier la commande Claude Code » dans ⚙, puis colle-la en remplaçant `/CHEMIN/VERS` par l'emplacement du dépôt :
      `claude mcp add bookmarks -e XBS_TOKEN=<jeton> -- node /CHEMIN/VERS/Bookmarks-X-research/mcp/server.mjs`
-   * **Claude Desktop** : Paramètres › Développeur › Modifier la config (`claude_desktop_config.json`) :
+   * **Claude Desktop** (sans écrire de JSON) : dans un terminal, dans le dossier du projet, lance
+     `node mcp/setup.mjs --token <jeton>`
+     (le bouton « Copier la commande Claude Desktop » de ⚙ la prépare). Le script ajoute l'entrée `bookmarks` à `claude_desktop_config.json` en gardant tout le reste, fait une copie de sauvegarde (`.bak`) et refuse de toucher à un fichier invalide. Puis **quitte complètement Claude Desktop et relance-le**. Pour retirer le serveur : `node mcp/setup.mjs --remove`.
+     <details><summary>À la main</summary>
+
+     Le fichier est déjà un objet JSON : n'ajoute que la partie `"mcpServers"` **à l'intérieur** des accolades existantes, avec une virgule entre deux entrées (et jamais après la dernière) :
      ```json
-     { "mcpServers": { "bookmarks": {
-         "command": "node",
-         "args": ["/CHEMIN/VERS/Bookmarks-X-research/mcp/server.mjs"],
-         "env": { "XBS_TOKEN": "<jeton>" }
-     } } }
+     {
+       "autres_reglages": "déjà présents",
+       "mcpServers": {
+         "bookmarks": {
+           "command": "node",
+           "args": ["/CHEMIN/VERS/Bookmarks-X-research/mcp/server.mjs"],
+           "env": { "XBS_TOKEN": "<jeton>" }
+         }
+       }
+     }
      ```
-     puis redémarre Claude Desktop.
+     </details>
 3. Chrome doit être ouvert avec l'extension active. Dans ⚙ › Pont MCP, l'état passe à « ✓ connecté » quelques secondes après le lancement de l'assistant (l'extension réessaie toutes les 8 s, puis toutes les 30 s).
 
 Autre port : `XBS_PORT=48000` côté serveur **et** même valeur dans ⚙. **Un seul assistant à la fois** : un deuxième serveur MCP lancé en parallèle ne pourrait pas utiliser le même port (il le signale dans ses logs).
