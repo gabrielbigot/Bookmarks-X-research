@@ -1193,7 +1193,7 @@ async function showMcp() {
   const d = st?.diag || {};
   if (st?.loadError) { $('mcp-state').textContent = '✗ le pont MCP n’a pas pu démarrer dans ce navigateur : ' + st.loadError.split('\n')[0]; return; }
   $('mcp-state').textContent = st?.connected ? `✓ connecté (${st.indexed.toLocaleString('fr-FR')} éléments en mémoire)`
-    : !st ? 'extension en cours de démarrage…'
+    : !st ? '✗ l’arrière-plan de l’extension ne répond pas : recharge l’extension (page des extensions du navigateur › ↻) puis rouvre ce panneau.'
     : d.probe === 'none' ? `✗ aucun serveur MCP n’écoute sur le port ${m.port || 47821} : l’assistant ne l’a pas lancé. Claude Desktop : Paramètres › Développeur, « bookmarks » doit être « running » (sinon voir les logs, mcp/README.md).`
     : d.probe === 'other' ? `✗ quelque chose répond sur le port ${m.port || 47821} sans être le serveur MCP à jour : une ancienne copie du serveur (quitte complètement Claude Desktop puis relance-le, après git pull) ou un autre programme (change alors de port ici et dans la config : XBS_PORT).`
     : d.probe === 'ours' && !d.opened ? '✗ le serveur MCP répond mais refuse la connexion de l’extension : mets-le à jour (git pull) puis relance l’assistant.'
@@ -1214,7 +1214,7 @@ $('mcp-check').onclick = async () => {
   out.hidden = false; out.textContent = 'Test en cours…';
   const show = () => { out.textContent = lines.join('\n'); };
   const bg = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
-  lines.push(bg ? `1. Arrière-plan de l’extension : répond (version ${bg.build || '?'}, connecté : ${bg.connected ? 'oui' : 'non'}, dernier essai : ${bg.diag?.probe || '—'}${bg.loadError ? ', ERREUR : ' + bg.loadError.split('\n')[0] : ''})` : '1. Arrière-plan de l’extension : NE RÉPOND PAS (service worker arrêté ou en erreur : voir la console du service worker dans la page des extensions)'); show();
+  lines.push(bg ? `1. Arrière-plan de l’extension : répond (version ${bg.build || '?'}, connecté : ${bg.connected ? 'oui' : 'non'}, dernier essai : ${bg.diag?.probe || '—'}${bg.loadError ? ', ERREUR : ' + bg.loadError.split('\n')[0] : ''})` : '1. Arrière-plan de l’extension : NE RÉPOND PAS → l’extension n’a sans doute pas été rechargée depuis la mise à jour : ouvre la page des extensions du navigateur, clique sur la flèche circulaire ↻ de cette extension, puis rouvre ce panneau. (Si c’est déjà fait : console du « service worker » de l’extension.)'); show();
   try { const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2500) }); const j = await r.json().catch(() => null); lines.push(j?.app === 'xbs-mcp' ? '2. Serveur MCP sur le port : trouvé' : `2. Le port répond (HTTP ${r.status}) mais ce n’est pas le serveur MCP à jour`); }
   catch (e) { lines.push(`2. Serveur MCP sur le port ${port} : injoignable (${e.name === 'TimeoutError' ? 'délai dépassé' : 'rien ne répond, ou le navigateur bloque l’accès local'})`); }
   show();
