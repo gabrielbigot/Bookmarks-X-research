@@ -1191,6 +1191,7 @@ async function showMcp() {
   if (!m.on) return;
   const st = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
   const d = st?.diag || {};
+  if (st?.loadError) { $('mcp-state').textContent = '✗ le pont MCP n’a pas pu démarrer dans ce navigateur : ' + st.loadError.split('\n')[0]; return; }
   $('mcp-state').textContent = st?.connected ? `✓ connecté (${st.indexed.toLocaleString('fr-FR')} éléments en mémoire)`
     : !st ? 'extension en cours de démarrage…'
     : d.probe === 'none' ? `✗ aucun serveur MCP n’écoute sur le port ${m.port || 47821} : l’assistant ne l’a pas lancé. Claude Desktop : Paramètres › Développeur, « bookmarks » doit être « running » (sinon voir les logs, mcp/README.md).`
@@ -1213,7 +1214,7 @@ $('mcp-check').onclick = async () => {
   out.hidden = false; out.textContent = 'Test en cours…';
   const show = () => { out.textContent = lines.join('\n'); };
   const bg = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
-  lines.push(bg ? `1. Arrière-plan de l’extension : répond (connecté : ${bg.connected ? 'oui' : 'non'}, dernier essai : ${bg.diag?.probe || '—'})` : '1. Arrière-plan de l’extension : NE RÉPOND PAS (service worker arrêté ou en erreur : voir la console du service worker dans la page des extensions)'); show();
+  lines.push(bg ? `1. Arrière-plan de l’extension : répond (version ${bg.build || '?'}, connecté : ${bg.connected ? 'oui' : 'non'}, dernier essai : ${bg.diag?.probe || '—'}${bg.loadError ? ', ERREUR : ' + bg.loadError.split('\n')[0] : ''})` : '1. Arrière-plan de l’extension : NE RÉPOND PAS (service worker arrêté ou en erreur : voir la console du service worker dans la page des extensions)'); show();
   try { const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2500) }); const j = await r.json().catch(() => null); lines.push(j?.app === 'xbs-mcp' ? '2. Serveur MCP sur le port : trouvé' : `2. Le port répond (HTTP ${r.status}) mais ce n’est pas le serveur MCP à jour`); }
   catch (e) { lines.push(`2. Serveur MCP sur le port ${port} : injoignable (${e.name === 'TimeoutError' ? 'délai dépassé' : 'rien ne répond, ou le navigateur bloque l’accès local'})`); }
   show();
