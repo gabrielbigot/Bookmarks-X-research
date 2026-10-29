@@ -1190,8 +1190,16 @@ async function showMcp() {
   $('mcp-port').value = m.port || 47821; $('mcp-token').value = m.token || '';
   if (!m.on) return;
   const st = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
-  $('mcp-state').textContent = st?.connected ? `✓ connecté (${st.indexed.toLocaleString('fr-FR')} éléments en mémoire)` : 'en attente du serveur MCP (lancé par ton assistant ; l’extension réessaie toute seule)';
+  const d = st?.diag || {};
+  $('mcp-state').textContent = st?.connected ? `✓ connecté (${st.indexed.toLocaleString('fr-FR')} éléments en mémoire)`
+    : !st ? 'extension en cours de démarrage…'
+    : d.probe === 'none' ? `✗ aucun serveur MCP n’écoute sur le port ${m.port || 47821} : l’assistant ne l’a pas lancé. Claude Desktop : Paramètres › Développeur, « bookmarks » doit être « running » (sinon voir les logs, mcp/README.md).`
+    : d.probe === 'other' ? `✗ quelque chose répond sur le port ${m.port || 47821} sans être le serveur MCP à jour : une ancienne copie du serveur (quitte complètement Claude Desktop puis relance-le, après git pull) ou un autre programme (change alors de port ici et dans la config : XBS_PORT).`
+    : d.probe === 'ours' && !d.opened ? '✗ le serveur MCP répond mais refuse la connexion de l’extension : mets-le à jour (git pull) puis relance l’assistant.'
+    : d.probe === 'ours' ? '✗ le serveur MCP est là mais a refusé le jeton : relance la commande copiée depuis ce panneau (Claude Desktop ou Claude Code), puis redémarre l’assistant.'
+    : 'en attente du serveur MCP (lancé par ton assistant ; l’extension réessaie toute seule)…';
 }
+setInterval(() => { if (!$('mcp-box').hidden && document.visibilityState === 'visible') showMcp(); }, 4000);
 const saveMcp = async (patch) => { settings = await setSettings({ mcp: patch }); await showMcp(); setTimeout(showMcp, 2500); };
 $('mcp-on').onchange = (e) => saveMcp({ on: e.target.checked, token: settings.mcp?.token || newToken() });
 $('mcp-model').onchange = (e) => saveMcp({ extractModel: e.target.value.trim() });

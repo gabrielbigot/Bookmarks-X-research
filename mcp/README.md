@@ -64,6 +64,8 @@ Les playlists décochées dans l'extension (« ignorées ») restent exclues, co
 * **Mémoire** : au premier appel, l'extension charge l'index (quelques secondes) ; elle le relâche après 15 minutes sans appel.
 * **Recherche par le sens** : elle utilise le modèle d'embedding de l'extension. Si le modèle n'est pas prêt, la réponse le signale (`notes`) et se limite aux mots-clés.
 * **« le port … est occupé »** : un autre programme (ou une ancienne copie du serveur avec un autre jeton) tient le port. Libère-le (`lsof -i :47821` sur macOS / Linux, `netstat -ano | findstr 47821` sous Windows ; une ancienne copie se ferme avec `pkill -f mcp/server.mjs`) ou change de port des deux côtés. Quitte aussi complètement Claude Desktop (pas seulement la fenêtre) avant de relancer.
+* **Diagnostic dans l'extension** : ⚙ › Pont MCP affiche pourquoi la connexion échoue (aucun serveur sur le port / ancienne copie ou autre programme / jeton refusé) et se rafraîchit toutes les 4 secondes.
+* **Logs du serveur** (ce que Claude Desktop en voit) : macOS `~/Library/Logs/Claude/mcp-server-bookmarks.log`, Windows `%APPDATA%\Claude\logs\mcp-server-bookmarks.log`. On doit y lire « en attente de l'extension sur 127.0.0.1:47821 » puis « extension connectée ».
 * **Dépannage** : « l'extension n'est pas connectée » → Chrome ouvert ? case cochée ? même jeton et même port des deux côtés ? Les logs du serveur (stderr) sont visibles dans les journaux MCP de ton assistant.
 
 ## Lire beaucoup de vidéos sans brûler de tokens : `extract`

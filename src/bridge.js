@@ -16,6 +16,7 @@ const IDLE_DROP_MS = 15 * 60_000; // l'index en mémoire est relâché après 15
 const REFRESH_EVERY_MS = 20_000;
 
 export function startBridge({ embed }) {
+  let diag = { at: 0, opened: false, probe: '' };
   let ws = null, connecting = false, pingTimer = null, retryTimer = null, index = null, indexModel = '', loading = null, lastRefresh = 0, dropTimer = null;
 
   async function getIndex() {
@@ -83,14 +84,21 @@ export function startBridge({ embed }) {
     chrome.alarms.create(ALARM, { periodInMinutes: 0.5 }); // rouvre la connexion si le service worker s'est endormi
     if (ws || connecting) return;
     connecting = true;
+    diag = { at: Date.now(), opened: false, probe: '' };
     try {
       const sock = new WebSocket(`ws://127.0.0.1:${s.port || 47821}/xbs`);
-      sock.onopen = () => { ws = sock; connecting = false; sock.send(JSON.stringify({ type: 'hello', token: s.token, build: __BUILD__ })); pingTimer = setInterval(() => { try { sock.send('{"type":"ping"}'); } catch { /* fermée */ } }, 20_000); };
+      sock.onopen = () => { diag.opened = true; ws = sock; connecting = false; sock.send(JSON.stringify({ type: 'hello', token: s.token, build: __BUILD__ })); pingTimer = setInterval(() => { try { sock.send('{"type":"ping"}'); } catch { /* fermée */ } }, 20_000); };
       sock.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } if (m.id !== undefined && m.method) onRequest(m); };
-      const closed = () => { clearInterval(pingTimer); if (ws === sock) ws = null; connecting = false; scheduleRetry(); };
+      const closed = () => { clearInterval(pingTimer); if (ws === sock) ws = null; connecting = false; probe(s.port || 47821); scheduleRetry(); };
       sock.onclose = closed;
       sock.onerror = () => { connecting = false; };
     } catch { connecting = false; scheduleRetry(); }
+  }
+  // Pourquoi la connexion échoue : notre serveur répond-il (/health), un autre programme, ou rien ?
+  async function probe(port) {
+    const url = `http://127.0.0.1:${port}/health`;
+    try { await fetch(url, { mode: 'no-cors', signal: AbortSignal.timeout(2000) }); } catch (e) { diag.probe = e?.name === 'TimeoutError' ? 'other' : 'none'; return; } // rien ne répond
+    try { diag.probe = (await (await fetch(url, { signal: AbortSignal.timeout(2000) })).json())?.app === 'xbs-mcp' ? 'ours' : 'other'; } catch { diag.probe = 'other'; } // quelque chose répond : notre serveur ?
   }
   function disconnect() { clearInterval(pingTimer); clearTimeout(retryTimer); try { ws?.close(); } catch { /* déjà fermée */ } ws = null; connecting = false; index = null; indexModel = ''; }
   function scheduleRetry() { clearTimeout(retryTimer); retryTimer = setTimeout(connect, 8000); }
@@ -98,5 +106,5 @@ export function startBridge({ embed }) {
   chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) connect(); });
   chrome.storage.onChanged.addListener((ch, area) => { if (area === 'local' && ch.settings) { const o = ch.settings.oldValue?.mcp, n = ch.settings.newValue?.mcp; if (o?.on !== n?.on || o?.port !== n?.port || o?.token !== n?.token) { disconnect(); connect(); } } });
   connect();
-  return { status: () => ({ connected: !!ws, indexed: index ? index.tweets.length : 0 }) };
+  return { status: () => ({ connected: !!ws, indexed: index ? index.tweets.length : 0, diag: { ...diag, ageSec: diag.at ? Math.round((Date.now() - diag.at) / 1000) : null } }) };
 }

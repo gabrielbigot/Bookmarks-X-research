@@ -1333,9 +1333,13 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   let nid = 100;
   const call = async (name, args) => { const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n'); await waitFor(() => got.some((m) => m.id === id), 'réponse MCP ' + name, 60000); const r = got.find((m) => m.id === id).result; assert.ok(!r.isError, name + ' : ' + r.content[0].text); return JSON.parse(r.content[0].text); };
   try {
+    // diagnostic : pont activé alors qu'aucun serveur n'écoute sur ce port
+    await journal.evaluate(async (p) => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { on: true, port: p + 500, token: 'x' } } }); }, port);
+    await waitFor(async () => (await journal.evaluate(() => chrome.runtime.sendMessage({ type: 'q:mcpStatus' })))?.diag?.probe === 'none', 'diagnostic « aucun serveur sur le port »', 20000);
     await new Promise((r) => setTimeout(r, 500));
     await journal.evaluate(async (p) => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, mcp: { on: true, port: p, token: 'e2e-token', extractModel: 'fresh 1' } } }); }, port); // nom approximatif : résolu d'après le catalogue
     const stats = await (async () => { for (let i = 0; i < 25; i++) { const id = nid++; srv.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'stats', arguments: {} } }) + '\n'); await waitFor(() => got.some((m) => m.id === id), 'réponse stats', 60000); const r = got.find((m) => m.id === id).result; if (!r.isError) return JSON.parse(r.content[0].text); await new Promise((x) => setTimeout(x, 1000)); } throw new Error('l’extension ne s’est pas connectée au serveur MCP'); })();
+    assert.equal((await journal.evaluate(() => chrome.runtime.sendMessage({ type: 'q:mcpStatus' }))).connected, true);
     assert.ok(stats.items >= 300 && stats.tweets > 0, 'stats via MCP : ' + JSON.stringify(stats).slice(0, 200));
     const r = await call('search', { query: 'agents mémoire', limit: 5 });
     assert.ok(r.results.length >= 3 && r.results.every((x) => x.id && x.url), 'search via MCP : ' + JSON.stringify(r).slice(0, 300));

@@ -271,3 +271,15 @@ test('resolveModel : un nom approximatif trouve l’identifiant OpenRouter', () 
   assert.equal(resolveModel(cat, 'modèle inconnu'), null);
   assert.ok(Math.abs(perMillion(cat[0].pricing.prompt) - 0.15) < 1e-9 && Math.abs(perMillion(cat[0].pricing.completion) - 0.6) < 1e-9);
 });
+
+test('serveur MCP : /health sert au diagnostic de l’extension (public, sans donnée)', async () => {
+  const port = await freePort();
+  const S = startServer(port);
+  try {
+    for (let i = 0; i < 50 && !/en attente/.test(S.log()); i++) await new Promise((r) => setTimeout(r, 100));
+    const res = await fetch(`http://127.0.0.1:${port}/health`);
+    assert.equal(res.status, 200); assert.equal(res.headers.get('access-control-allow-origin'), '*');
+    assert.deepEqual(await res.json(), { app: 'xbs-mcp' });
+    assert.equal((await fetch(`http://127.0.0.1:${port}/autre`)).status, 404);
+  } finally { S.srv.kill(); }
+});

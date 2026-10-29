@@ -98,7 +98,10 @@ function onUpgrade(req, socket) {
 // Tente de devenir le hub : true si le port est à nous.
 function startHub() {
   return new Promise((resolve) => {
-    const srv = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
+    const srv = http.createServer((req, res) => {
+      if (req.url === '/health') { res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' }); return res.end('{"app":"xbs-mcp"}'); } // sert au diagnostic de l'extension ; ne donne aucune donnée
+      res.writeHead(404); res.end();
+    });
     srv.on('upgrade', onUpgrade);
     srv.once('error', (e) => { listenError = e.code === 'EADDRINUSE' ? 'EADDRINUSE' : String(e.code || e.message || e); resolve(false); });
     srv.listen(PORT, '127.0.0.1', () => { hub = srv; listenError = ''; log(`en attente de l’extension sur 127.0.0.1:${PORT}`); resolve(true); });
