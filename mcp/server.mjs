@@ -76,8 +76,9 @@ function onUpgrade(req, socket) {
     if (!authed) {
       if (m.type !== 'hello' || !TOKEN || !safeEq(m.token, TOKEN)) { log('connexion refusée : jeton incorrect'); return me.close(); }
       authed = true;
+      if (m.test) { me.send('{"type":"ready","test":true}'); setTimeout(() => me.close(), 100); return; } // test de connexion depuis le panneau : ne remplace pas la vraie connexion
       if (isRelay) { me.send('{"type":"ok"}'); log('un autre assistant s’est raccordé'); return; }
-      conn?.close(); conn = me; log('extension connectée'); return;
+      conn?.close(); conn = me; me.send('{"type":"ready"}'); log('extension connectée'); return;
     }
     if (isRelay) { // appel d'un autre assistant : relayé à l'extension
       if (m.id === undefined || !m.method) return;

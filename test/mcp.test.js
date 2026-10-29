@@ -172,7 +172,7 @@ test('serveur MCP : initialize, tools/list, appel relayé à l’extension, jeto
     assert.ok(closed, 'jeton incorrect : fermée');
     // extension simulée (navigateur Comet : l'origine est « comet-extension:// »)
     const seen = [];
-    const ext = await wsClient(port, { origin: 'comet-extension://ihkijnjcinobacbdafhcdbgdfemnecoo', onMessage: (t) => { const m = JSON.parse(t); if (m.type === 'pong') return; seen.push(m); ext.send(JSON.stringify({ id: m.id, result: { echo: m.method, args: m.params } })); } });
+    const ext = await wsClient(port, { origin: 'comet-extension://ihkijnjcinobacbdafhcdbgdfemnecoo', onMessage: (t) => { const m = JSON.parse(t); if (m.type === 'pong' || m.type === 'ready') return; seen.push(m); ext.send(JSON.stringify({ id: m.id, result: { echo: m.method, args: m.params } })); } });
     assert.equal(ext.accept, crypto.createHash('sha1').update(ext.key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64'));
     ext.send(JSON.stringify({ type: 'hello', token: 'secret' }));
     await new Promise((r) => setTimeout(r, 200));
@@ -281,5 +281,30 @@ test('serveur MCP : /health sert au diagnostic de l’extension (public, sans do
     assert.equal(res.status, 200); assert.equal(res.headers.get('access-control-allow-origin'), '*');
     assert.deepEqual(await res.json(), { app: 'xbs-mcp' });
     assert.equal((await fetch(`http://127.0.0.1:${port}/autre`)).status, 404);
+  } finally { S.srv.kill(); }
+});
+
+test('serveur MCP : message « ready » après le jeton ; le test du panneau ne remplace pas la connexion réelle', async () => {
+  const port = await freePort();
+  const S = startServer(port);
+  try {
+    for (let i = 0; i < 50 && !/en attente/.test(S.log()); i++) await new Promise((r) => setTimeout(r, 100));
+    const got = [];
+    const real = await wsClient(port, { onMessage: (t) => got.push(JSON.parse(t)) });
+    real.send(JSON.stringify({ type: 'hello', token: 'secret' }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok(got.some((m) => m.type === 'ready'));
+    const gotT = [];
+    const probe = await wsClient(port, { onMessage: (t) => gotT.push(JSON.parse(t)) });
+    probe.send(JSON.stringify({ type: 'hello', token: 'secret', test: true }));
+    await new Promise((r) => setTimeout(r, 400));
+    assert.ok(gotT.some((m) => m.type === 'ready' && m.test));
+    let closed = false; real.socket.on('close', () => (closed = true));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(closed, false, 'la vraie connexion est conservée');
+    const badT = []; const bad = await wsClient(port, { onMessage: (t) => badT.push(JSON.parse(t)) });
+    bad.send(JSON.stringify({ type: 'hello', token: 'faux', test: true }));
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(badT.length, 0);
   } finally { S.srv.kill(); }
 });

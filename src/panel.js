@@ -1207,6 +1207,25 @@ $('mcp-budget').onchange = (e) => saveMcp({ extractBudget: Math.max(0.01, Number
 $('mcp-pin').onchange = (e) => saveMcp({ priceIn: Math.max(0, Number(e.target.value) || 0) });
 $('mcp-pout').onchange = (e) => saveMcp({ priceOut: Math.max(0, Number(e.target.value) || 0) });
 $('mcp-test').onclick = () => chrome.tabs.create({ url: chrome.runtime.getURL('extract-test.html') });
+// Test depuis le panneau lui-même (indépendant du service worker) : le serveur répond-il, le navigateur peut-il ouvrir la connexion, le jeton est-il accepté ?
+$('mcp-check').onclick = async () => {
+  const out = $('mcp-check-out'), m = settings.mcp, port = m.port || 47821, lines = [];
+  out.hidden = false; out.textContent = 'Test en cours…';
+  const show = () => { out.textContent = lines.join('\n'); };
+  const bg = await chrome.runtime.sendMessage({ type: 'q:mcpStatus' }).catch(() => null);
+  lines.push(bg ? `1. Arrière-plan de l’extension : répond (connecté : ${bg.connected ? 'oui' : 'non'}, dernier essai : ${bg.diag?.probe || '—'})` : '1. Arrière-plan de l’extension : NE RÉPOND PAS (service worker arrêté ou en erreur : voir la console du service worker dans la page des extensions)'); show();
+  try { const r = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(2500) }); const j = await r.json().catch(() => null); lines.push(j?.app === 'xbs-mcp' ? '2. Serveur MCP sur le port : trouvé' : `2. Le port répond (HTTP ${r.status}) mais ce n’est pas le serveur MCP à jour`); }
+  catch (e) { lines.push(`2. Serveur MCP sur le port ${port} : injoignable (${e.name === 'TimeoutError' ? 'délai dépassé' : 'rien ne répond, ou le navigateur bloque l’accès local'})`); }
+  show();
+  await new Promise((res) => {
+    let opened = false, ready = false;
+    const t = setTimeout(() => { lines.push(`3. WebSocket : pas de réponse en 4 s (ouvert : ${opened ? 'oui' : 'non'})`); show(); try { ws.close(); } catch {} res(); }, 4000);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/xbs`);
+    ws.onopen = () => { opened = true; ws.send(JSON.stringify({ type: 'hello', token: m.token, test: true })); };
+    ws.onmessage = (e) => { try { if (JSON.parse(e.data).type === 'ready') { ready = true; lines.push('3. WebSocket : ouvert, jeton accepté ✓'); } } catch {} };
+    ws.onclose = (e) => { clearTimeout(t); if (!ready) lines.push(opened ? '3. WebSocket : ouvert puis fermé par le serveur : jeton refusé (différent de celui de la config de l’assistant ?)' : `3. WebSocket : connexion refusée avant l’ouverture (code ${e.code}) : origine non acceptée par le serveur (git pull, relancer l’assistant) ou accès local bloqué par le navigateur`); show(); res(); };
+  });
+};
 $('mcp-new').onclick = () => saveMcp({ token: newToken() });
 $('mcp-port').onchange = (e) => saveMcp({ port: Math.min(65535, Math.max(1024, Math.round(Number(e.target.value)) || 47821)) });
 const copyText = async (btn, text) => { await navigator.clipboard.writeText(text); const o = btn.textContent; btn.textContent = 'Copié ✓'; setTimeout(() => (btn.textContent = o), 1500); };
