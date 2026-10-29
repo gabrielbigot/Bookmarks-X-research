@@ -201,3 +201,13 @@ body.grid .yt-thumb{width:100%}
 .dups{flex-basis:100%;width:100%;margin:6px 0 0;padding:6px 10px;border-left:3px solid var(--line);font-size:13px}
 .dup{padding:3px 0}
 .dup b{font-weight:600}
+
+/* pont MCP (⚙) */
+.mcp{margin:4px 0 10px 24px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;text-align:left;font-size:13px}
+.mcp-title{margin:0 0 8px;font-weight:700}.mcp-title small{font-weight:400;opacity:.75}
+.mcp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px 12px}
+.mcp-grid label{display:flex;flex-direction:column;gap:3px;font-size:12px;opacity:.9}
+.mcp-grid input{width:100%;box-sizing:border-box;font:13px ui-monospace,Menlo,monospace}
+.mcp-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.mcp-btns button{white-space:nowrap;font-size:12.5px;padding:5px 12px}
+.mcp .hint{margin:8px 0 0}

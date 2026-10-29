@@ -176,8 +176,24 @@
         <label class="chk"><input type="checkbox" id="upd-tr"><span>« Tout mettre à jour » inclut les transcriptions des nouvelles vidéos</span></label>
         <label class="chk"><input type="checkbox" id="opt-tabs"><span>Autoriser la mise à jour automatique à ouvrir un onglet X / YouTube en arrière-plan <span class="hint">(refermé ensuite)</span></span></label>
         <label class="chk"><input type="checkbox" id="mcp-on"><span>Pont MCP : laisser un assistant IA installé sur cet ordinateur (Claude Desktop, Claude Code…) chercher dans mes bookmarks et mes vidéos <span class="hint">(lecture seule, connexion locale uniquement ; ce que l'assistant lit est envoyé à son fournisseur — voir mcp/README.md)</span></span></label>
-        <div class="chk" id="mcp-box" hidden><span>Port <input id="mcp-port" type="number" min="1024" max="65535" style="width:80px"> · jeton <input id="mcp-token" readonly style="width:150px"></span> <button type="button" id="mcp-desk">Copier la commande Claude Desktop</button> <button type="button" id="mcp-cmd">Copier la commande Claude Code</button> <button type="button" id="mcp-tok">Copier le jeton</button> <button type="button" id="mcp-new">Nouveau jeton</button> <span class="hint" id="mcp-state"></span></div>
-        <div class="chk" id="mcp-box2" hidden><span>Lecture en masse (outil <code>extract</code>) : modèle <input id="mcp-model" placeholder="vide = modèle de l’IA" style="width:230px"> plafond par appel <input id="mcp-budget" type="number" min="0.01" step="0.05" style="width:70px"> $ · prix par million de tokens : entrée <input id="mcp-pin" type="number" min="0" step="0.01" style="width:60px"> sortie <input id="mcp-pout" type="number" min="0" step="0.01" style="width:60px"></span> <button type="button" id="mcp-test">Comparer des modèles…</button></div>
+        <div class="mcp" id="mcp-box" hidden>
+          <div class="mcp-grid">
+            <label>Port<input id="mcp-port" type="number" min="1024" max="65535"></label>
+            <label>Jeton<input id="mcp-token" readonly></label>
+          </div>
+          <div class="mcp-btns"><button type="button" id="mcp-desk">Commande Claude Desktop</button><button type="button" id="mcp-cmd">Commande Claude Code</button><button type="button" id="mcp-tok">Copier le jeton</button><button type="button" id="mcp-new">Nouveau jeton</button></div>
+          <p class="hint" id="mcp-state"></p>
+        </div>
+        <div class="mcp" id="mcp-box2" hidden>
+          <p class="mcp-title">Lecture en masse <small>(outil <code>extract</code> : un modèle peu coûteux lit les vidéos, l’assistant ne voit que les réponses)</small></p>
+          <div class="mcp-grid">
+            <label>Modèle<input id="mcp-model" placeholder="vide = modèle de l’IA"></label>
+            <label>Plafond par appel ($)<input id="mcp-budget" type="number" min="0.01" step="0.05"></label>
+            <label>Prix entrée ($ / M tokens)<input id="mcp-pin" type="number" min="0" step="0.01"></label>
+            <label>Prix sortie ($ / M tokens)<input id="mcp-pout" type="number" min="0" step="0.01"></label>
+          </div>
+          <div class="mcp-btns"><button type="button" id="mcp-test">Comparer des modèles…</button></div>
+        </div>
         <div class="btns"><button type="button" id="reindex">Tout réindexer</button></div>
       </section>
 
