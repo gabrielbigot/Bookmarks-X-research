@@ -56,25 +56,30 @@ const fs = require('fs');
 const a = process.argv.slice(2);
 if (a[0] === '-version') { console.log('ffmpeg'); process.exit(0); }
 const out = a[a.length - 1];
-for (let k = 0; k < 2; k++) fs.writeFileSync(out.replace('%03d', String(k).padStart(3, '0')), 'PART' + k);
+for (let k = 0; k < 2; k++) fs.writeFileSync(out.replace('%03d', String(k).padStart(3, '0')), Buffer.concat([Buffer.from('PART' + k), Buffer.alloc(k ? 600000 : 1200000, 120)]));
 `, { mode: 0o755 });
   return { ytdlp, ffmpeg };
 }
-const startMistral = () => new Promise((res) => {
+const startMistral = (opts = {}) => new Promise((res) => {
   const calls = [];
   const srv = http.createServer((req, rsp) => {
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
-      const body = Buffer.concat(chunks).toString('latin1');
-      calls.push({ auth: req.headers.authorization, model: /name="model"\r\n\r\n([^\r]+)/.exec(body)?.[1], gran: /name="timestamp_granularities"\r\n\r\n([^\r]+)/.exec(body)?.[1], part: /PART(\d)/.exec(body)?.[1] });
+      const raw = Buffer.concat(chunks);
+      const isJson = /json/.test(req.headers['content-type'] || '');
+      const call = { url: req.url, auth: req.headers.authorization, mode: isJson ? 'json' : 'form' };
+      if (isJson) { const j = JSON.parse(raw.toString('utf8')); call.model = j.model; call.format = j.input_audio?.format; call.part = /PART(\d)/.exec(Buffer.from(j.input_audio?.data || '', 'base64').toString('latin1').slice(0, 8))?.[1]; call.lang = j.language; }
+      else { const body = raw.toString('latin1'); call.model = /name="model"\r\n\r\n([^\r]+)/.exec(body)?.[1]; call.gran = /name="timestamp_granularities"\r\n\r\n([^\r]+)/.exec(body)?.[1]; call.part = /PART(\d)/.exec(body)?.[1]; }
+      calls.push(call);
+      if (isJson && opts.rejectJson) { call.rejected = true; rsp.writeHead(415, { 'content-type': 'application/json' }); return rsp.end('{"error":"multipart attendu"}'); }
       rsp.writeHead(200, { 'content-type': 'application/json' });
-      rsp.end(JSON.stringify({ language: 'fr', segments: [{ start: 2, end: 6, text: 'Voix reconnue ' + calls.length }] }));
+      rsp.end(JSON.stringify(opts.textOnly ? { text: 'Première phrase du passage. Deuxième phrase, un peu plus longue que la première ! Troisième et dernière phrase.' } : { language: 'fr', segments: [{ start: 2, end: 6, text: 'Voix reconnue ' + calls.length }] }));
     });
   }).listen(0, '127.0.0.1', () => res({ srv, calls, port: srv.address().port }));
 });
 const runCli = (args, env, input) => new Promise((resolve) => {
-  const p = spawn(process.execPath, ['mcp/transcribe.mjs', '--no-reveal', ...args], { env: { ...process.env, XBS_CONFIG: path.join(os.tmpdir(), 'xbs-config-inexistante.json'), MISTRAL_API_KEY: '', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, ['mcp/transcribe.mjs', '--no-reveal', ...args], { env: { ...process.env, XBS_CONFIG: path.join(os.tmpdir(), 'xbs-config-inexistante.json'), MISTRAL_API_KEY: '', OPENROUTER_API_KEY: '', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '', err = '';
   p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (err += d));
   p.on('close', (code) => resolve({ code, out, err }));
@@ -86,12 +91,12 @@ test('transcribe.mjs : sous-titres, puis audio + Mistral, reprise, plafond et ar
   const { ytdlp, ffmpeg } = fakeTools(dir);
   const m = await startMistral();
   const out = path.join(dir, 'out');
-  const env = { XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, MISTRAL_API_KEY: 'cle-test', MISTRAL_API_BASE: `http://127.0.0.1:${m.port}` };
+  const env = { XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, OPENROUTER_API_KEY: 'cle-test', OPENROUTER_API_BASE: `http://127.0.0.1:${m.port}/api/v1` };
   const input = ['https://www.youtube.com/watch?v=aaaaaaaaaaa\t600\tAvec sous-titres', 'https://www.youtube.com/watch?v=cccccccccc1\t1200\tSans sous-titres'].join('\n');
   try {
     // estimation : rien n'est appelé
     const dry = await runCli(['--dry-run', '--audio', '--out', out], env, input);
-    assert.equal(dry.code, 0); assert.match(dry.out, /2 vidéo\(s\) en entrée/); assert.match(dry.out, /≈ 0\.0\d \$/); assert.equal(m.calls.length, 0);
+    assert.equal(dry.code, 0); assert.match(dry.out, /2 vidéo\(s\) en entrée/); assert.match(dry.out, /via OpenRouter/); assert.match(dry.out, /≈ 0\.\d\d \$/); assert.equal(m.calls.length, 0);
     // sans --audio : la vidéo sans sous-titres est signalée, rien n'est envoyé à Mistral
     const a = await runCli(['--sleep', '0', '--out', out], env, input);
     assert.equal(a.code, 0, a.err); assert.match(a.out, /aaaaaaaaaaa.*sous-titres fr-orig \(2 segments\)/); assert.match(a.out, /cccccccccc1.*aucun sous-titre \(essaie --audio\)/); assert.equal(m.calls.length, 0);
@@ -101,10 +106,10 @@ test('transcribe.mjs : sous-titres, puis audio + Mistral, reprise, plafond et ar
     // avec --audio : reprise (la 1re n'est pas refaite), l'autre passe par Mistral, 2 morceaux de 10 min décalés
     const b = await runCli(['--sleep', '0', '--audio', '--out', out], env, input);
     assert.equal(b.code, 0, b.err); assert.match(b.out, /1 déjà faite/); assert.match(b.out, /cccccccccc1.*reconnaissance vocale \(2 segments/);
-    assert.equal(m.calls.length, 2); assert.equal(m.calls[0].auth, 'Bearer cle-test'); assert.equal(m.calls[0].model, 'voxtral-mini-latest'); assert.equal(m.calls[0].gran, 'segment');
+    assert.equal(m.calls.length, 2); assert.equal(m.calls[0].auth, 'Bearer cle-test'); assert.equal(m.calls[0].model, 'mistralai/voxtral-mini-transcribe-3-0'); assert.equal(m.calls[0].mode, 'json'); assert.equal(m.calls[0].format, 'mp3'); assert.equal(m.calls[0].url, '/api/v1/audio/transcriptions');
     res = JSON.parse(fs.readFileSync(path.join(out, 'results.json'), 'utf8'));
     const stt = res.items.find((i) => i.source === 'stt');
-    assert.deepEqual(stt.segments.map((s) => s.t), [2, 602]); assert.equal(stt.model, 'voxtral-mini-latest'); assert.equal(stt.lang, 'fr');
+    assert.deepEqual(stt.segments.map((s) => s.t), [2, 602]); assert.equal(stt.model, 'mistralai/voxtral-mini-transcribe-3-0'); assert.equal(stt.lang, 'fr');
     assert.equal(fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('xbs-tr-')).length, 0, 'fichiers temporaires supprimés');
     // plafond : l'audio est refusé quand l'estimation dépasse le budget
     m.calls.length = 0;
@@ -114,7 +119,7 @@ test('transcribe.mjs : sous-titres, puis audio + Mistral, reprise, plafond et ar
     const d = await runCli(['--sleep', '0', '--out', path.join(dir, 'out3')], env, ['bbbbbbbbbb1', 'bbbbbbbbbb2', 'bbbbbbbbbb3', 'bbbbbbbbbb4', 'bbbbbbbbbb5'].join('\n'));
     assert.match(d.err, /YouTube bloque/); assert.equal((d.out.match(/anti-robot/g) || []).length, 3);
     // clé manquante / entrée vide
-    assert.match((await runCli(['--audio', '--out', out], { ...env, MISTRAL_API_KEY: '' }, input)).err, /clé Mistral/);
+    assert.match((await runCli(['--audio', '--out', out], { ...env, OPENROUTER_API_KEY: '' }, input)).err, /clé OpenRouter/);
     assert.equal((await runCli(['--out', out], env, 'rien d’utile')).code, 1);
   } finally { m.srv.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -132,13 +137,13 @@ test('réglages enregistrés (setup), presse-papiers, options par défaut : plus
   const clip = path.join(dir, 'clip');
   fs.writeFileSync(clip, `#!${process.execPath}\nconsole.log('https://www.youtube.com/watch?v=aaaaaaaaaaa\\t600\\tAvec sous-titres\\nhttps://www.youtube.com/watch?v=cccccccccc1\\t1200\\tSans sous-titres');\n`, { mode: 0o755 });
   const log = path.join(dir, 'calls.log');
-  const env = { XBS_CONFIG: cfgFile, XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, MISTRAL_API_BASE: `http://127.0.0.1:${m.port}`, XBS_CLIPBOARD_CMD: clip, XBS_FAKE_LOG: log };
+  const env = { XBS_CONFIG: cfgFile, XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, OPENROUTER_API_BASE: `http://127.0.0.1:${m.port}/api/v1`, XBS_CLIPBOARD_CMD: clip, XBS_FAKE_LOG: log };
   try {
     // setup : questions lues ligne par ligne quand l'entrée est redirigée
     const s = await runCli(['setup'], env, 'cle-enregistree\nchrome\no\n3\n');
     assert.equal(s.code, 0, s.err); assert.match(s.out, /Enregistré/);
     const saved = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
-    assert.deepEqual(saved, { mistralKey: 'cle-enregistree', cookiesBrowser: 'chrome', audio: true, budget: 3 });
+    assert.deepEqual(saved, { openrouterKey: 'cle-enregistree', provider: 'openrouter', cookiesBrowser: 'chrome', audio: true, budget: 3 });
     if (process.platform !== 'win32') assert.equal(fs.statSync(cfgFile).mode & 0o777, 0o600, 'fichier lisible par toi seul');
     const c = await runCli(['config'], env);
     assert.match(c.out, /cle…ree/); assert.ok(!c.out.includes('cle-enregistree'), 'la clé est masquée');
@@ -154,6 +159,44 @@ test('réglages enregistrés (setup), presse-papiers, options par défaut : plus
     assert.equal(m.calls.length, 0);
     // « - » efface la clé
     await runCli(['setup'], env, '-\n\n\n\n');
-    assert.equal(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).mistralKey, undefined);
+    assert.equal(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).openrouterKey, undefined);
   } finally { m.srv.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('OpenRouter : sans horodatage dans la réponse, instants estimés ; repli multipart si le JSON est refusé ; Mistral direct en option', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trstt-'));
+  const { ytdlp, ffmpeg } = fakeTools(dir);
+  const base = { XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg };
+  const input = 'https://www.youtube.com/watch?v=cccccccccc1\t450\tSans sous-titres';
+  try {
+    // 1. réponse « texte seul » : 3 phrases réparties sur la durée du morceau (300 s puis 150 s)
+    const a = await startMistral({ textOnly: true });
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--out', path.join(dir, 'o1')], { ...base, OPENROUTER_API_KEY: 'k', OPENROUTER_API_BASE: `http://127.0.0.1:${a.port}/api/v1` }, input);
+      assert.equal(r.code, 0, r.err);
+      const it = JSON.parse(fs.readFileSync(path.join(dir, 'o1', 'results.json'), 'utf8')).items[0];
+      const ts = it.segments.map((s) => s.t);
+      assert.equal(ts.length, 6); assert.equal(ts[0], 0); assert.ok(ts[1] > 0 && ts[1] < 300 && ts[2] > ts[1] && ts[2] < 300, JSON.stringify(ts));
+      assert.equal(ts[3], 600); assert.ok(ts[4] > 600 && ts[5] > ts[4] && ts[5] < 750, JSON.stringify(ts));
+    } finally { a.srv.close(); }
+    // 2. le JSON est refusé (415) : repli sur multipart, puis multipart d'emblée pour le morceau suivant
+    const b = await startMistral({ rejectJson: true });
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--lang', 'fr', '--out', path.join(dir, 'o2')], { ...base, OPENROUTER_API_KEY: 'k', OPENROUTER_API_BASE: `http://127.0.0.1:${b.port}/api/v1` }, input);
+      assert.equal(r.code, 0, r.err); assert.match(r.out, /reconnaissance vocale/);
+      assert.deepEqual(b.calls.map((c) => c.mode + (c.rejected ? '!' : '')), ['json!', 'form', 'form']);
+    } finally { b.srv.close(); }
+    // 3. message d'erreur exact quand le service refuse tout (à recopier pour corriger)
+    const c = await startMistral({ rejectJson: true });
+    c.srv.close();
+    const e = await runCli(['--sleep', '0', '--audio', '--out', path.join(dir, 'o3')], { ...base, OPENROUTER_API_KEY: 'k', OPENROUTER_API_BASE: 'http://127.0.0.1:1/api/v1' }, input);
+    assert.match(e.out, /✗/);
+    // 4. Mistral en direct : --provider mistral, clé MISTRAL_API_KEY, multipart
+    const d = await startMistral();
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--provider', 'mistral', '--out', path.join(dir, 'o4')], { ...base, MISTRAL_API_KEY: 'km', MISTRAL_API_BASE: `http://127.0.0.1:${d.port}` }, input);
+      assert.equal(r.code, 0, r.err);
+      assert.equal(d.calls[0].mode, 'form'); assert.equal(d.calls[0].auth, 'Bearer km'); assert.equal(d.calls[0].model, 'voxtral-mini-latest'); assert.equal(d.calls[0].url, '/v1/audio/transcriptions');
+    } finally { d.srv.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

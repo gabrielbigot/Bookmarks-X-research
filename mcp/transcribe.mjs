@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Transcrit en local les vidéos YouTube dont l'extension n'a pas pu récupérer la transcription.
 //
-//   Une fois :          npm run transcribe -- setup          (clé Mistral, navigateur pour les cookies : enregistrés, plus à les retaper)
+//   Une fois :          npm run transcribe -- setup          (clé OpenRouter, navigateur pour les cookies : enregistrés, plus à les retaper)
 //   À chaque fois :     1. Dans l'extension : ⋯ › « Copier les liens sans transcription »
 //                       2. npm run transcribe                (lit le presse-papiers tout seul)
 //                       3. Dans l'extension : ⋯ › « Importer des transcriptions… » et choisir le fichier indiqué (results.json)
 //
 // Étape A (gratuite) : yt-dlp récupère les sous-titres YouTube (y compris automatiques).
-// Étape B (audio, payante, clé Mistral) : yt-dlp récupère l'audio, ffmpeg le découpe, Mistral (Voxtral) le transcrit avec horodatage.
+// Étape B (audio, payante, clé OpenRouter) : yt-dlp récupère l'audio, ffmpeg le découpe, Voxtral (Mistral, via OpenRouter) le transcrit.
 // Aucune dépendance npm : Node 18+, yt-dlp et ffmpeg installés (brew install yt-dlp ffmpeg).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -28,9 +28,11 @@ Entrée : une vidéo par ligne (lien ou identifiant YouTube) ; colonnes optionne
 
 Options (elles l'emportent sur les réglages enregistrés)
   --out <dossier>            dossier de sortie (défaut : ./transcripts) ; le fichier à importer est results.json
-  --audio / --no-audio       si aucun sous-titre : audio + reconnaissance vocale Mistral (clé requise)
-  --model <nom>              modèle Mistral (défaut : voxtral-mini-latest)
-  --price <$/min>            prix d'une minute d'audio, pour l'estimation et le plafond (défaut : 0.003 ; vérifie la grille de Mistral)
+  --audio / --no-audio       si aucun sous-titre : audio + reconnaissance vocale Voxtral (clé OpenRouter requise)
+  --model <nom>              modèle de transcription (défaut : mistralai/voxtral-mini-transcribe-3-0, via OpenRouter)
+  --price <$/min>            prix d'une minute d'audio, pour l'estimation et le plafond (défaut : 0.0035 ; vérifie la grille d'OpenRouter)
+  --eu                       point d'accès européen d'OpenRouter (eu.openrouter.ai)
+  --provider mistral         passer directement par l'API de Mistral (clé MISTRAL_API_KEY) au lieu d'OpenRouter
   --budget <$>               plafond de dépense pour la reconnaissance vocale (défaut : 2)
   --lang <code>              langue de l'audio (fr, en…) ; défaut : détection automatique
   --sub-langs <liste>        langues de sous-titres essayées, par ordre (défaut : fr-orig,en-orig,fr,en)
@@ -44,7 +46,7 @@ Options (elles l'emportent sur les réglages enregistrés)
   --help
 
 Réglages enregistrés dans ~/.config/xbs/transcribe.json (lisible par toi seul). Variables d'environnement prioritaires :
-MISTRAL_API_KEY, XBS_CONFIG (autre fichier de réglages), XBS_YTDLP / XBS_FFMPEG (chemins des programmes), MISTRAL_API_BASE`;
+OPENROUTER_API_KEY, MISTRAL_API_KEY, XBS_CONFIG (autre fichier de réglages), XBS_YTDLP / XBS_FFMPEG (chemins des programmes), OPENROUTER_API_BASE, MISTRAL_API_BASE`;
 
 // ---------- fonctions pures (testées) ----------
 export const ytId = (s) => (String(s).match(/(?:v=|youtu\.be\/|shorts\/|live\/|embed\/|^)([\w-]{11})(?![\w-])/) || [])[1] || null;
@@ -69,13 +71,22 @@ export function pickSubtitle(files, id, langs) {
   return found[0] || null;
 }
 
-// Réponse de Mistral (/v1/audio/transcriptions) -> segments { t, text } décalés de `offset` secondes (morceau n° k d'un long audio)
-export function mistralSegments(json, offset = 0) {
-  const segs = Array.isArray(json?.segments) ? json.segments : [];
-  const out = segs.map((s) => ({ t: Math.round(offset + (Number(s.start) || 0)), text: String(s.text || '').replace(/\s+/g, ' ').trim() })).filter((s) => s.text);
+// Réponse d'un service de transcription (Mistral, OpenRouter : formats voisins) -> segments { t, text } décalés de `offset` secondes
+// (morceau n° k d'un long audio). Sans horodatage dans la réponse, le texte est découpé en phrases dont l'instant est ESTIMÉ au
+// prorata des caractères sur la durée du morceau (`seconds`) : approximatif mais utile pour retrouver un passage à quelques secondes près.
+export function mistralSegments(json, offset = 0, seconds = 0) {
+  const j = json?.data && !json.segments && !json.text ? json.data : json;
+  const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+  const segs = Array.isArray(j?.segments) ? j.segments : [];
+  const out = segs.map((s) => ({ t: Math.round(offset + (Number(s.start ?? s.start_time ?? s.t) || 0)), text: clean(s.text) })).filter((s) => s.text);
   if (out.length) return out;
-  const text = String(json?.text || '').replace(/\s+/g, ' ').trim();
-  return text ? [{ t: Math.round(offset), text }] : [];
+  const text = clean(j?.text ?? j?.transcript ?? j?.transcription);
+  if (!text) return [];
+  if (!(seconds > 0)) return [{ t: Math.round(offset), text }];
+  const sentences = text.split(/(?<=[.!?…])\s+/).filter(Boolean);
+  const total = text.length || 1;
+  let acc = 0;
+  return sentences.map((s) => { const t = Math.round(offset + (acc / total) * seconds); acc += s.length + 1; return { t, text: s }; });
 }
 
 export const estimateAudioUsd = (videos, price) => videos.reduce((n, v) => n + ((v.seconds || 1800) / 60) * price, 0);
@@ -125,16 +136,16 @@ const yes = (a, def) => (a === '' ? def : /^(o|oui|y|yes|1)$/i.test(a));
 async function setup() {
   const cur = loadConfig();
   console.log(`Réglages enregistrés dans ${configPath()} (lisible par toi seul). Entrée = garder la valeur actuelle.\n`);
-  const key = await ask(`Clé API Mistral pour la reconnaissance vocale [${mask(cur.mistralKey)}] (vide = inchangée, « -» = effacer) : `, { hidden: true });
+  const key = await ask(`Clé API OpenRouter pour la reconnaissance vocale [${mask(cur.openrouterKey)}] (vide = inchangée, « -» = effacer) : `, { hidden: true });
   const browser = await ask(`Navigateur connecté à YouTube pour les cookies (chrome, safari, firefox, brave, edge… ; « -» = aucun) [${cur.cookiesBrowser || 'aucun'}] : `);
   const audio = await ask(`Transcrire par l'audio les vidéos sans sous-titre ? (o/n) [${cur.audio ? 'o' : 'n'}] : `);
   const budget = await ask(`Plafond de dépense par lancement, en $ [${cur.budget ?? 2}] : `);
   const next = { ...cur };
-  if (key === '-') delete next.mistralKey; else if (key) next.mistralKey = key;
+  if (key === '-') delete next.openrouterKey; else if (key) { next.openrouterKey = key; next.provider = 'openrouter'; }
   if (browser === '-') delete next.cookiesBrowser; else if (browser) next.cookiesBrowser = browser;
   if (audio) next.audio = yes(audio, !!cur.audio);
   if (budget && Number(budget) > 0) next.budget = Number(budget);
-  if (next.audio && !next.mistralKey && !process.env.MISTRAL_API_KEY) console.log('\n⚠ L\'audio est activé mais aucune clé Mistral n\'est enregistrée : relance « setup » pour la saisir.');
+  if (next.audio && !next.openrouterKey && !next.mistralKey && !process.env.OPENROUTER_API_KEY && !process.env.MISTRAL_API_KEY) console.log('\n⚠ L\'audio est activé mais aucune clé n\'est enregistrée : relance « setup » pour saisir ta clé OpenRouter.');
   saveConfig(next);
   console.log(`\n✓ Enregistré. Il suffit maintenant de copier les liens dans l'extension puis de lancer : npm run transcribe`);
   return 0;
@@ -151,13 +162,16 @@ async function readClipboard() {
 }
 
 function parseArgs(argv, cfg = {}) {
-  const o = { cmd: '', out: 'transcripts', audio: !!cfg.audio, model: cfg.model || 'voxtral-mini-latest', price: cfg.price ?? 0.003, budget: cfg.budget ?? 2, lang: cfg.lang || '', subLangs: cfg.subLangs || 'fr-orig,en-orig,fr,en', limit: 0, sleep: cfg.sleep ?? 3, cookiesBrowser: cfg.cookiesBrowser || '', cookies: '', dry: false, file: '', help: false, reveal: process.platform === 'darwin' };
+  const provider = cfg.provider === 'mistral' ? 'mistral' : 'openrouter';
+  const o = { cmd: '', provider, eu: !!cfg.eu, out: 'transcripts', audio: !!cfg.audio, model: cfg.model || (provider === 'mistral' ? 'voxtral-mini-latest' : 'mistralai/voxtral-mini-transcribe-3-0'), price: cfg.price ?? (provider === 'mistral' ? 0.003 : 0.0035), budget: cfg.budget ?? 2, lang: cfg.lang || '', subLangs: cfg.subLangs || 'fr-orig,en-orig,fr,en', limit: 0, sleep: cfg.sleep ?? 3, cookiesBrowser: cfg.cookiesBrowser || '', cookies: '', dry: false, file: '', help: false, reveal: process.platform === 'darwin' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = () => argv[++i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--audio') o.audio = true;
     else if (a === '--no-audio') o.audio = false;
     else if (a === '--no-reveal') o.reveal = false;
+    else if (a === '--eu') o.eu = true;
+    else if (a === '--provider') { o.provider = v() === 'mistral' ? 'mistral' : 'openrouter'; if (!argv.includes('--model') && !cfg.model) o.model = o.provider === 'mistral' ? 'voxtral-mini-latest' : 'mistralai/voxtral-mini-transcribe-3-0'; if (!argv.includes('--price') && cfg.price == null) o.price = o.provider === 'mistral' ? 0.003 : 0.0035; }
     else if (a === '--dry-run') o.dry = true;
     else if (a === '--out') o.out = v();
     else if (a === '--model') o.model = v();
@@ -184,7 +198,36 @@ async function readInput(file) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, mistralKey) {
+// Un morceau d'audio -> JSON du service. OpenRouter : format de la requête à confirmer (JSON base64 ou multipart) : les deux sont essayés.
+let sttMode = ''; // format qui a fonctionné ('json' | 'form'), mémorisé pour la suite du lancement
+async function sttRequest(o, key, file, name) {
+  const bytes = fs.readFileSync(file);
+  const openrouter = o.provider === 'openrouter';
+  const base = (openrouter ? (process.env.OPENROUTER_API_BASE || (o.eu ? 'https://eu.openrouter.ai/api/v1' : 'https://openrouter.ai/api/v1')) : (process.env.MISTRAL_API_BASE || 'https://api.mistral.ai') + '/v1').replace(/\/+$/, '');
+  const headers = { authorization: `Bearer ${key}` };
+  const asForm = () => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type: 'audio/mpeg' }), name);
+    form.append('model', o.model);
+    form.append('timestamp_granularities', 'segment');
+    if (openrouter) form.append('response_format', 'verbose_json');
+    if (o.lang) form.append('language', o.lang);
+    return fetch(`${base}/audio/transcriptions`, { method: 'POST', headers, body: form });
+  };
+  const asJson = () => fetch(`${base}/audio/transcriptions`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ model: o.model, input_audio: { data: bytes.toString('base64'), format: 'mp3' }, ...(o.lang ? { language: o.lang } : {}) }) });
+  let res;
+  if (!openrouter) res = await asForm();
+  else if (sttMode === 'form') res = await asForm();
+  else {
+    res = await asJson();
+    if (sttMode !== 'json' && [400, 415, 422].includes(res.status)) { const second = await asForm(); if (second.ok) { sttMode = 'form'; res = second; } }
+    else if (res.ok) sttMode = 'json';
+  }
+  if (!res.ok) throw new Error(`${openrouter ? 'OpenRouter' : 'Mistral'} : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`);
+  return res.json();
+}
+
+async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, key) {
   const url = `https://www.youtube.com/watch?v=${v.id}`;
   const dl = await run(ytdlp, [...cookieArgs, '--no-playlist', '-f', 'bestaudio[abr<=64]/worstaudio/bestaudio', '-x', '--audio-format', 'mp3', '--audio-quality', '9', '-o', path.join(tmp, '%(id)s.%(ext)s'), url]);
   if (!dl.ok) return { why: 'audio : ' + (dl.stderr.trim().split('\n').pop() || 'échec yt-dlp'), blocked: /Sign in to confirm|429|bot/i.test(dl.stderr) };
@@ -194,22 +237,18 @@ async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, mistralKey)
   const cut = await run(ffmpeg, ['-y', '-loglevel', 'error', '-i', audio, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '32k', '-f', 'segment', '-segment_time', String(SPLIT), '-reset_timestamps', '1', path.join(tmp, `${v.id}_%03d.mp3`)]);
   const parts = fs.readdirSync(tmp).filter((f) => f.startsWith(v.id + '_') && f.endsWith('.mp3')).sort();
   if (!cut.ok || !parts.length) return { why: 'ffmpeg : découpage impossible' + (cut.missing ? ' (ffmpeg introuvable)' : '') };
-  const base = (process.env.MISTRAL_API_BASE || 'https://api.mistral.ai').replace(/\/+$/, '');
   const segments = [];
-  let lang = '';
+  let lang = '', seconds = 0;
   for (let k = 0; k < parts.length; k++) {
-    const form = new FormData();
-    form.append('file', new Blob([fs.readFileSync(path.join(tmp, parts[k]))], { type: 'audio/mpeg' }), parts[k]);
-    form.append('model', o.model);
-    form.append('timestamp_granularities', 'segment');
-    if (o.lang) form.append('language', o.lang);
-    const res = await fetch(`${base}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${mistralKey}` }, body: form });
-    if (!res.ok) return { why: `Mistral : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 160)}` };
-    const json = await res.json();
+    const file = path.join(tmp, parts[k]);
+    const dur = Math.min(SPLIT, Math.max(1, (fs.statSync(file).size * 8) / 32000)); // durée d'un morceau à 32 kbit/s
+    let json;
+    try { json = await sttRequest(o, key, file, parts[k]); } catch (e) { return { why: e.message }; }
     lang = lang || json.language || '';
-    segments.push(...mistralSegments(json, k * SPLIT));
+    segments.push(...mistralSegments(json, k * SPLIT, dur));
+    seconds += dur;
   }
-  return { segments, lang, seconds: parts.length * SPLIT };
+  return { segments, lang, seconds: Math.round(seconds) };
 }
 
 export async function main(argv) {
@@ -217,8 +256,8 @@ export async function main(argv) {
   const o = parseArgs(argv, cfg);
   if (o.help) { console.log(HELP); return 0; }
   if (o.cmd === 'setup') return setup();
-  if (o.cmd === 'config') { console.log(`Fichier : ${configPath()}\n` + JSON.stringify({ ...cfg, ...(cfg.mistralKey ? { mistralKey: mask(cfg.mistralKey) } : {}) }, null, 2)); return 0; }
-  const mistralKey = process.env.MISTRAL_API_KEY || cfg.mistralKey || '';
+  if (o.cmd === 'config') { console.log(`Fichier : ${configPath()}\n` + JSON.stringify({ ...cfg, ...(cfg.mistralKey ? { mistralKey: mask(cfg.mistralKey) } : {}), ...(cfg.openrouterKey ? { openrouterKey: mask(cfg.openrouterKey) } : {}) }, null, 2)); return 0; }
+  const sttKey = o.provider === 'mistral' ? (process.env.MISTRAL_API_KEY || cfg.mistralKey || '') : (process.env.OPENROUTER_API_KEY || cfg.openrouterKey || '');
   let text = await readInput(o.file);
   if (!text.trim() && !o.file) { console.log('Lecture des liens dans le presse-papiers…'); text = await readClipboard(); }
   let videos = parseInput(text);
@@ -233,14 +272,14 @@ export async function main(argv) {
   console.log(`${videos.length} vidéo(s) en entrée, ${videos.length - todo.length} déjà faite(s) (reprise), ${batch.length} à traiter.`);
   if (o.dry) {
     console.log(`Étape A (sous-titres YouTube) : gratuite.`);
-    console.log(o.audio ? `Étape B (audio + ${o.model}) : au plus ≈ ${estimateAudioUsd(batch, o.price).toFixed(2)} $ si AUCUNE vidéo n'avait de sous-titres (${o.price} $/min ; durée de 30 min supposée si inconnue).` : 'Étape B (audio) désactivée : ajoute --audio pour traiter aussi les vidéos sans sous-titres.');
+    console.log(o.audio ? `Étape B (audio + ${o.model} via ${o.provider === 'mistral' ? 'Mistral' : 'OpenRouter'}) : au plus ≈ ${estimateAudioUsd(batch, o.price).toFixed(2)} $ si AUCUNE vidéo n'avait de sous-titres (${o.price} $/min ; durée de 30 min supposée si inconnue).` : 'Étape B (audio) désactivée : ajoute --audio pour traiter aussi les vidéos sans sous-titres.');
     return 0;
   }
   const ytdlp = process.env.XBS_YTDLP || 'yt-dlp', ffmpeg = process.env.XBS_FFMPEG || 'ffmpeg';
   const probe = await run(ytdlp, ['--version'], { timeout: 20_000 });
   if (!probe.ok) { console.error(probe.missing ? '✗ yt-dlp est introuvable. Installe-le : brew install yt-dlp ffmpeg (macOS) ou pipx install yt-dlp.' : '✗ yt-dlp ne démarre pas : ' + probe.stderr.trim()); return 1; }
   if (o.audio) {
-    if (!mistralKey) { console.error('✗ L\'audio demande une clé Mistral : lance « npm run transcribe -- setup » pour l\'enregistrer (clé sur https://console.mistral.ai), ou utilise --no-audio.'); return 1; }
+    if (!sttKey) { console.error(`✗ L'audio demande une clé ${o.provider === 'mistral' ? 'Mistral' : 'OpenRouter'} : lance « npm run transcribe -- setup » pour l'enregistrer, ou utilise --no-audio.`); return 1; }
     if (!(await run(ffmpeg, ['-version'], { timeout: 20_000 })).ok) { console.error('✗ ffmpeg est introuvable (nécessaire pour --audio). Installe-le : brew install ffmpeg.'); return 1; }
   }
   const cookieArgs = o.cookiesBrowser ? ['--cookies-from-browser', o.cookiesBrowser] : o.cookies ? ['--cookies', o.cookies] : [];
@@ -266,7 +305,7 @@ export async function main(argv) {
         if (o.audio && !bot) {
           const est = ((v.seconds || 1800) / 60) * o.price;
           if (spent + est > o.budget) { console.log(`${label} : plafond de ${o.budget} $ atteint : arrêt de l'audio.`); results.failed.push({ videoId: v.id, why: 'plafond' }); continue; }
-          const r = await transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, mistralKey);
+          const r = await transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, sttKey);
           if (r.segments?.length) {
             spent += ((r.seconds || v.seconds || 1800) / 60) * o.price;
             results.items.push({ id: 'yt:' + v.id, videoId: v.id, source: 'stt', lang: r.lang, model: o.model, segments: r.segments }); nStt++; blocked = 0;

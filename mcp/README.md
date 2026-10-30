@@ -89,14 +89,14 @@ Les transcriptions lues par ce modèle partent chez OpenRouter, comme pour le jo
 
 ## Transcrire en local les vidéos sans transcription : `npm run transcribe`
 
-Quand l'extension n'arrive pas à récupérer une transcription (cartes « Pas de transcription » ou « à récupérer »), un outil local peut s'en charger avec **yt-dlp** puis, si besoin, la reconnaissance vocale de **Mistral**. Aucun paquet npm à installer.
+Quand l'extension n'arrive pas à récupérer une transcription (cartes « Pas de transcription » ou « à récupérer »), un outil local peut s'en charger avec **yt-dlp** puis, si besoin, la reconnaissance vocale **Voxtral (Mistral) via OpenRouter**, donc avec la clé OpenRouter que tu as déjà. Aucun paquet npm à installer.
 
 **Une seule fois**
 ```
 brew install yt-dlp ffmpeg                # macOS (autres systèmes : voir leurs sites)
-npm run transcribe -- setup               # clé Mistral, navigateur pour les cookies, audio oui/non, plafond
+npm run transcribe -- setup               # clé OpenRouter, navigateur pour les cookies, audio oui/non, plafond
 ```
-Les réponses sont enregistrées dans `~/.config/xbs/transcribe.json` (lisible par toi seul) : plus rien à retaper ensuite. La clé n'est jamais stockée dans l'extension.
+Les réponses sont enregistrées dans `~/.config/xbs/transcribe.json` (lisible par toi seul) : plus rien à retaper ensuite. La clé n'est jamais stockée dans l'extension (c'est la même clé OpenRouter que dans ⚙ › IA, à recopier une fois ici).
 
 **À chaque fois**
 1. **Dans l'extension** : affiche les vidéos voulues (une chaîne via « Comptes », une recherche, `has:notranscript`…), puis **⋯ › 📋 Copier les liens sans transcription (N)**.
@@ -105,10 +105,11 @@ Les réponses sont enregistrées dans `~/.config/xbs/transcribe.json` (lisible p
 
 Un raccourci global est possible : `npm link` dans le dossier du projet crée la commande `xbs-transcribe` utilisable partout.
 
-Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste toutes) : `--audio` / `--no-audio`, `--budget 2` (plafond en $), `--price 0.003` (prix d'une minute : vérifie la grille de Mistral), `--model voxtral-mini-latest`, `--lang fr`, `--cookies-from-browser chrome`, `--sleep 3` (pause entre deux vidéos), `--out dossier`. Commandes : `setup`, `config` (affiche les réglages, clé masquée). Un fichier de liens ou une entrée redirigée (`pbpaste | …`, `liens.txt`) remplace le presse-papiers.
+Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste toutes) : `--audio` / `--no-audio`, `--budget 2` (plafond en $), `--price 0.0035` (prix d'une minute d'après la fiche OpenRouter de Voxtral Mini Transcribe 3 : à vérifier), `--model mistralai/voxtral-mini-transcribe-3-0`, `--eu` (point d'accès européen d'OpenRouter), `--provider mistral` (API de Mistral en direct, clé `MISTRAL_API_KEY`), `--lang fr`, `--cookies-from-browser chrome`, `--sleep 3` (pause entre deux vidéos), `--out dossier`. Commandes : `setup`, `config` (affiche les réglages, clé masquée). Un fichier de liens ou une entrée redirigée (`pbpaste | …`, `liens.txt`) remplace le presse-papiers.
 
 À savoir :
 * **La reprise est automatique** : relancer ne refait pas les vidéos déjà dans `results.json`. Après 3 refus anti-robot de suite, l'outil s'arrête pour ne pas faire bloquer ton IP ; `--cookies-from-browser` (navigateur connecté à YouTube) règle le plus souvent le problème.
 * **Les sous-titres d'abord** : ils existent pour la plupart des vidéos, même quand l'extension n'a pas pu les lire ; la reconnaissance vocale (payante) n'est tentée que sans aucun sous-titre.
-* **Conditions d'utilisation de YouTube** : télécharger des vidéos n'est pas prévu par ses conditions ; pour de l'audio à des fins personnelles c'est une zone grise, à ta décision. L'audio est envoyé à Mistral.
-* L'outil est testé avec de faux `yt-dlp`, `ffmpeg` et serveur Mistral : le premier essai réel (YouTube, API Mistral) reste à faire sur 2 ou 3 vidéos.
+* **Conditions d'utilisation de YouTube** : télécharger des vidéos n'est pas prévu par ses conditions ; pour de l'audio à des fins personnelles c'est une zone grise, à ta décision. L'audio est envoyé à OpenRouter, puis à Mistral (point d'accès européen avec `--eu`).
+* **Format de la requête OpenRouter** : je n'ai pas pu lire la documentation du point d'accès `/audio/transcriptions` d'OpenRouter depuis mon environnement. L'outil essaie donc deux formats (JSON avec l'audio en base64, puis envoi de fichier) et, si la réponse n'a pas d'horodatage, **estime** l'instant de chaque phrase au prorata du texte sur la durée du morceau (précision de l'ordre de quelques secondes). Si OpenRouter refuse, l'erreur exacte s'affiche : recopie-la pour que le format soit corrigé.
+* L'outil est testé avec de faux `yt-dlp`, `ffmpeg` et faux serveurs : le premier essai réel (YouTube, OpenRouter) reste à faire sur 2 ou 3 vidéos.
