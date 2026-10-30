@@ -1,5 +1,5 @@
-import { getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog, planPlaylistDeletion, deletePlaylistData } from './lib/db.js';
-import { bestChunk, fmtTime } from './lib/transcript.js';
+import { getTweets, getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog, planPlaylistDeletion, deletePlaylistData } from './lib/db.js';
+import { chunkSegments, bestChunk, fmtTime } from './lib/transcript.js';
 import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, judgeText, eventDays, clusterCandidates, rankMembers, handleKey, OFFICIAL_DESC, OFFICIAL_MIN } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool, acctId } from './lib/search.js';
@@ -461,6 +461,7 @@ function trBadge(t) {
   if (t.unavailable) return '';
   const k = t.trChars ? ` ≈ ${Math.max(1, Math.round(t.trChars / 1000))} k caractères de texte parlé.` : '';
   const when = t.trAt ? ` Récupérée le ${new Date(t.trAt).toLocaleDateString('fr-FR')}.` : '';
+  if (t.trState === 'ok' && t.trSource === 'stt') return `<span class="yt-trb stt" title="Transcription par reconnaissance vocale (audio de la vidéo transcrit en local avec l’outil mcp/transcribe.mjs). Horodatage exact, quelques erreurs de mots possibles.${esc(k + when)}">🎙 Transcription audio</span>`;
   if (t.trState === 'ok') return t.trSource === 'ai'
     ? `<span class="yt-trb ai" title="Transcription générée par une IA (peut contenir des erreurs), cherchée dans le texte parlé.${esc(k + when)}">🤖 Transcription IA</span>`
     : `<span class="yt-trb ok" title="Transcription de YouTube récupérée : la recherche porte aussi sur ce qui est dit dans la vidéo.${esc(k + when)}">🗒 Transcription</span>`;
@@ -812,6 +813,42 @@ function renderActive() {
 function accountsChanged() { renderActive(); if (!$('acct-pop').hidden) renderAccounts(); run(); }
 $('acct-q').addEventListener('input', renderAccounts);
 $('acct-clear').onclick = () => { state.accounts.clear(); accountsChanged(); };
+// ---------- transcriptions manquantes : copier les liens -> outil local -> importer le fichier ----------
+const missingVideos = () => (last?.rows || []).map(([r]) => index.tweets[r]).filter((t) => t && isVideoItem(t) && t.trState !== 'ok' && !t.unavailable && !t.off);
+$('sync-menu').querySelector(':scope > .menu-btn').addEventListener('click', () => { $('tr-copy').textContent = `📋 Copier les liens sans transcription (${missingVideos().length})`; });
+$('tr-copy').onclick = async () => {
+  const vids = missingVideos();
+  if (!vids.length) { $('progress').textContent = 'Aucune vidéo sans transcription dans les résultats affichés (essaie « has:notranscript » ou choisis une chaîne dans « Comptes »).'; return; }
+  const clean = (s) => String(s || '').replace(/[\t\r\n]+/g, ' ').trim();
+  await navigator.clipboard.writeText(vids.map((t) => `${t.url}\t${t.durationSec || ''}\t${clean(t.text)}`).join('\n') + '\n');
+  $('progress').textContent = `${vids.length} lien${vids.length > 1 ? 's' : ''} copié${vids.length > 1 ? 's' : ''}. Dans un terminal, dossier du projet : pbpaste | node mcp/transcribe.mjs (ajoute --audio pour les vidéos sans aucun sous-titre ; voir mcp/README.md). Puis ⋯ › Importer des transcriptions…`;
+};
+$('tr-import-btn').onclick = () => $('tr-import').click();
+$('tr-import').onchange = async (e) => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  const out = $('progress');
+  try {
+    if (file.size > 300 * 1024 * 1024) throw new Error('fichier trop gros (300 Mo au plus)');
+    const data = JSON.parse(await file.text());
+    if (data?.format !== 'xbs-transcripts/1' || !Array.isArray(data.items)) throw new Error('ce n’est pas un fichier créé par mcp/transcribe.mjs (results.json)');
+    let ok = 0, unknown = 0, had = 0, bad = 0;
+    for (const it of data.items) {
+      const id = String(it?.id || '');
+      const segs = Array.isArray(it?.segments) ? it.segments.filter((s) => Number.isFinite(s?.t) && typeof s?.text === 'string' && s.text.trim()).slice(0, 40000) : [];
+      if (!/^yt:[\w-]{11}$/.test(id) || !segs.length) { bad++; continue; }
+      const [v] = await getTweets([id]);
+      if (!v) { unknown++; continue; }
+      if (v.trState === 'ok' && v.trSource !== 'ai') { had++; continue; } // une vraie transcription existante n'est jamais écrasée (celle d'une IA peut l'être)
+      const chunks = chunkSegments(segs.map((s) => ({ t: Math.max(0, Math.round(s.t)), text: s.text.trim().slice(0, 2000) })));
+      if (!chunks.length) { bad++; continue; }
+      await chrome.runtime.sendMessage({ type: 'ytTranscript', id, state: 'ok', chunks, extra: { trSource: it.source === 'stt' ? 'stt' : 'subs', ...(it.model ? { trModel: String(it.model).slice(0, 60) } : {}) } });
+      ok++;
+    }
+    out.textContent = `Import : ${ok} transcription${ok > 1 ? 's' : ''} ajoutée${ok > 1 ? 's' : ''}${had ? `, ${had} déjà présente${had > 1 ? 's' : ''}` : ''}${unknown ? `, ${unknown} vidéo${unknown > 1 ? 's' : ''} inconnue${unknown > 1 ? 's' : ''} de l’extension` : ''}${bad ? `, ${bad} illisible${bad > 1 ? 's' : ''}` : ''}. L’indexation par le sens des nouveaux passages démarre.`;
+    setTimeout(() => load(false).then(() => run()).catch(() => {}), 1500);
+  } catch (err) { out.textContent = '⚠ Import impossible : ' + (err.message || err); }
+};
 $('source').addEventListener('change', () => { acctCache = null; if (!$('acct-pop').hidden) renderAccounts(); });
 
 

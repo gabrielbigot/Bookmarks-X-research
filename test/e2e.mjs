@@ -1411,6 +1411,40 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   await mclick('.chip[data-type="link"]');
   await waitFor(async () => (await panel.locator('#flt-n').isVisible()) && (await panel.locator('#flt-n').innerText()) === '1', 'pastille « Filtres » = 1', 8000);
 }
+{ // transcriptions manquantes : copier les liens des résultats affichés, importer le fichier de l'outil local (mcp/transcribe.mjs)
+  await panel.evaluate(async () => {
+    const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const tx = db.transaction(['tweets'], 'readwrite');
+    const mk = (id, text) => ({ id: 'yt:' + id, kind: 'youtube', source: 'youtube', videoId: id, handle: 'chainetr', name: 'Chaîne Import', text, url: 'https://www.youtube.com/watch?v=' + id, createdAt: null, sortIndex: '77', links: [], media: [], stats: {}, durationText: '10:00', durationSec: 600, playlists: [], addedAt: Date.now() });
+    tx.objectStore('tweets').put(mk('eeeeeeeeeee', 'Entretien importé sans transcription'));
+    tx.objectStore('tweets').put(mk('fffffffffff', 'Autre vidéo importée'));
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+  });
+  await panel.reload(); await panel.waitForSelector('.tw');
+  await panel.fill('#q', 'has:notranscript from:@chainetr');
+  await waitFor(async () => (await panel.locator('.tw.yt').count()) === 2, 'vidéos sans transcription affichées', 10000);
+  await panel.evaluate(() => { window.__clip = ''; Object.defineProperty(navigator.clipboard, 'writeText', { value: async (t) => { window.__clip = t; }, configurable: true }); });
+  await panel.click('#sync-menu .menu-btn');
+  assert.match(await panel.locator('#tr-copy').innerText(), /\(2\)/);
+  await panel.click('#tr-copy');
+  await waitFor(async () => (await panel.evaluate(() => window.__clip)).includes('eeeeeeeeeee'), 'liens copiés', 5000);
+  const clip = await panel.evaluate(() => window.__clip);
+  assert.deepEqual(clip.trim().split('\n').map((l) => l.split('\t')[0]), ['https://www.youtube.com/watch?v=eeeeeeeeeee', 'https://www.youtube.com/watch?v=fffffffffff'].sort((a, b) => clip.indexOf(a) - clip.indexOf(b)));
+  assert.ok(clip.split('\n')[0].split('\t')[1] === '600', 'durée copiée');
+  const file = { format: 'xbs-transcripts/1', items: [
+    { id: 'yt:eeeeeeeeeee', videoId: 'eeeeeeeeeee', source: 'stt', model: 'voxtral-mini-latest', lang: 'fr', segments: [{ t: 0, text: 'Bienvenue dans cet entretien.' }, { t: 95, text: 'Nous parlons de la mélodiquezorglub des agents.' }] },
+    { id: 'yt:ggggggggggg', videoId: 'ggggggggggg', source: 'subs', segments: [{ t: 1, text: 'Vidéo inconnue de l’extension' }] },
+    { id: 'pas-un-id', segments: [] },
+  ] };
+  await panel.setInputFiles('#tr-import', { name: 'results.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(file)) });
+  await waitFor(async () => /Import : 1 transcription ajoutée.*1 vidéo inconnue.*1 illisible/.test(await panel.locator('#progress').innerText()), 'import des transcriptions', 15000);
+  await panel.reload(); await panel.waitForSelector('.tw');
+  await panel.fill('#q', 'mélodiquezorglub');
+  await waitFor(async () => /Entretien importé/.test(await panel.locator('.tw.yt').first().innerText().catch(() => '')), 'recherche dans la transcription importée', 15000);
+  assert.equal(await panel.locator('.tw.yt').first().locator('.yt-trb.stt').count(), 1, 'pastille « Transcription audio »');
+  await panel.fill('#q', 'has:notranscript from:@chainetr');
+  await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'une seule vidéo reste sans transcription', 10000);
+}
 { // grille ×4 sur une fenêtre de ≈ 1000 px (3 colonnes seulement avant : minimum 320 px par carte)
   await panel.setViewportSize({ width: 1000, height: 800 });
   await panel.selectOption('#view', '4');
