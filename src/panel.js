@@ -821,7 +821,7 @@ $('tr-copy').onclick = async () => {
   if (!vids.length) { $('progress').textContent = 'Aucune vidéo sans transcription dans les résultats affichés (essaie « has:notranscript » ou choisis une chaîne dans « Comptes »).'; return; }
   const clean = (s) => String(s || '').replace(/[\t\r\n]+/g, ' ').trim();
   await navigator.clipboard.writeText(vids.map((t) => `${t.url}\t${t.durationSec || ''}\t${clean(t.text)}`).join('\n') + '\n');
-  $('progress').textContent = `${vids.length} lien${vids.length > 1 ? 's' : ''} copié${vids.length > 1 ? 's' : ''}. Dans un terminal, dossier du projet : pbpaste | node mcp/transcribe.mjs (ajoute --audio pour les vidéos sans aucun sous-titre ; voir mcp/README.md). Puis ⋯ › Importer des transcriptions…`;
+  $('progress').textContent = `${vids.length} lien${vids.length > 1 ? 's' : ''} copié${vids.length > 1 ? 's' : ''}. Dans un terminal, dossier du projet : npm run transcribe (les liens sont lus tout seuls dans le presse-papiers ; première fois : npm run transcribe -- setup). Puis ⋯ › Importer des transcriptions…`;
 };
 $('tr-import-btn').onclick = () => $('tr-import').click();
 $('tr-import').onchange = async (e) => {

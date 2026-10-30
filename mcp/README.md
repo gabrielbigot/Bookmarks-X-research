@@ -87,24 +87,28 @@ Points de départ à comparer (recherche faite fin octobre 2026, sources parfois
 
 Les transcriptions lues par ce modèle partent chez OpenRouter, comme pour le journal.
 
-## Transcrire en local les vidéos sans transcription : `mcp/transcribe.mjs`
+## Transcrire en local les vidéos sans transcription : `npm run transcribe`
 
-Quand l'extension n'arrive pas à récupérer une transcription (cartes « Pas de transcription » ou « à récupérer »), un outil local peut s'en charger avec **yt-dlp** puis, si besoin, la reconnaissance vocale de **Mistral**. Rien à installer côté npm.
+Quand l'extension n'arrive pas à récupérer une transcription (cartes « Pas de transcription » ou « à récupérer »), un outil local peut s'en charger avec **yt-dlp** puis, si besoin, la reconnaissance vocale de **Mistral**. Aucun paquet npm à installer.
 
-1. **Dans l'extension** : affiche les vidéos voulues (une chaîne via « Comptes », une recherche, `has:notranscript`…), puis **⋯ › 📋 Copier les liens sans transcription (N)**. Le presse-papiers contient une vidéo par ligne : lien, durée, titre.
-2. **Dans un terminal**, dossier du projet :
-   ```
-   brew install yt-dlp ffmpeg                       # une seule fois (macOS)
-   pbpaste | node mcp/transcribe.mjs                # étape A : sous-titres YouTube (gratuit)
-   pbpaste | node mcp/transcribe.mjs --audio        # + étape B : audio et Mistral pour les vidéos sans aucun sous-titre
-   ```
-   Autres systèmes : colle les lignes dans un fichier `liens.txt` et lance `node mcp/transcribe.mjs liens.txt`. Essayer d'abord : `--limit 3`, ou `--dry-run` pour voir l'estimation du coût sans rien appeler.
-3. **Dans l'extension** : **⋯ › 📥 Importer des transcriptions…** et choisis `transcripts/results.json`. Les transcriptions sont indexées (mots et sens) comme les autres ; celles issues de la reconnaissance vocale portent la pastille « 🎙 Transcription audio ». Une vraie transcription déjà présente n'est jamais écrasée.
+**Une seule fois**
+```
+brew install yt-dlp ffmpeg                # macOS (autres systèmes : voir leurs sites)
+npm run transcribe -- setup               # clé Mistral, navigateur pour les cookies, audio oui/non, plafond
+```
+Les réponses sont enregistrées dans `~/.config/xbs/transcribe.json` (lisible par toi seul) : plus rien à retaper ensuite. La clé n'est jamais stockée dans l'extension.
 
-Options utiles : `--cookies-from-browser chrome` (navigateur connecté à YouTube : souvent nécessaire quand YouTube répond « Sign in to confirm you're not a bot »), `--budget 2` (plafond en $ pour l'audio), `--price 0.003` (prix d'une minute : vérifie la grille de Mistral), `--model voxtral-mini-latest`, `--lang fr`, `--sleep 3` (pause entre deux vidéos), `--out dossier`. `--help` les liste toutes. La clé Mistral se donne par la variable `MISTRAL_API_KEY` (jamais stockée dans l'extension).
+**À chaque fois**
+1. **Dans l'extension** : affiche les vidéos voulues (une chaîne via « Comptes », une recherche, `has:notranscript`…), puis **⋯ › 📋 Copier les liens sans transcription (N)**.
+2. **Dans le terminal**, dossier du projet : `npm run transcribe` (les liens sont lus dans le presse-papiers ; le fichier créé s'affiche dans le Finder sur macOS). Pour essayer : `npm run transcribe -- --limit 3`, ou `-- --dry-run` pour l'estimation du coût sans rien appeler.
+3. **Dans l'extension** : **⋯ › 📥 Importer des transcriptions…** et choisis `transcripts/results.json`. Les transcriptions sont indexées (mots et sens) comme les autres ; celles de la reconnaissance vocale portent la pastille « 🎙 Transcription audio ». Une vraie transcription déjà présente n'est jamais écrasée.
+
+Un raccourci global est possible : `npm link` dans le dossier du projet crée la commande `xbs-transcribe` utilisable partout.
+
+Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste toutes) : `--audio` / `--no-audio`, `--budget 2` (plafond en $), `--price 0.003` (prix d'une minute : vérifie la grille de Mistral), `--model voxtral-mini-latest`, `--lang fr`, `--cookies-from-browser chrome`, `--sleep 3` (pause entre deux vidéos), `--out dossier`. Commandes : `setup`, `config` (affiche les réglages, clé masquée). Un fichier de liens ou une entrée redirigée (`pbpaste | …`, `liens.txt`) remplace le presse-papiers.
 
 À savoir :
-* **La reprise est automatique** : relancer la même commande ne refait pas les vidéos déjà dans `results.json`. Après 3 refus anti-robot de suite, l'outil s'arrête pour ne pas faire bloquer ton IP.
-* **Les sous-titres d'abord** : les sous-titres YouTube existent pour la plupart des vidéos, même quand l'extension n'a pas pu les lire ; la reconnaissance vocale (payante) n'est tentée que sans aucun sous-titre.
+* **La reprise est automatique** : relancer ne refait pas les vidéos déjà dans `results.json`. Après 3 refus anti-robot de suite, l'outil s'arrête pour ne pas faire bloquer ton IP ; `--cookies-from-browser` (navigateur connecté à YouTube) règle le plus souvent le problème.
+* **Les sous-titres d'abord** : ils existent pour la plupart des vidéos, même quand l'extension n'a pas pu les lire ; la reconnaissance vocale (payante) n'est tentée que sans aucun sous-titre.
 * **Conditions d'utilisation de YouTube** : télécharger des vidéos n'est pas prévu par ses conditions ; pour de l'audio à des fins personnelles c'est une zone grise, à ta décision. L'audio est envoyé à Mistral.
 * L'outil est testé avec de faux `yt-dlp`, `ffmpeg` et serveur Mistral : le premier essai réel (YouTube, API Mistral) reste à faire sur 2 ou 3 vidéos.

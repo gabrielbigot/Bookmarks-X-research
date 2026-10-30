@@ -4,7 +4,8 @@
   "description": "Extension navigateur : recherche sémantique locale dans les bookmarks X",
   "scripts": {
     "build": "node build.mjs",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "transcribe": "node mcp/transcribe.mjs"
   },
   "repository": {
     "type": "git",
@@ -21,6 +22,7 @@
     "esbuild": "^0.28.2",
     "playwright": "^1.56.1"
   },
+  "bin": { "xbs-transcribe": "mcp/transcribe.mjs" },
   "private": true,
   "type": "module"
 }

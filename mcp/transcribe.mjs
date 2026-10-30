@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // Transcrit en local les vidéos YouTube dont l'extension n'a pas pu récupérer la transcription.
 //
-//   1. Dans l'extension : ⋯ › « Copier les liens des vidéos sans transcription » (selon ta recherche / tes comptes affichés)
-//   2. pbpaste | node mcp/transcribe.mjs                      (macOS ; sous Linux : xclip -o | …, sous Windows : un fichier .txt)
-//      node mcp/transcribe.mjs liens.txt --audio              (en plus : audio + reconnaissance vocale Mistral quand il n'y a aucun sous-titre)
-//   3. Dans l'extension : ⋯ › « Importer des transcriptions… » et choisir le fichier créé (transcripts/results.json)
+//   Une fois :          npm run transcribe -- setup          (clé Mistral, navigateur pour les cookies : enregistrés, plus à les retaper)
+//   À chaque fois :     1. Dans l'extension : ⋯ › « Copier les liens sans transcription »
+//                       2. npm run transcribe                (lit le presse-papiers tout seul)
+//                       3. Dans l'extension : ⋯ › « Importer des transcriptions… » et choisir le fichier indiqué (results.json)
 //
 // Étape A (gratuite) : yt-dlp récupère les sous-titres YouTube (y compris automatiques).
-// Étape B (--audio, payante, clé MISTRAL_API_KEY) : yt-dlp récupère l'audio, ffmpeg le découpe, Mistral (Voxtral) le transcrit avec horodatage.
+// Étape B (audio, payante, clé Mistral) : yt-dlp récupère l'audio, ffmpeg le découpe, Mistral (Voxtral) le transcrit avec horodatage.
 // Aucune dépendance npm : Node 18+, yt-dlp et ffmpeg installés (brew install yt-dlp ffmpeg).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -16,14 +16,19 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseJson3 } from '../src/lib/transcript.js';
 
-const HELP = `Usage : node mcp/transcribe.mjs [liens.txt] [options]   (sans fichier : lit l'entrée standard)
+const HELP = `Usage : npm run transcribe [-- commande ou options]        (ou : node mcp/transcribe.mjs …)
+
+Commandes
+  setup                      enregistre une fois pour toutes : clé Mistral, navigateur des cookies, réglages par défaut
+  config                     affiche les réglages enregistrés (la clé est masquée)
+  (aucune)                   transcrit les vidéos : liens lus dans un fichier, sinon l'entrée standard, sinon le PRESSE-PAPIERS
 
 Entrée : une vidéo par ligne (lien ou identifiant YouTube) ; colonnes optionnelles séparées par une tabulation : durée en secondes, titre.
          C'est exactement ce que copie le bouton de l'extension.
 
-Options
+Options (elles l'emportent sur les réglages enregistrés)
   --out <dossier>            dossier de sortie (défaut : ./transcripts) ; le fichier à importer est results.json
-  --audio                    si aucun sous-titre : audio + reconnaissance vocale Mistral (clé MISTRAL_API_KEY requise)
+  --audio / --no-audio       si aucun sous-titre : audio + reconnaissance vocale Mistral (clé requise)
   --model <nom>              modèle Mistral (défaut : voxtral-mini-latest)
   --price <$/min>            prix d'une minute d'audio, pour l'estimation et le plafond (défaut : 0.003 ; vérifie la grille de Mistral)
   --budget <$>               plafond de dépense pour la reconnaissance vocale (défaut : 2)
@@ -31,13 +36,15 @@ Options
   --sub-langs <liste>        langues de sous-titres essayées, par ordre (défaut : fr-orig,en-orig,fr,en)
   --limit <n>                ne traiter que n vidéos (pour essayer)
   --sleep <secondes>         pause entre deux vidéos (défaut : 3) : ménage YouTube
-  --cookies-from-browser <b> utilise les cookies d'un navigateur connecté à YouTube (chrome, firefox, safari, brave, edge…) : souvent
-                             nécessaire quand YouTube répond « Sign in to confirm you're not a bot »
+  --cookies-from-browser <b> cookies d'un navigateur connecté à YouTube (chrome, firefox, safari, brave, edge…) : souvent nécessaire
+                             quand YouTube répond « Sign in to confirm you're not a bot »
   --cookies <fichier>        fichier cookies.txt
   --dry-run                  n'appelle rien : compte les vidéos et estime le coût de l'audio
+  --no-reveal                ne pas montrer le fichier créé dans le Finder (macOS)
   --help
 
-Variables : MISTRAL_API_KEY, XBS_YTDLP / XBS_FFMPEG (chemins des programmes), MISTRAL_API_BASE`;
+Réglages enregistrés dans ~/.config/xbs/transcribe.json (lisible par toi seul). Variables d'environnement prioritaires :
+MISTRAL_API_KEY, XBS_CONFIG (autre fichier de réglages), XBS_YTDLP / XBS_FFMPEG (chemins des programmes), MISTRAL_API_BASE`;
 
 // ---------- fonctions pures (testées) ----------
 export const ytId = (s) => (String(s).match(/(?:v=|youtu\.be\/|shorts\/|live\/|embed\/|^)([\w-]{11})(?![\w-])/) || [])[1] || null;
@@ -79,12 +86,78 @@ const run = (cmd, args, { timeout = 30 * 60_000 } = {}) => new Promise((resolve)
 });
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
 
-function parseArgs(argv) {
-  const o = { out: 'transcripts', audio: false, model: 'voxtral-mini-latest', price: 0.003, budget: 2, lang: '', subLangs: 'fr-orig,en-orig,fr,en', limit: 0, sleep: 3, cookiesBrowser: '', cookies: '', dry: false, file: '', help: false };
+// ---------- réglages enregistrés ----------
+export const configPath = () => process.env.XBS_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'xbs', 'transcribe.json');
+export function loadConfig() { try { const c = JSON.parse(fs.readFileSync(configPath(), 'utf8')); return c && typeof c === 'object' ? c : {}; } catch { return {}; } }
+export function saveConfig(cfg) {
+  const f = configPath();
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  fs.writeFileSync(f, JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
+  try { fs.chmodSync(f, 0o600); } catch { /* systèmes sans droits unix */ }
+}
+const mask = (k) => (k ? k.slice(0, 3) + '…' + k.slice(-3) : '(aucune)');
+
+// Question dans le terminal ; `hidden` n'affiche pas la saisie (clé secrète). Entrée redirigée : une ligne par question.
+let pipedLines = null;
+async function ask(question, { hidden = false } = {}) {
+  process.stdout.write(question);
+  if (!process.stdin.isTTY) {
+    if (!pipedLines) { const chunks = []; for await (const c of process.stdin) chunks.push(c); pipedLines = Buffer.concat(chunks).toString('utf8').split(/\r?\n/); }
+    process.stdout.write('\n');
+    return (pipedLines.shift() || '').trim();
+  }
+  return new Promise((resolve) => {
+    let s = '';
+    process.stdin.setRawMode(true); process.stdin.resume(); process.stdin.setEncoding('utf8');
+    const onData = (ch) => {
+      for (const c of ch) {
+        if (c === '\u0003') { process.stdout.write('\n'); process.exit(130); }
+        if (c === '\r' || c === '\n') { process.stdin.setRawMode(false); process.stdin.pause(); process.stdin.off('data', onData); process.stdout.write('\n'); return resolve(s.trim()); }
+        if (c === '\u007f' || c === '\b') { if (s) { s = s.slice(0, -1); if (!hidden) process.stdout.write('\b \b'); } continue; }
+        s += c; if (!hidden) process.stdout.write(c);
+      }
+    };
+    process.stdin.on('data', onData);
+  });
+}
+const yes = (a, def) => (a === '' ? def : /^(o|oui|y|yes|1)$/i.test(a));
+
+async function setup() {
+  const cur = loadConfig();
+  console.log(`Réglages enregistrés dans ${configPath()} (lisible par toi seul). Entrée = garder la valeur actuelle.\n`);
+  const key = await ask(`Clé API Mistral pour la reconnaissance vocale [${mask(cur.mistralKey)}] (vide = inchangée, « -» = effacer) : `, { hidden: true });
+  const browser = await ask(`Navigateur connecté à YouTube pour les cookies (chrome, safari, firefox, brave, edge… ; « -» = aucun) [${cur.cookiesBrowser || 'aucun'}] : `);
+  const audio = await ask(`Transcrire par l'audio les vidéos sans sous-titre ? (o/n) [${cur.audio ? 'o' : 'n'}] : `);
+  const budget = await ask(`Plafond de dépense par lancement, en $ [${cur.budget ?? 2}] : `);
+  const next = { ...cur };
+  if (key === '-') delete next.mistralKey; else if (key) next.mistralKey = key;
+  if (browser === '-') delete next.cookiesBrowser; else if (browser) next.cookiesBrowser = browser;
+  if (audio) next.audio = yes(audio, !!cur.audio);
+  if (budget && Number(budget) > 0) next.budget = Number(budget);
+  if (next.audio && !next.mistralKey && !process.env.MISTRAL_API_KEY) console.log('\n⚠ L\'audio est activé mais aucune clé Mistral n\'est enregistrée : relance « setup » pour la saisir.');
+  saveConfig(next);
+  console.log(`\n✓ Enregistré. Il suffit maintenant de copier les liens dans l'extension puis de lancer : npm run transcribe`);
+  return 0;
+}
+
+// Presse-papiers (quand rien n'est redirigé ni donné en fichier)
+async function readClipboard() {
+  const cands = process.env.XBS_CLIPBOARD_CMD ? [[process.env.XBS_CLIPBOARD_CMD, []]]
+    : process.platform === 'darwin' ? [['pbpaste', []]]
+    : process.platform === 'win32' ? [['powershell', ['-NoProfile', '-Command', 'Get-Clipboard -Raw']]]
+    : [['wl-paste', ['--no-newline']], ['xclip', ['-o', '-selection', 'clipboard']], ['xsel', ['-ob']]];
+  for (const [cmd, args] of cands) { const r = await run(cmd, args, { timeout: 10_000 }); if (r.ok) return r.stdout; }
+  return '';
+}
+
+function parseArgs(argv, cfg = {}) {
+  const o = { cmd: '', out: 'transcripts', audio: !!cfg.audio, model: cfg.model || 'voxtral-mini-latest', price: cfg.price ?? 0.003, budget: cfg.budget ?? 2, lang: cfg.lang || '', subLangs: cfg.subLangs || 'fr-orig,en-orig,fr,en', limit: 0, sleep: cfg.sleep ?? 3, cookiesBrowser: cfg.cookiesBrowser || '', cookies: '', dry: false, file: '', help: false, reveal: process.platform === 'darwin' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = () => argv[++i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--audio') o.audio = true;
+    else if (a === '--no-audio') o.audio = false;
+    else if (a === '--no-reveal') o.reveal = false;
     else if (a === '--dry-run') o.dry = true;
     else if (a === '--out') o.out = v();
     else if (a === '--model') o.model = v();
@@ -96,6 +169,7 @@ function parseArgs(argv) {
     else if (a === '--sleep') o.sleep = Number(v());
     else if (a === '--cookies-from-browser') o.cookiesBrowser = v();
     else if (a === '--cookies') o.cookies = v();
+    else if (!a.startsWith('--') && !o.cmd && !o.file && (a === 'setup' || a === 'config')) o.cmd = a;
     else if (!a.startsWith('--') && !o.file) o.file = a;
     else { console.error(`Option inconnue : ${a}\n`); o.help = true; }
   }
@@ -104,13 +178,13 @@ function parseArgs(argv) {
 
 async function readInput(file) {
   if (file) return fs.readFileSync(file, 'utf8');
-  if (process.stdin.isTTY) return '';
+  if (process.stdin.isTTY) return ''; // presse-papiers : voir main
   const chunks = [];
   for await (const c of process.stdin) chunks.push(c);
   return Buffer.concat(chunks).toString('utf8');
 }
 
-async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs) {
+async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, mistralKey) {
   const url = `https://www.youtube.com/watch?v=${v.id}`;
   const dl = await run(ytdlp, [...cookieArgs, '--no-playlist', '-f', 'bestaudio[abr<=64]/worstaudio/bestaudio', '-x', '--audio-format', 'mp3', '--audio-quality', '9', '-o', path.join(tmp, '%(id)s.%(ext)s'), url]);
   if (!dl.ok) return { why: 'audio : ' + (dl.stderr.trim().split('\n').pop() || 'échec yt-dlp'), blocked: /Sign in to confirm|429|bot/i.test(dl.stderr) };
@@ -129,7 +203,7 @@ async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs) {
     form.append('model', o.model);
     form.append('timestamp_granularities', 'segment');
     if (o.lang) form.append('language', o.lang);
-    const res = await fetch(`${base}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${process.env.MISTRAL_API_KEY}` }, body: form });
+    const res = await fetch(`${base}/v1/audio/transcriptions`, { method: 'POST', headers: { authorization: `Bearer ${mistralKey}` }, body: form });
     if (!res.ok) return { why: `Mistral : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 160)}` };
     const json = await res.json();
     lang = lang || json.language || '';
@@ -139,11 +213,16 @@ async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs) {
 }
 
 export async function main(argv) {
-  const o = parseArgs(argv);
+  const cfg = loadConfig();
+  const o = parseArgs(argv, cfg);
   if (o.help) { console.log(HELP); return 0; }
-  const text = await readInput(o.file);
+  if (o.cmd === 'setup') return setup();
+  if (o.cmd === 'config') { console.log(`Fichier : ${configPath()}\n` + JSON.stringify({ ...cfg, ...(cfg.mistralKey ? { mistralKey: mask(cfg.mistralKey) } : {}) }, null, 2)); return 0; }
+  const mistralKey = process.env.MISTRAL_API_KEY || cfg.mistralKey || '';
+  let text = await readInput(o.file);
+  if (!text.trim() && !o.file) { console.log('Lecture des liens dans le presse-papiers…'); text = await readClipboard(); }
   let videos = parseInput(text);
-  if (!videos.length) { console.error('Aucune vidéo YouTube dans l’entrée. Copie d’abord les liens depuis l’extension (⋯ › Copier les liens des vidéos sans transcription), puis : pbpaste | node mcp/transcribe.mjs\n'); return 1; }
+  if (!videos.length) { console.error('Aucun lien YouTube trouvé. Copie d’abord les liens dans l’extension (⋯ › Copier les liens sans transcription), puis relance : npm run transcribe\n'); return 1; }
   fs.mkdirSync(o.out, { recursive: true });
   const resultsFile = path.join(o.out, 'results.json');
   let results = { format: 'xbs-transcripts/1', items: [], failed: [] };
@@ -161,7 +240,7 @@ export async function main(argv) {
   const probe = await run(ytdlp, ['--version'], { timeout: 20_000 });
   if (!probe.ok) { console.error(probe.missing ? '✗ yt-dlp est introuvable. Installe-le : brew install yt-dlp ffmpeg (macOS) ou pipx install yt-dlp.' : '✗ yt-dlp ne démarre pas : ' + probe.stderr.trim()); return 1; }
   if (o.audio) {
-    if (!process.env.MISTRAL_API_KEY) { console.error('✗ --audio demande une clé Mistral : export MISTRAL_API_KEY=… (https://console.mistral.ai).'); return 1; }
+    if (!mistralKey) { console.error('✗ L\'audio demande une clé Mistral : lance « npm run transcribe -- setup » pour l\'enregistrer (clé sur https://console.mistral.ai), ou utilise --no-audio.'); return 1; }
     if (!(await run(ffmpeg, ['-version'], { timeout: 20_000 })).ok) { console.error('✗ ffmpeg est introuvable (nécessaire pour --audio). Installe-le : brew install ffmpeg.'); return 1; }
   }
   const cookieArgs = o.cookiesBrowser ? ['--cookies-from-browser', o.cookiesBrowser] : o.cookies ? ['--cookies', o.cookies] : [];
@@ -187,7 +266,7 @@ export async function main(argv) {
         if (o.audio && !bot) {
           const est = ((v.seconds || 1800) / 60) * o.price;
           if (spent + est > o.budget) { console.log(`${label} : plafond de ${o.budget} $ atteint : arrêt de l'audio.`); results.failed.push({ videoId: v.id, why: 'plafond' }); continue; }
-          const r = await transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs);
+          const r = await transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, mistralKey);
           if (r.segments?.length) {
             spent += ((r.seconds || v.seconds || 1800) / 60) * o.price;
             results.items.push({ id: 'yt:' + v.id, videoId: v.id, source: 'stt', lang: r.lang, model: o.model, segments: r.segments }); nStt++; blocked = 0;
@@ -207,6 +286,7 @@ export async function main(argv) {
   save();
   console.log(`\nTerminé : ${nSubs} par sous-titres, ${nStt} par reconnaissance vocale (≈ ${spent.toFixed(3)} $), ${results.failed.length} sans résultat.`);
   console.log(`Fichier à importer dans l'extension (⋯ › Importer des transcriptions…) : ${path.resolve(resultsFile)}`);
+  if (o.reveal && results.items.length) await run('open', ['-R', path.resolve(resultsFile)], { timeout: 10_000 }); // macOS : le montre dans le Finder
   return 0;
 }
 

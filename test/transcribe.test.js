@@ -39,6 +39,7 @@ function fakeTools(dir) {
   fs.writeFileSync(ytdlp, `#!${process.execPath}
 const fs = require('fs'), path = require('path');
 const a = process.argv.slice(2);
+if (process.env.XBS_FAKE_LOG) fs.appendFileSync(process.env.XBS_FAKE_LOG, JSON.stringify(a) + '\\n');
 if (a[0] === '--version') { console.log('2026.10.01'); process.exit(0); }
 const url = a[a.length - 1], id = url.split('v=')[1], tpl = a[a.indexOf('-o') + 1], dir = path.dirname(tpl);
 if (id.startsWith('bbbb')) { console.error('ERROR: Sign in to confirm you\\'re not a bot'); process.exit(1); }
@@ -73,7 +74,7 @@ const startMistral = () => new Promise((res) => {
   }).listen(0, '127.0.0.1', () => res({ srv, calls, port: srv.address().port }));
 });
 const runCli = (args, env, input) => new Promise((resolve) => {
-  const p = spawn(process.execPath, ['mcp/transcribe.mjs', ...args], { env: { ...process.env, ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
+  const p = spawn(process.execPath, ['mcp/transcribe.mjs', '--no-reveal', ...args], { env: { ...process.env, XBS_CONFIG: path.join(os.tmpdir(), 'xbs-config-inexistante.json'), MISTRAL_API_KEY: '', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '', err = '';
   p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (err += d));
   p.on('close', (code) => resolve({ code, out, err }));
@@ -113,7 +114,7 @@ test('transcribe.mjs : sous-titres, puis audio + Mistral, reprise, plafond et ar
     const d = await runCli(['--sleep', '0', '--out', path.join(dir, 'out3')], env, ['bbbbbbbbbb1', 'bbbbbbbbbb2', 'bbbbbbbbbb3', 'bbbbbbbbbb4', 'bbbbbbbbbb5'].join('\n'));
     assert.match(d.err, /YouTube bloque/); assert.equal((d.out.match(/anti-robot/g) || []).length, 3);
     // clé manquante / entrée vide
-    assert.match((await runCli(['--audio', '--out', out], { ...env, MISTRAL_API_KEY: '' }, input)).err, /MISTRAL_API_KEY/);
+    assert.match((await runCli(['--audio', '--out', out], { ...env, MISTRAL_API_KEY: '' }, input)).err, /clé Mistral/);
     assert.equal((await runCli(['--out', out], env, 'rien d’utile')).code, 1);
   } finally { m.srv.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -121,4 +122,38 @@ test('transcribe.mjs : sous-titres, puis audio + Mistral, reprise, plafond et ar
 test('transcribe.mjs : yt-dlp absent -> message d’installation', async () => {
   const r = await runCli(['--out', fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trt2-'))], { XBS_YTDLP: '/nonexistent/yt-dlp' }, 'aaaaaaaaaaa');
   assert.equal(r.code, 1); assert.match(r.err, /yt-dlp est introuvable/);
+});
+
+test('réglages enregistrés (setup), presse-papiers, options par défaut : plus rien à retaper', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trcfg-'));
+  const { ytdlp, ffmpeg } = fakeTools(dir);
+  const m = await startMistral();
+  const cfgFile = path.join(dir, 'cfg', 'transcribe.json');
+  const clip = path.join(dir, 'clip');
+  fs.writeFileSync(clip, `#!${process.execPath}\nconsole.log('https://www.youtube.com/watch?v=aaaaaaaaaaa\\t600\\tAvec sous-titres\\nhttps://www.youtube.com/watch?v=cccccccccc1\\t1200\\tSans sous-titres');\n`, { mode: 0o755 });
+  const log = path.join(dir, 'calls.log');
+  const env = { XBS_CONFIG: cfgFile, XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, MISTRAL_API_BASE: `http://127.0.0.1:${m.port}`, XBS_CLIPBOARD_CMD: clip, XBS_FAKE_LOG: log };
+  try {
+    // setup : questions lues ligne par ligne quand l'entrée est redirigée
+    const s = await runCli(['setup'], env, 'cle-enregistree\nchrome\no\n3\n');
+    assert.equal(s.code, 0, s.err); assert.match(s.out, /Enregistré/);
+    const saved = JSON.parse(fs.readFileSync(cfgFile, 'utf8'));
+    assert.deepEqual(saved, { mistralKey: 'cle-enregistree', cookiesBrowser: 'chrome', audio: true, budget: 3 });
+    if (process.platform !== 'win32') assert.equal(fs.statSync(cfgFile).mode & 0o777, 0o600, 'fichier lisible par toi seul');
+    const c = await runCli(['config'], env);
+    assert.match(c.out, /cle…ree/); assert.ok(!c.out.includes('cle-enregistree'), 'la clé est masquée');
+    // lancement sans argument : liens lus dans le presse-papiers, clé / cookies / audio repris de la config
+    const r = await runCli(['--sleep', '0', '--out', path.join(dir, 'out')], env, '');
+    assert.equal(r.code, 0, r.err); assert.match(r.out, /presse-papiers/); assert.match(r.out, /aaaaaaaaaaa.*sous-titres/); assert.match(r.out, /cccccccccc1.*reconnaissance vocale/);
+    assert.equal(m.calls[0].auth, 'Bearer cle-enregistree');
+    const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.ok(calls.some((a) => a.includes('--cookies-from-browser') && a[a.indexOf('--cookies-from-browser') + 1] === 'chrome'), 'cookies du navigateur enregistré');
+    // --no-audio l'emporte sur la config
+    m.calls.length = 0;
+    await runCli(['--sleep', '0', '--no-audio', '--out', path.join(dir, 'out2')], env, '');
+    assert.equal(m.calls.length, 0);
+    // « - » efface la clé
+    await runCli(['setup'], env, '-\n\n\n\n');
+    assert.equal(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).mistralKey, undefined);
+  } finally { m.srv.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
