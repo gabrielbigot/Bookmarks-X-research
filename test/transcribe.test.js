@@ -75,6 +75,7 @@ const startMistral = (opts = {}) => new Promise((res) => {
       if (isJson) { const j = JSON.parse(raw.toString('utf8')); call.model = j.model; call.format = j.input_audio?.format; call.part = /PART(\d)/.exec(Buffer.from(j.input_audio?.data || '', 'base64').toString('latin1').slice(0, 8))?.[1]; call.lang = j.language; }
       else { const body = raw.toString('latin1'); call.model = /name="model"\r\n\r\n([^\r]+)/.exec(body)?.[1]; call.gran = /name="timestamp_granularities"\r\n\r\n([^\r]+)/.exec(body)?.[1]; call.part = /PART(\d)/.exec(body)?.[1]; }
       calls.push(call);
+      if (opts.failFirst && calls.filter((c) => !c.limited).length <= opts.failFirst) { call.limited = true; rsp.writeHead(429, { 'content-type': 'application/json' }); return rsp.end('{"error":{"message":"Provider returned 429","code":429}}'); }
       if (isJson && opts.rejectJson) { call.rejected = true; rsp.writeHead(415, { 'content-type': 'application/json' }); return rsp.end('{"error":"multipart attendu"}'); }
       rsp.writeHead(200, { 'content-type': 'application/json' });
       if (opts.cost) usage += opts.cost;
@@ -295,5 +296,26 @@ test('clé refusée (401 « User not found ») : vérifiée avant tout télécha
     const cfg = path.join(dir, 'cfg.json');
     const s = await runCli(['setup'], { XBS_CONFIG: cfg }, ' sk-or-v1-zzz \u001b[200~\n\n\n\n');
     assert.equal(JSON.parse(fs.readFileSync(cfg, 'utf8')).openrouterKey, 'sk-or-v1-zzz[200~'.replace('[200~', '[200~'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('service saturé (429) : nouveaux essais espacés, puis succès ; échec explicite si cela dure', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trretry-'));
+  const { ytdlp, ffmpeg } = fakeTools(dir);
+  const input = 'https://www.youtube.com/watch?v=cccccccccc1\t450\tSans sous-titres';
+  const env = (srv) => ({ XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, OPENROUTER_API_KEY: 'k', OPENROUTER_API_BASE: `http://127.0.0.1:${srv.port}/api/v1`, XBS_RETRY_DELAYS: '0,0,0' });
+  try {
+    const a = await startMistral({ failFirst: 2 });
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--out', path.join(dir, 'o')], env(a), input);
+      assert.equal(r.code, 0, r.err); assert.match(r.out, /répond HTTP 429 \(service débordé\) : nouvel essai dans 0 s \(1\/3\)/); assert.match(r.out, /\(2\/3\)/); assert.match(r.out, /reconnaissance vocale/);
+    } finally { a.srv.close(); }
+    const b = await startMistral({ failFirst: 99 });
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--out', path.join(dir, 'o2')], env(b), input);
+      assert.match(r.out, /HTTP 429/); assert.match(r.out, /service saturé malgré plusieurs essais/); assert.match(r.out, /voxtral-mini-transcribe/);
+      assert.equal(b.calls.filter((c) => c.limited).length, 4, '1 essai + 3 nouveaux essais');
+      assert.match(r.out, /Coût de ce lancement : 0 \$/);
+    } finally { b.srv.close(); }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

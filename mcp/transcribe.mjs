@@ -112,6 +112,19 @@ const run = (cmd, args, { timeout = 30 * 60_000 } = {}) => new Promise((resolve)
   execFile(cmd, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => resolve({ ok: !err, code: err?.code, stdout: String(stdout), stderr: String(stderr), missing: err?.code === 'ENOENT' }));
 });
 const sleep = (s) => new Promise((r) => setTimeout(r, s * 1000));
+// Service saturé (429), indisponible (502/503/504) ou lent (408/500) : nouveaux essais espacés (en secondes), en respectant « Retry-After » s'il est donné
+const retryDelays = () => (process.env.XBS_RETRY_DELAYS ? process.env.XBS_RETRY_DELAYS.split(',').map(Number) : [5, 15, 45, 90]);
+async function retrying(doFetch, label) {
+  const delays = retryDelays();
+  for (let i = 0; ; i++) {
+    const res = await doFetch();
+    if (![408, 429, 500, 502, 503, 504].includes(res.status) || i >= delays.length) return res;
+    const ra = Number(res.headers.get('retry-after'));
+    const wait = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 120) : delays[i];
+    console.log(`  ${label} répond HTTP ${res.status} (service débordé) : nouvel essai dans ${wait} s (${i + 1}/${delays.length})…`);
+    await sleep(wait);
+  }
+}
 
 // ---------- réglages enregistrés ----------
 export const configPath = () => process.env.XBS_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'xbs', 'transcribe.json');
@@ -269,15 +282,16 @@ async function sttRequest(o, key, file, name) {
     return fetch(`${base}/audio/transcriptions`, { method: 'POST', headers, body: form });
   };
   const asJson = () => fetch(`${base}/audio/transcriptions`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ model: o.model, input_audio: { data: bytes.toString('base64'), format: 'mp3' }, ...(o.lang ? { language: o.lang } : {}) }) });
+  const label = openrouter ? 'OpenRouter' : 'Mistral';
   let res;
-  if (!openrouter) res = await asForm();
-  else if (sttMode === 'form') res = await asForm();
+  if (!openrouter) res = await retrying(asForm, label);
+  else if (sttMode === 'form') res = await retrying(asForm, label);
   else {
-    res = await asJson();
-    if (sttMode !== 'json' && [400, 415, 422].includes(res.status)) { const second = await asForm(); if (second.ok) { sttMode = 'form'; res = second; } }
+    res = await retrying(asJson, label);
+    if (sttMode !== 'json' && [400, 415, 422].includes(res.status)) { const second = await retrying(asForm, label); if (second.ok) { sttMode = 'form'; res = second; } }
     else if (res.ok) sttMode = 'json';
   }
-  if (!res.ok) throw new Error(`${openrouter ? 'OpenRouter' : 'Mistral'} : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}${res.status === 401 || res.status === 403 ? ' → clé refusée : npm run transcribe -- setup' : ''}`);
+  if (!res.ok) throw new Error(`${openrouter ? 'OpenRouter' : 'Mistral'} : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}${res.status === 401 || res.status === 403 ? ' → clé refusée : npm run transcribe -- setup' : res.status === 429 ? ' → service saturé malgré plusieurs essais : relance dans quelques minutes (la reprise est automatique), ou essaie un autre modèle (--model mistralai/voxtral-mini-transcribe) ou --provider mistral' : ''}`);
   return res.json();
 }
 

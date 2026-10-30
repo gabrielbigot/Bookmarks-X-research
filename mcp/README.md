@@ -120,6 +120,7 @@ Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste t
 * Un réglage de navigateur invalide est signalé dès le départ, et si `yt-dlp` refuse la commande l'outil s'arrête immédiatement au lieu d'essayer chaque vidéo.
 
 À savoir :
+* **Service saturé (HTTP 429)** : le fournisseur derrière OpenRouter limite parfois le débit. L'outil réessaie seul (après 5, 15, 45 puis 90 secondes, ou le délai demandé par le service) ; rien n'est facturé pour un essai refusé. Si cela dure, relance dans quelques minutes (la reprise est automatique), essaie `--model mistralai/voxtral-mini-transcribe`, ou `--provider mistral`.
 * **Clé refusée** (« HTTP 401 User not found ») : la clé est vérifiée avant tout téléchargement. Recopie-la en entier depuis https://openrouter.ai/settings/keys (une clé supprimée ou tronquée est refusée) avec `npm run transcribe -- setup` ; `npm run transcribe -- config` en montre le début et la fin pour la comparer.
 * **La reprise est automatique** : relancer ne refait pas les vidéos déjà dans `results.json`. Après 3 refus anti-robot de suite, l'outil s'arrête pour ne pas faire bloquer ton IP ; `--cookies-from-browser` (navigateur connecté à YouTube) règle le plus souvent le problème.
 * **Les sous-titres d'abord** : ils existent pour la plupart des vidéos, même quand l'extension n'a pas pu les lire ; la reconnaissance vocale (payante) n'est tentée que sans aucun sous-titre.
