@@ -41,7 +41,9 @@ Options (elles l'emportent sur les réglages enregistrés)
   --sleep <secondes>         pause entre deux vidéos (défaut : 3) : ménage YouTube
   --cookies-from-browser <b> cookies d'un navigateur connecté à YouTube (chrome, firefox, safari, brave, edge…) : souvent nécessaire
                              quand YouTube répond « Sign in to confirm you're not a bot »
-  --cookies <fichier>        fichier cookies.txt
+  --cookies <fichier>        fichier cookies.txt (pour un navigateur absent de la liste ci-dessus, par exemple Comet : exporte-le avec une
+                             extension du type « Get cookies.txt LOCALLY » depuis youtube.com)
+  --no-cookies               n'utilise aucun cookie, même si la config en enregistre (les sous-titres passent souvent sans)
   --dry-run                  n'appelle rien : compte les vidéos et estime le coût de l'audio
   --no-reveal                ne pas montrer le fichier créé dans le Finder (macOS)
   --help
@@ -96,6 +98,13 @@ export function responseCost(json) {
   return null;
 }
 export const fmtUsd = (v) => (v < 0.01 ? v.toFixed(4) : v.toFixed(3)) + ' $';
+// Navigateurs dont yt-dlp sait lire les cookies (liste donnée par yt-dlp lui-même) ; format : NAVIGATEUR[+TROUSSEAU][:PROFIL]
+export const COOKIE_BROWSERS = ['brave', 'chrome', 'chromium', 'edge', 'firefox', 'opera', 'safari', 'vivaldi', 'whale'];
+export function checkBrowser(spec) {
+  const name = String(spec || '').split(/[+:]/)[0].toLowerCase();
+  if (!name || COOKIE_BROWSERS.includes(name)) return '';
+  return `yt-dlp ne sait pas lire les cookies de « ${name} ». Navigateurs gérés : ${COOKIE_BROWSERS.join(', ')}.`;
+}
 export const estimateAudioUsd = (videos, price) => videos.reduce((n, v) => n + ((v.seconds || 1800) / 60) * price, 0);
 
 // ---------- exécution ----------
@@ -144,12 +153,20 @@ async function setup() {
   const cur = loadConfig();
   console.log(`Réglages enregistrés dans ${configPath()} (lisible par toi seul). Entrée = garder la valeur actuelle.\n`);
   const key = await ask(`Clé API OpenRouter pour la reconnaissance vocale [${mask(cur.openrouterKey)}] (vide = inchangée, « -» = effacer) : `, { hidden: true });
-  const browser = await ask(`Navigateur connecté à YouTube pour les cookies (chrome, safari, firefox, brave, edge… ; « -» = aucun) [${cur.cookiesBrowser || 'aucun'}] : `);
+  let browser = await ask(`Navigateur connecté à YouTube pour les cookies (${COOKIE_BROWSERS.join(', ')} ; « -» = aucun) [${cur.cookiesBrowser || 'aucun'}] : `);
+  let cookiesFile = '';
+  if (browser && browser !== '-' && checkBrowser(browser)) {
+    console.log(`\n⚠ ${checkBrowser(browser)}\n  Si ton navigateur n'est pas dans la liste (Comet, Arc…), exporte tes cookies YouTube dans un fichier cookies.txt`);
+    console.log('  (extension « Get cookies.txt LOCALLY » ouverte sur youtube.com) ; ce fichier donne accès à ton compte : garde-le privé.');
+    cookiesFile = await ask(`Chemin du fichier cookies.txt (vide = aucun cookie) [${cur.cookies || 'aucun'}] : `);
+    browser = '-';
+  }
   const audio = await ask(`Transcrire par l'audio les vidéos sans sous-titre ? (o/n) [${cur.audio ? 'o' : 'n'}] : `);
   const budget = await ask(`Plafond de dépense par lancement, en $ [${cur.budget ?? 2}] : `);
   const next = { ...cur };
   if (key === '-') delete next.openrouterKey; else if (key) { next.openrouterKey = key; next.provider = 'openrouter'; }
-  if (browser === '-') delete next.cookiesBrowser; else if (browser) next.cookiesBrowser = browser;
+  if (browser === '-') delete next.cookiesBrowser; else if (browser) { next.cookiesBrowser = browser; delete next.cookies; }
+  if (cookiesFile) next.cookies = path.resolve(cookiesFile.replace(/^~(?=\/)/, os.homedir()));
   if (audio) next.audio = yes(audio, !!cur.audio);
   if (budget && Number(budget) > 0) next.budget = Number(budget);
   if (next.audio && !next.openrouterKey && !next.mistralKey && !process.env.OPENROUTER_API_KEY && !process.env.MISTRAL_API_KEY) console.log('\n⚠ L\'audio est activé mais aucune clé n\'est enregistrée : relance « setup » pour saisir ta clé OpenRouter.');
@@ -187,13 +204,14 @@ function showCosts(outDir) {
 
 function parseArgs(argv, cfg = {}) {
   const provider = cfg.provider === 'mistral' ? 'mistral' : 'openrouter';
-  const o = { cmd: '', provider, eu: !!cfg.eu, out: 'transcripts', audio: !!cfg.audio, model: cfg.model || (provider === 'mistral' ? 'voxtral-mini-latest' : 'mistralai/voxtral-mini-transcribe-3-0'), price: cfg.price ?? (provider === 'mistral' ? 0.003 : 0.0035), budget: cfg.budget ?? 2, lang: cfg.lang || '', subLangs: cfg.subLangs || 'fr-orig,en-orig,fr,en', limit: 0, sleep: cfg.sleep ?? 3, cookiesBrowser: cfg.cookiesBrowser || '', cookies: '', dry: false, file: '', help: false, reveal: process.platform === 'darwin' };
+  const o = { cmd: '', provider, eu: !!cfg.eu, out: 'transcripts', audio: !!cfg.audio, model: cfg.model || (provider === 'mistral' ? 'voxtral-mini-latest' : 'mistralai/voxtral-mini-transcribe-3-0'), price: cfg.price ?? (provider === 'mistral' ? 0.003 : 0.0035), budget: cfg.budget ?? 2, lang: cfg.lang || '', subLangs: cfg.subLangs || 'fr-orig,en-orig,fr,en', limit: 0, sleep: cfg.sleep ?? 3, cookiesBrowser: cfg.cookiesBrowser || '', cookies: cfg.cookies || '', noCookies: false, dry: false, file: '', help: false, reveal: process.platform === 'darwin' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], v = () => argv[++i];
     if (a === '--help' || a === '-h') o.help = true;
     else if (a === '--audio') o.audio = true;
     else if (a === '--no-audio') o.audio = false;
     else if (a === '--no-reveal') o.reveal = false;
+    else if (a === '--no-cookies') { o.cookiesBrowser = ''; o.cookies = ''; o.noCookies = true; }
     else if (a === '--eu') o.eu = true;
     else if (a === '--provider') { o.provider = v() === 'mistral' ? 'mistral' : 'openrouter'; if (!argv.includes('--model') && !cfg.model) o.model = o.provider === 'mistral' ? 'voxtral-mini-latest' : 'mistralai/voxtral-mini-transcribe-3-0'; if (!argv.includes('--price') && cfg.price == null) o.price = o.provider === 'mistral' ? 0.003 : 0.0035; }
     else if (a === '--dry-run') o.dry = true;
@@ -315,6 +333,9 @@ export async function main(argv) {
     if (!sttKey) { console.error(`✗ L'audio demande une clé ${o.provider === 'mistral' ? 'Mistral' : 'OpenRouter'} : lance « npm run transcribe -- setup » pour l'enregistrer, ou utilise --no-audio.`); return 1; }
     if (!(await run(ffmpeg, ['-version'], { timeout: 20_000 })).ok) { console.error('✗ ffmpeg est introuvable (nécessaire pour --audio). Installe-le : brew install ffmpeg.'); return 1; }
   }
+  const bad = o.cookiesBrowser && checkBrowser(o.cookiesBrowser);
+  if (bad) { console.error(`✗ ${bad}\n  → Utilise un de ces navigateurs, ou donne un fichier de cookies (--cookies cookies.txt, exporté depuis ton navigateur sur youtube.com),\n    ou essaie sans cookies : npm run transcribe -- --no-cookies\n    Pour changer le réglage enregistré : npm run transcribe -- setup`); return 1; }
+  if (o.cookies && !fs.existsSync(o.cookies)) { console.error(`✗ Fichier de cookies introuvable : ${o.cookies}`); return 1; }
   const cookieArgs = o.cookiesBrowser ? ['--cookies-from-browser', o.cookiesBrowser] : o.cookies ? ['--cookies', o.cookies] : [];
   const langs = o.subLangs.split(',').map((x) => x.trim()).filter(Boolean);
   let spent = 0, nSubs = 0, nStt = 0, blocked = 0, usageBefore = null, anyEstimated = false;
@@ -327,6 +348,7 @@ export async function main(argv) {
       const url = `https://www.youtube.com/watch?v=${v.id}`;
       // A. sous-titres YouTube
       const subs = await run(ytdlp, [...cookieArgs, '--no-playlist', '--skip-download', '--write-subs', '--write-auto-subs', '--sub-langs', langs.join(','), '--sub-format', 'json3', '--sleep-subtitles', '1', '-o', path.join(tmp, '%(id)s.%(ext)s'), url]);
+      if (/yt-dlp: error:/i.test(subs.stderr)) { console.error(`${label} : ✗ yt-dlp refuse la commande : ${subs.stderr.trim().split('\n').pop()}\n\nArrêt (inutile de continuer sur les autres vidéos). Vérifie les réglages : npm run transcribe -- config`); results.failed.push({ videoId: v.id, why: 'commande refusée par yt-dlp' }); save(); return 1; }
       const pick = pickSubtitle(fs.readdirSync(tmp), v.id, langs);
       let segments = pick ? parseJson3(JSON.parse(fs.readFileSync(path.join(tmp, pick.f), 'utf8'))) : [];
       if (segments.length) {

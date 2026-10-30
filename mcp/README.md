@@ -113,6 +113,12 @@ Un raccourci global est possible : `npm link` dans le dossier du projet crée la
 
 Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste toutes) : `--audio` / `--no-audio`, `--budget 2` (plafond en $), `--price 0.0035` (prix d'une minute d'après la fiche OpenRouter de Voxtral Mini Transcribe 3 : à vérifier), `--model mistralai/voxtral-mini-transcribe-3-0`, `--eu` (point d'accès européen d'OpenRouter), `--provider mistral` (API de Mistral en direct, clé `MISTRAL_API_KEY`), `--lang fr`, `--cookies-from-browser chrome`, `--sleep 3` (pause entre deux vidéos), `--out dossier`. Commandes : `setup`, `config` (affiche les réglages, clé masquée). Un fichier de liens ou une entrée redirigée (`pbpaste | …`, `liens.txt`) remplace le presse-papiers.
 
+**Cookies YouTube** : quand YouTube répond « Sign in to confirm you're not a bot », `yt-dlp` a besoin des cookies d'un navigateur où tu es connecté à YouTube.
+* Navigateurs gérés par `yt-dlp` : brave, chrome, chromium, edge, firefox, opera, safari, vivaldi, whale (`npm run transcribe -- setup`, ou `--cookies-from-browser chrome`). Sur macOS, Safari demande d'autoriser l'accès complet au disque au Terminal.
+* **Comet, Arc et autres navigateurs absents de cette liste** : exporte tes cookies depuis ce navigateur, sur youtube.com, avec une extension du type « Get cookies.txt LOCALLY », enregistre le fichier (par exemple `~/youtube-cookies.txt`), et donne-le à `setup` ou avec `--cookies ~/youtube-cookies.txt`. Ce fichier donne accès à ton compte YouTube : garde-le privé. Il est aussi possible d'ouvrir YouTube dans Chrome (même brièvement) et de choisir `chrome`.
+* **Sans cookies** : `npm run transcribe -- --no-cookies`. Les sous-titres passent souvent ainsi ; un volume important de téléchargements avec ton compte peut en revanche attirer l'attention de YouTube.
+* Un réglage de navigateur invalide est signalé dès le départ, et si `yt-dlp` refuse la commande l'outil s'arrête immédiatement au lieu d'essayer chaque vidéo.
+
 À savoir :
 * **La reprise est automatique** : relancer ne refait pas les vidéos déjà dans `results.json`. Après 3 refus anti-robot de suite, l'outil s'arrête pour ne pas faire bloquer ton IP ; `--cookies-from-browser` (navigateur connecté à YouTube) règle le plus souvent le problème.
 * **Les sous-titres d'abord** : ils existent pour la plupart des vidéos, même quand l'extension n'a pas pu les lire ; la reconnaissance vocale (payante) n'est tentée que sans aucun sous-titre.

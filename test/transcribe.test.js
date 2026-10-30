@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { ytId, parseInput, pickSubtitle, mistralSegments, estimateAudioUsd } from '../mcp/transcribe.mjs';
+import { ytId, parseInput, pickSubtitle, mistralSegments, estimateAudioUsd, checkBrowser } from '../mcp/transcribe.mjs';
 
 test('parseInput : liens et identifiants YouTube, colonnes de l’extension, sans doublon ni intrus', () => {
   const v = parseInput([
@@ -233,5 +233,44 @@ test('coût réel : annoncé par OpenRouter, vérifié par le compteur de la cl�
     const c = await runCli(['costs', '--out', out], {}, '');
     assert.equal(c.code, 0); assert.match(c.out, /Total : 0\.030 \$ sur 2 lancements/); assert.match(c.out, /~/);
     assert.match((await runCli(['costs', '--out', path.join(dir, 'vide')], {}, '')).out, /Aucun lancement/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('cookies : navigateur non géré par yt-dlp (Comet) -> message clair avant tout appel ; --no-cookies et --cookies', async () => {
+  assert.equal(checkBrowser('chrome'), ''); assert.equal(checkBrowser('Firefox:profil'), ''); assert.equal(checkBrowser('brave+gnomekeyring'), '');
+  assert.match(checkBrowser('comet'), /comet.*brave, chrome, chromium, edge, firefox, opera, safari, vivaldi, whale/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trck-'));
+  const { ytdlp, ffmpeg } = fakeTools(dir);
+  const cfgFile = path.join(dir, 'cfg.json');
+  fs.writeFileSync(cfgFile, JSON.stringify({ cookiesBrowser: 'comet' }));
+  const log = path.join(dir, 'calls.log');
+  const env = { XBS_CONFIG: cfgFile, XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, XBS_FAKE_LOG: log };
+  const input = 'https://www.youtube.com/watch?v=aaaaaaaaaaa';
+  try {
+    const r = await runCli(['--sleep', '0', '--out', path.join(dir, 'o')], env, input);
+    assert.equal(r.code, 1); assert.match(r.err, /ne sait pas lire les cookies de « comet »/); assert.match(r.err, /--no-cookies/);
+    assert.ok(!fs.existsSync(log) || !fs.readFileSync(log, 'utf8').includes('--skip-download'), 'aucun téléchargement tenté');
+    const ok = await runCli(['--sleep', '0', '--no-cookies', '--out', path.join(dir, 'o')], env, input);
+    assert.equal(ok.code, 0, ok.err); assert.match(ok.out, /sous-titres fr-orig/);
+    assert.ok(!fs.readFileSync(log, 'utf8').includes('cookies'), 'sans cookies');
+    const cj = path.join(dir, 'cookies.txt'); fs.writeFileSync(cj, '# Netscape HTTP Cookie File\n');
+    await runCli(['--sleep', '0', '--no-cookies', '--cookies', cj, '--out', path.join(dir, 'o2')], env, input);
+    assert.ok(fs.readFileSync(log, 'utf8').includes('"--cookies","' + cj.replace(/\\/g, '\\\\')), 'fichier de cookies transmis');
+    assert.match((await runCli(['--no-cookies', '--cookies', path.join(dir, 'absent.txt'), '--out', path.join(dir, 'o3')], env, input)).err, /Fichier de cookies introuvable/);
+    // setup : navigateur non géré -> propose le fichier cookies.txt
+    const s = await runCli(['setup'], { XBS_CONFIG: path.join(dir, 'cfg2.json') }, '\ncomet\n' + cj + '\n\n\n\n');
+    assert.match(s.out, /ne sait pas lire les cookies de « comet »/);
+    const saved = JSON.parse(fs.readFileSync(path.join(dir, 'cfg2.json'), 'utf8'));
+    assert.equal(saved.cookies, cj); assert.equal(saved.cookiesBrowser, undefined);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('yt-dlp refuse la commande : arrêt immédiat au lieu de boucler sur toutes les vidéos', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trusage-'));
+  const bad = path.join(dir, 'yt-dlp');
+  fs.writeFileSync(bad, `#!${process.execPath}\nif (process.argv[2] === '--version') { console.log('1'); process.exit(0); }\nconsole.error('yt-dlp: error: option inconnue'); process.exit(2);\n`, { mode: 0o755 });
+  try {
+    const r = await runCli(['--sleep', '0', '--out', path.join(dir, 'o')], { XBS_YTDLP: bad }, ['aaaaaaaaaa1', 'aaaaaaaaaa2', 'aaaaaaaaaa3'].join('\n'));
+    assert.equal(r.code, 1); assert.match(r.err, /yt-dlp refuse la commande/); assert.equal((r.err.match(/\[\d+\/3\]/g) || []).length, 1);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
