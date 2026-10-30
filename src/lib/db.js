@@ -10,9 +10,18 @@ const VSTORES = ['vectors', 'vectors_gemma2'];
 export const vstore = (modelId) => (modelId === MODELS.gemma2.id ? 'vectors_gemma2' : 'vectors');
 
 let _db;
+// Connexion partagée. Le navigateur peut la fermer de lui-même (rechargement de l'extension, nettoyage de données, changement de version) :
+// « Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing ». Une connexion fermée n'est donc jamais réutilisée :
+// elle est oubliée dès sa fermeture, et vérifiée à chaque demande.
+export const resetDb = () => { _db = undefined; };
+export const isClosingError = (e) => /connection is closing|InvalidStateError|database connection/i.test(String(e?.name || '') + ' ' + String(e?.message || e || ''));
 export function openDb() {
-  if (_db) return _db;
-  _db = new Promise((resolve, reject) => {
+  if (_db) {
+    return _db.then((db) => {
+      try { db.transaction('meta'); return db; } catch { resetDb(); return openDb(); } // fermée entre-temps : on rouvre
+    });
+  }
+  const p = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -20,10 +29,16 @@ export function openDb() {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: name === 'meta' ? 'key' : 'id' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => { if (_db === p) resetDb(); }; // fermeture inattendue par le navigateur
+      db.onversionchange = () => { db.close(); if (_db === p) resetDb(); }; // une autre version veut s'installer : on s'écarte
+      resolve(db);
+    };
+    req.onerror = () => { if (_db === p) resetDb(); reject(req.error); };
   });
-  return _db;
+  _db = p;
+  return p;
 }
 
 const wrap = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });

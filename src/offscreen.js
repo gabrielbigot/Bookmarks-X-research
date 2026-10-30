@@ -3,7 +3,7 @@
 // seuls le premier téléchargement des modèles et la lecture des pages liées (si activée) sortent.
 // NB : un document offscreen n'a accès qu'à chrome.runtime -> la config arrive par message.
 import { AutoModel, AutoTokenizer, AutoProcessor, CLIPVisionModelWithProjection, CLIPTextModelWithProjection, RawImage, pipeline, load_image, env } from '@huggingface/transformers';
-import { pendingIds, getTweets, putVectors, setMeta, scanTweets, updateTweet, putImgVectors, getAllImgKeys, pendingChunkIds, getTranscripts, putChunkVecs } from './lib/db.js';
+import { resetDb, isClosingError, pendingIds, getTweets, putVectors, setMeta, scanTweets, updateTweet, putImgVectors, getAllImgKeys, pendingChunkIds, getTranscripts, putChunkVecs } from './lib/db.js';
 import { sampleChunks } from './lib/transcript.js';
 import { tweetText } from './lib/search.js';
 import { modelOf } from './lib/models.js';
@@ -370,6 +370,7 @@ async function imageLoop() {
 
 // ---------------- boucle principale ----------------
 let processing = false, rerun = false, lastFailure = 0;
+let closingRetries = 0;
 async function processAll(run = false, limit) {
   if (!(config.indexMode === 'auto' || run)) return; // mode manuel : jamais sans demande explicite
   if (run) stopRequested = false;
@@ -391,11 +392,15 @@ async function processAll(run = false, limit) {
         await setMeta('lastIndexed', Date.now());
         emit({ type: 'indexDone' });
       } catch (e) {
+        if (isClosingError(e) && closingRetries < 3) { // connexion à la base fermée par le navigateur : on la rouvre et on reprend (sans message d'erreur)
+          closingRetries++; resetDb(); console.warn('[xbs] base fermée, nouvelle connexion', e); await sleep(1000); rerun = true; continue;
+        }
         lastFailure = Date.now();
         console.error('[xbs] indexation', e);
         emit({ type: 'indexError', message: String(e?.message || e) });
         status.enrich.active = false;
       }
+      closingRetries = 0;
       if (config.imageSearch) await imageLoop();
     } while (rerun);
   } finally {
