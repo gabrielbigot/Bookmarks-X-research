@@ -1,5 +1,6 @@
 import { getTweets, getAllTweets, getMeta, setMeta, putTweets, putVectors, getAllVectors, clearVectors, getAllImgVectors, getAllTranscriptRows, putTranscriptRows, getTranscripts, getAllChunkVecs, applyYtSelection, playlistCatalog, planPlaylistDeletion, deletePlaylistData } from './lib/db.js';
 import { chunkSegments, bestChunk, fmtTime } from './lib/transcript.js';
+import { looksWiped, nextSeen, backupDue } from './lib/guard.js';
 import { detectorScores, detectorSet, learnedLabels, LEARN_SIM, slugOf, verdictKey, judgeText, eventDays, clusterCandidates, rankMembers, handleKey, OFFICIAL_DESC, OFFICIAL_MIN } from './lib/widgets.js';
 import { savedInfo } from './lib/time.js';
 import { Index, parseQuery, rrf, highlightTerms, normalizeText, contentWords, sortRows as sortRowsBy, selectPool, acctId } from './lib/search.js';
@@ -48,6 +49,8 @@ async function load(full = false) {
   else await refresh(index, mid);
   markBulkAdded(index.tweets);
   updateStats();
+  loadedOnce = true;
+  trackSeen();
 }
 
 function updateStats() {
@@ -907,9 +910,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- bandeaux (format de X changé, bookmarks supprimés) ----------
+let bannerSeq = 0;
 async function renderBanners() {
   const box = $('banners');
-  box.replaceChildren();
+  const my = ++bannerSeq, items = []; // plusieurs rendus peuvent se chevaucher : seul le dernier écrit, sans doublons
   const add = (cls, html, actions) => {
     const el = document.createElement('div');
     el.className = 'bn ' + cls;
@@ -921,15 +925,28 @@ async function renderBanners() {
       b.onclick = fn;
       el.append(b);
     }
-    box.append(el);
+    items.push(el);
   };
   const w = await getMeta('parseWarning');
   if (w) add('err', w.src === 'youtube' ? `⚠ YouTube a peut-être changé son format : des vidéos sont illisibles. Si les nouvelles vidéos n’apparaissent plus, le lecteur (<code>youtube.js</code>) doit être mis à jour.` : `⚠ X a peut-être changé son format : ${w.unparsed} tweet(s) illisible(s). Si les nouveaux bookmarks n’apparaissent plus, le lecteur (<code>parse.js</code>) doit être mis à jour.`, [['Ignorer', async () => { await chrome.runtime.sendMessage({ type: 'q:clearWarning' }); renderBanners(); }]]);
+  const st = await getState();
+  if (loadedOnce && looksWiped(index.tweets.length, st.seen)) add('err', `⚠ <b>La base est presque vide</b> (${index.tweets.length.toLocaleString('fr-FR')} éléments) alors qu’elle en contenait ${st.seen.n.toLocaleString('fr-FR')} (vu le ${fmtWhen(st.seen.at)}). Elle a peut-être été vidée par le navigateur (disque plein ?) ou l’extension réinstallée. <b>Ne lance pas de synchronisation avant d’avoir restauré une sauvegarde.</b>`, [
+    ['Restaurer depuis le dossier de sauvegarde', async () => { try { const r = await loadFromDir(); $('progress').textContent = `Restauré : ${r.count} éléments lus depuis ${r.name}.`; } catch (err) { $('progress').textContent = '⚠ ' + (err.message || err); } }],
+    ['Importer un fichier…', () => $('bk-import').click()],
+    ['C’est normal', async () => { await patchState({ seen: { n: index.tweets.length, at: Date.now() } }); renderBanners(); }],
+  ]);
+  if (settings.autoBackup && dirHandle && needPerm) add('', `💾 La sauvegarde automatique est prête dans « ${esc(dirHandle.name)} » : le navigateur demande de réautoriser l’accès au dossier.`, [['Autoriser et sauvegarder', async () => { if (await dirPermission()) { needPerm = false; await autoBackupTick(); } }]]);
+  if (settings.autoBackup && autoNote) add('err', `💾 Sauvegarde automatique suspendue : ${esc(autoNote)}.`, []);
+  if (loadedOnce && !settings.autoBackup && !st.lastBackup && !st.noBackupHint && index.tweets.length >= 1000) add('', `💾 Aucune sauvegarde automatique : si le navigateur vide sa base (disque plein, réinstallation), tout est perdu. Active-la dans ⚙ › Sauvegarde, avec un dossier dans iCloud Drive ou sur un autre disque.`, [
+    ['Ouvrir les réglages', () => openSettings()],
+    ['Plus tard', async () => { await patchState({ noBackupHint: true }); renderBanners(); }],
+  ]);
   const orphans = (await getMeta('orphans')) || [];
   if (orphans.length) add('', `🗑 ${orphans.length} bookmark(s) n’existent plus (retirés de X, ou sortis de toutes tes playlists YouTube).`, [
     ['Les retirer d’ici', async () => { await chrome.runtime.sendMessage({ type: 'q:orphansDelete' }); }],
     ['Les garder', async () => { await chrome.runtime.sendMessage({ type: 'q:orphansDismiss' }); renderBanners(); }],
   ]);
+  if (my === bannerSeq) box.replaceChildren(...items);
 }
 
 // ---------- redécouverte ----------
@@ -1222,6 +1239,8 @@ async function openSettings() {
   $('aj-msg').textContent = $('aj-msg').dataset.base + (spToday ? ` Aujourd’hui : ${spToday.count} élément(s) jugé(s), ≈ ${spToday.dollars.toFixed(3).replace('.', ',')} $.` : '');
   const h = await getMeta('syncDir');
   setDirUi(h);
+  $('bk-auto').checked = !!settings.autoBackup && !!h; $('bk-hours').value = String(settings.autoBackupHours || 24);
+  updateBackupInfo();
   dlg.showModal();
 }
 $('gear').onclick = openSettings;
@@ -1393,7 +1412,7 @@ const download = (bytes, name) => {
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 };
 // Construit le fichier de sauvegarde : tweets + recherches enregistrées (+ vecteurs du modèle courant si demandé).
-async function buildBackup(pass) {
+async function buildBackup(pass, { vectors = $('bk-vecs').checked } = {}) {
   const tweets = await getAllTweets();
   const extra = { saved };
   const dash = { widgets: (await getMeta('dashWidgets')) || [], detectors: (await getMeta('dashDetectors')) || [], verdicts: (await getMeta('detVerdicts')) || {},
@@ -1402,7 +1421,7 @@ async function buildBackup(pass) {
   const trs = await getAllTranscriptRows();
   if (trs.length) extra.transcripts = trs.map((r) => ({ id: r.id, chunks: r.chunks, at: r.at, lang: r.lang }));
   let nVec = 0;
-  if ($('bk-vecs').checked) {
+  if (vectors) {
     const m = modelOf(settings.embedModel);
     const vecs = await getAllVectors(m.id);
     const entries = [...vecs].map(([id, vec]) => ({ id, vec }));
@@ -1493,28 +1512,95 @@ $('bk-dir').onclick = async () => {
     setDirUi(h);
   } catch { /* annulé */ }
 };
+// Écrit la sauvegarde dans le dossier choisi : la précédente est gardée sous « …-prev » (deux versions au plus). L'écriture est atomique (le navigateur
+// remplace le fichier seulement à la fermeture) : une coupure en cours d'écriture ne détruit pas la sauvegarde existante.
+async function saveToDir({ pass = '', vectors = false } = {}) {
+  const { bytes, count, nVec } = await buildBackup(pass, { vectors });
+  const ext = pass ? 'xbsbak' : 'json', name = `x-bookmarks-backup.${ext}`, prev = `x-bookmarks-backup-prev.${ext}`;
+  try {
+    const old = await (await dirHandle.getFileHandle(name)).getFile();
+    if (old.size > 1000) { const w = await (await dirHandle.getFileHandle(prev, { create: true })).createWritable(); await w.write(old); await w.close(); }
+  } catch { /* première sauvegarde */ }
+  const w = await (await dirHandle.getFileHandle(name, { create: true })).createWritable();
+  await w.write(bytes);
+  await w.close();
+  await patchState({ lastBackup: { at: Date.now(), count, bytes: bytes.length, name: `${dirHandle.name}/${name}` } });
+  return { count, nVec, name };
+}
+async function readDirBackup() {
+  const exts = $('bk-pass').value ? ['xbsbak', 'json'] : ['json', 'xbsbak'];
+  for (const base of ['x-bookmarks-backup', 'x-bookmarks-backup-prev']) for (const ext of exts) { try { return await (await dirHandle.getFileHandle(`${base}.${ext}`)).getFile(); } catch { /* absent */ } }
+  return null;
+}
 $('bk-save').onclick = async () => {
   try {
     if (!(await dirPermission())) return bkMsg('⚠ Accès au dossier refusé.');
-    const { bytes, count, nVec } = await buildBackup($('bk-pass').value);
-    const w = await (await dirHandle.getFileHandle(dirFile(), { create: true })).createWritable();
-    await w.write(bytes);
-    await w.close();
-    bkMsg(`${count} bookmarks${nVec ? ` + ${nVec} vecteurs` : ''} sauvegardés dans ${dirHandle.name}/${dirFile()}`);
+    const st = await getState();
+    if (looksWiped(index.tweets.length, st.seen) && !confirm('La base semble avoir été vidée : sauvegarder maintenant risque d’écraser une bonne sauvegarde par une quasi vide. Continuer ?')) return;
+    const r = await saveToDir({ pass: $('bk-pass').value, vectors: $('bk-vecs').checked });
+    bkMsg(`${r.count} bookmarks${r.nVec ? ` + ${r.nVec} vecteurs` : ''} sauvegardés dans ${dirHandle.name}/${r.name}`);
+    updateBackupInfo();
   } catch (err) { bkMsg('⚠ ' + err.message); }
 };
+async function loadFromDir() {
+  if (!dirHandle) {
+    if (!window.showDirectoryPicker) throw new Error('Ce navigateur ne permet pas de choisir un dossier.');
+    const h = await window.showDirectoryPicker({ mode: 'readwrite' });
+    await setMeta('syncDir', h);
+    setDirUi(h);
+  }
+  if (!(await dirPermission())) throw new Error('Accès au dossier refusé.');
+  const file = await readDirBackup();
+  if (!file) throw new Error('Aucune sauvegarde trouvée dans ce dossier.');
+  const r = await restoreBackup(new Uint8Array(await file.arrayBuffer()), $('bk-pass').value);
+  await load(true);
+  await trackSeen();
+  return { ...r, name: file.name };
+}
 $('bk-load').onclick = async () => {
-  try {
-    if (!(await dirPermission())) return bkMsg('⚠ Accès au dossier refusé.');
-    let file;
-    for (const ext of $('bk-pass').value ? ['xbsbak', 'json'] : ['json', 'xbsbak']) {
-      try { file = await (await dirHandle.getFileHandle(`x-bookmarks-backup.${ext}`)).getFile(); break; } catch {}
-    }
-    if (!file) return bkMsg('⚠ Aucune sauvegarde trouvée dans ce dossier.');
-    const r = await restoreBackup(new Uint8Array(await file.arrayBuffer()), $('bk-pass').value);
-    bkMsg(`${r.count} bookmarks lus depuis ${file.name}, ${r.added} nouveaux${r.nVec ? `, ${r.nVec} vecteurs restaurés` : ''}.`);
-  } catch (err) { bkMsg('⚠ ' + err.message); }
+  try { const r = await loadFromDir(); bkMsg(`${r.count} bookmarks lus depuis ${r.name}, ${r.added} nouveaux${r.nVec ? `, ${r.nVec} vecteurs restaurés` : ''}.`); }
+  catch (err) { bkMsg('⚠ ' + err.message); }
 };
+
+// ---------- garde-fous : base vidée, sauvegarde automatique ----------
+const STATE_KEY = 'xbsState'; // chrome.storage.local : survit à un effacement de la base
+const getState = async () => (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || {};
+const patchState = async (p) => chrome.storage.local.set({ [STATE_KEY]: { ...(await getState()), ...p } });
+let loadedOnce = false, needPerm = false, autoNote = '';
+async function trackSeen() {
+  if (!loadedOnce) return;
+  const st = await getState(), next = nextSeen(index.tweets.length, st.seen);
+  if (next !== st.seen) await patchState({ seen: next });
+  renderBanners();
+}
+const fmtWhen = (ms) => new Date(ms).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+async function updateBackupInfo() {
+  const st = await getState(), l = st.lastBackup;
+  $('bk-last').textContent = l ? `Dernière sauvegarde dans un dossier : ${fmtWhen(l.at)} · ${l.count.toLocaleString('fr-FR')} éléments · ${(l.bytes / 1e6).toFixed(1)} Mo (${l.name}).` : 'Aucune sauvegarde dans un dossier pour l’instant.';
+  if (autoNote) $('bk-last').textContent += ` ⚠ Suspendue : ${autoNote}.`;
+}
+async function autoBackupTick() {
+  if (!settings.autoBackup || !dirHandle || !loadedOnce) return;
+  const d = backupDue(await getState(), { hours: settings.autoBackupHours || 24, n: index.tweets.length });
+  autoNote = d.skip || '';
+  if (!d.due) { if (d.skip) renderBanners(); updateBackupInfo(); return; }
+  let perm = 'prompt';
+  try { perm = await dirHandle.queryPermission({ mode: 'readwrite' }); } catch { /* ancien navigateur */ }
+  if (perm !== 'granted') { needPerm = true; renderBanners(); return; } // l'autorisation exige un clic : bandeau
+  needPerm = false;
+  try { await saveToDir({ pass: '', vectors: false }); autoNote = ''; } catch (e) { autoNote = 'échec de l’écriture (' + (e.message || e) + ') : disque plein ?'; }
+  renderBanners(); updateBackupInfo();
+}
+setTimeout(() => { getMeta('syncDir').then((h) => { if (h && !dirHandle) dirHandle = h; }).catch(() => {}).then(autoBackupTick); }, 20_000);
+setInterval(autoBackupTick, 30 * 60_000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') autoBackupTick(); });
+$('bk-auto').onchange = async (e) => {
+  if (e.target.checked && !dirHandle) { e.target.checked = false; return bkMsg('⚠ Choisis d’abord un dossier (bouton « Choisir un dossier… »), de préférence dans iCloud Drive ou sur un autre disque.'); }
+  settings = await setSettings({ autoBackup: e.target.checked, autoBackupHours: Number($('bk-hours').value) || 24 });
+  if (settings.autoBackup) { await patchState({ lastBackup: undefined }); autoBackupTick(); } // première sauvegarde tout de suite
+};
+$('bk-hours').onchange = async (e) => { settings = await setSettings({ autoBackupHours: Number(e.target.value) || 24 }); };
+if (location.search.includes('test')) window.__xbs = { setDir: setDirUi, autoBackupTick, saveToDir, getState, patchState, trackSeen, reloadSettings: async () => { settings = await getSettings(); } };
 
 // ---------- banc d'essai ----------
 $('bench-in').value = '[\n  {"q": "mémoire des agents", "expect": ["long-term memory", "@karpathy"]}\n]';

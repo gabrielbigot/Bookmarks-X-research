@@ -14,6 +14,8 @@ export const DEFAULTS = {
   decisionRerank: false, // reclassement par le modèle de décision
   compute: 'cpu', // 'cpu' = WASM (plus lent, mémoire prévisible, par défaut) | 'auto' = GPU si possible (rapide, mais gourmand : à activer en connaissance de cause)
   indexMode: 'manual', // 'manual' : sur clic (« Indexer ») | 'soft' : automatique par petites tranches, jamais au lancement | 'auto' : tout, au démarrage et à chaque nouveau tweet (déconseillé)
+  autoBackup: false, // sauvegarde automatique dans le dossier choisi (⚙ › Sauvegarde)
+  autoBackupHours: 24,
   settingsVersion: 4,
   ytExcluded: [], // playlists YouTube que le système ignore (synchro, recherche, stats, indexation, transcriptions). Vide = toutes
   updHistory: false, // « Tout mettre à jour » inclut l'historique YouTube (désactivé : gros retard à rattraper à part)

@@ -1445,6 +1445,44 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   await panel.fill('#q', 'has:notranscript from:@chainetr');
   await waitFor(async () => (await panel.locator('.tw.yt').count()) === 1, 'une seule vidéo reste sans transcription', 10000);
 }
+{ // garde-fous : base vidée -> bandeau d'alerte ; sauvegarde automatique dans un dossier (OPFS dans le test) avec rotation et suspension
+  await panel.evaluate(() => chrome.storage.local.set({ xbsState: { seen: { n: 50000, at: Date.now() - 86400000 } } }));
+  await panel.reload(); await panel.waitForSelector('.tw');
+  await waitFor(async () => /La base est presque vide/.test(await panel.locator('#banners').innerText()), 'bandeau « base vidée »', 10000);
+  assert.match(await panel.locator('#banners').innerText(), /50.?000/);
+  assert.match(await panel.locator('#banners').innerText(), /Ne lance pas de synchronisation/);
+  await panel.locator('#banners button', { hasText: 'C’est normal' }).click();
+  await waitFor(async () => !/La base est presque vide/.test(await panel.locator('#banners').innerText()), 'bandeau retiré', 5000);
+  // sauvegarde automatique
+  await panel.goto(panelUrl + '?test=1'); await panel.waitForSelector('.tw');
+  await panel.evaluate(async () => {
+    const { settings } = await chrome.storage.local.get('settings');
+    await chrome.storage.local.set({ settings: { ...settings, autoBackup: true, autoBackupHours: 24 } });
+    await window.__xbs.reloadSettings();
+    window.__xbs.setDir(await navigator.storage.getDirectory());
+    await window.__xbs.patchState({ lastBackup: undefined });
+    await window.__xbs.autoBackupTick();
+  });
+  const readBackup = (name) => panel.evaluate(async (n) => { try { const f = await (await (await navigator.storage.getDirectory()).getFileHandle(n)).getFile(); const j = JSON.parse(await f.text()); return { format: j.format, count: j.count, exportedAt: j.exportedAt, size: f.size }; } catch { return null; } }, name);
+  const b1 = await readBackup('x-bookmarks-backup.json');
+  assert.ok(b1 && b1.format === 'xbs-backup' && b1.count >= 300, 'sauvegarde automatique écrite : ' + JSON.stringify(b1));
+  assert.equal(await readBackup('x-bookmarks-backup-prev.json'), null, 'pas de version précédente à la 1re sauvegarde');
+  assert.equal((await panel.evaluate(() => window.__xbs.getState())).lastBackup.count, b1.count);
+  // pas de nouvelle sauvegarde tant que la précédente est récente ; échue : la précédente est conservée
+  await panel.evaluate(() => window.__xbs.autoBackupTick());
+  assert.equal((await readBackup('x-bookmarks-backup.json')).exportedAt, b1.exportedAt, 'rien de nouveau quand la sauvegarde est récente');
+  await new Promise((r) => setTimeout(r, 1100));
+  await panel.evaluate(async () => { const st = await window.__xbs.getState(); await window.__xbs.patchState({ lastBackup: { ...st.lastBackup, at: Date.now() - 30 * 3600_000 } }); await window.__xbs.autoBackupTick(); });
+  const b2 = await readBackup('x-bookmarks-backup.json'), p2 = await readBackup('x-bookmarks-backup-prev.json');
+  assert.ok(b2.exportedAt !== b1.exportedAt, 'nouvelle sauvegarde'); assert.equal(p2.exportedAt, b1.exportedAt, 'l’ancienne est gardée en « -prev »');
+  // base qui semble vidée : aucune écriture (une bonne sauvegarde n'est jamais écrasée) et bandeau explicatif
+  await panel.evaluate(async () => { const st = await window.__xbs.getState(); await window.__xbs.patchState({ seen: { n: 900000, at: Date.now() }, lastBackup: { ...st.lastBackup, at: Date.now() - 30 * 3600_000 } }); await window.__xbs.autoBackupTick(); });
+  assert.equal((await readBackup('x-bookmarks-backup.json')).exportedAt, b2.exportedAt, 'sauvegarde suspendue quand la base semble vidée');
+  await waitFor(async () => /Sauvegarde automatique suspendue/.test(await panel.locator('#banners').innerText()), 'bandeau de suspension', 5000);
+  await panel.evaluate(async () => { await window.__xbs.patchState({ seen: undefined }); await panel.evaluate; }).catch(() => {});
+  await panel.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, autoBackup: false } }); });
+  await panel.goto(panelUrl); await panel.waitForSelector('.tw');
+}
 { // grille ×4 sur une fenêtre de ≈ 1000 px (3 colonnes seulement avant : minimum 320 px par carte)
   await panel.setViewportSize({ width: 1000, height: 800 });
   await panel.selectOption('#view', '4');

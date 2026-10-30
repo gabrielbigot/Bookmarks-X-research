@@ -124,6 +124,8 @@
           <button type="button" id="bk-save" disabled>Sauvegarder dedans</button>
           <button type="button" id="bk-load" disabled>Charger depuis le dossier</button>
         </div>
+        <label class="chk"><input type="checkbox" id="bk-auto"><span>Sauvegarde automatique dans ce dossier, toutes les <select id="bk-hours"><option value="6">6 h</option><option value="24" selected>24 h</option><option value="72">3 jours</option></select> <span class="hint">(tant que le panneau est ouvert ; sans mot de passe ni vecteurs ; la précédente est gardée en « …-prev » ; suspendue si la base semble vidée, pour ne jamais écraser une bonne sauvegarde)</span></span></label>
+        <p class="hint" id="bk-last"></p>
         <p class="hint" id="bk-msg"></p>
       </section>
 
