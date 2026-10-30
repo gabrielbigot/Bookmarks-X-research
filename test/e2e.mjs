@@ -1432,12 +1432,12 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   assert.deepEqual(clip.trim().split('\n').map((l) => l.split('\t')[0]), ['https://www.youtube.com/watch?v=eeeeeeeeeee', 'https://www.youtube.com/watch?v=fffffffffff'].sort((a, b) => clip.indexOf(a) - clip.indexOf(b)));
   assert.ok(clip.split('\n')[0].split('\t')[1] === '600', 'durée copiée');
   const file = { format: 'xbs-transcripts/1', items: [
-    { id: 'yt:eeeeeeeeeee', videoId: 'eeeeeeeeeee', source: 'stt', model: 'voxtral-mini-latest', lang: 'fr', segments: [{ t: 0, text: 'Bienvenue dans cet entretien.' }, { t: 95, text: 'Nous parlons de la mélodiquezorglub des agents.' }] },
+    { id: 'yt:eeeeeeeeeee', videoId: 'eeeeeeeeeee', source: 'stt', model: 'voxtral-mini-latest', lang: 'fr', costUsd: 0.0021, costKind: 'réel', segments: [{ t: 0, text: 'Bienvenue dans cet entretien.' }, { t: 95, text: 'Nous parlons de la mélodiquezorglub des agents.' }] },
     { id: 'yt:ggggggggggg', videoId: 'ggggggggggg', source: 'subs', segments: [{ t: 1, text: 'Vidéo inconnue de l’extension' }] },
     { id: 'pas-un-id', segments: [] },
   ] };
   await panel.setInputFiles('#tr-import', { name: 'results.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(file)) });
-  await waitFor(async () => /Import : 1 transcription ajoutée.*1 vidéo inconnue.*1 illisible/.test(await panel.locator('#progress').innerText()), 'import des transcriptions', 15000);
+  await waitFor(async () => /Import : 1 transcription ajoutée \(reconnaissance vocale : 0\.0021 \$\).*1 vidéo inconnue.*1 illisible/.test(await panel.locator('#progress').innerText()), 'import des transcriptions (coût affiché)', 15000);
   await panel.reload(); await panel.waitForSelector('.tw');
   await panel.fill('#q', 'mélodiquezorglub');
   await waitFor(async () => /Entretien importé/.test(await panel.locator('.tw.yt').first().innerText().catch(() => '')), 'recherche dans la transcription importée', 15000);

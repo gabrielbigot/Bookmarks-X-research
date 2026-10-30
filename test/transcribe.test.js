@@ -62,7 +62,9 @@ for (let k = 0; k < 2; k++) fs.writeFileSync(out.replace('%03d', String(k).padSt
 }
 const startMistral = (opts = {}) => new Promise((res) => {
   const calls = [];
+  let usage = 1.5; // compteur de dépense de la clé (GET /key)
   const srv = http.createServer((req, rsp) => {
+    if (req.url.endsWith('/key')) { rsp.writeHead(200, { 'content-type': 'application/json' }); return rsp.end(JSON.stringify({ data: { usage } })); }
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => {
@@ -74,7 +76,8 @@ const startMistral = (opts = {}) => new Promise((res) => {
       calls.push(call);
       if (isJson && opts.rejectJson) { call.rejected = true; rsp.writeHead(415, { 'content-type': 'application/json' }); return rsp.end('{"error":"multipart attendu"}'); }
       rsp.writeHead(200, { 'content-type': 'application/json' });
-      rsp.end(JSON.stringify(opts.textOnly ? { text: 'Première phrase du passage. Deuxième phrase, un peu plus longue que la première ! Troisième et dernière phrase.' } : { language: 'fr', segments: [{ start: 2, end: 6, text: 'Voix reconnue ' + calls.length }] }));
+      if (opts.cost) usage += opts.cost;
+      rsp.end(JSON.stringify({ ...(opts.cost ? { usage: { cost: opts.cost } } : {}), ...(opts.textOnly ? { text: 'Première phrase du passage. Deuxième phrase, un peu plus longue que la première ! Troisième et dernière phrase.' } : { language: 'fr', segments: [{ start: 2, end: 6, text: 'Voix reconnue ' + calls.length }] }) }));
     });
   }).listen(0, '127.0.0.1', () => res({ srv, calls, port: srv.address().port }));
 });
@@ -198,5 +201,37 @@ test('OpenRouter : sans horodatage dans la réponse, instants estimés ; repli m
       assert.equal(r.code, 0, r.err);
       assert.equal(d.calls[0].mode, 'form'); assert.equal(d.calls[0].auth, 'Bearer km'); assert.equal(d.calls[0].model, 'voxtral-mini-latest'); assert.equal(d.calls[0].url, '/v1/audio/transcriptions');
     } finally { d.srv.close(); }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('coût réel : annoncé par OpenRouter, vérifié par le compteur de la clé, estimé sinon ; historique et commande costs', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trcost-'));
+  const { ytdlp, ffmpeg } = fakeTools(dir);
+  const out = path.join(dir, 'out');
+  const input = 'https://www.youtube.com/watch?v=cccccccccc1\t450\tSans sous-titres';
+  const mk = (srv) => ({ XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, OPENROUTER_API_KEY: 'k', OPENROUTER_API_BASE: `http://127.0.0.1:${srv.port}/api/v1` });
+  try {
+    const a = await startMistral({ cost: 0.002 });
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--out', out], mk(a), input);
+      assert.equal(r.code, 0, r.err);
+      assert.match(r.out, /coût 0\.0040 \$ \(réel\)/);
+      assert.match(r.out, /Coût de ce lancement : 0\.0040 \$ \(réel, annoncé par OpenRouter\)/);
+      assert.match(r.out, /Compteur de dépense de ta clé OpenRouter pendant le lancement : \+0\.0040 \$/);
+      const it = JSON.parse(fs.readFileSync(path.join(out, 'results.json'), 'utf8')).items[0];
+      assert.equal(it.costUsd, 0.004); assert.equal(it.costKind, 'réel');
+    } finally { a.srv.close(); }
+    // 2e lancement sur une autre vidéo, réponses SANS coût : estimation d'après la durée (450 s à 0,0035 $/min)
+    const b = await startMistral({});
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--out', out], mk(b), 'https://www.youtube.com/watch?v=cccccccccc2\t450\tAutre');
+      assert.match(r.out, /\(estimé\)/); assert.match(r.out, /Coût de ce lancement : 0\.026 \$ \(estimé/);
+    } finally { b.srv.close(); }
+    // historique cumulé et commande costs
+    const hist = JSON.parse(fs.readFileSync(path.join(out, 'costs.json'), 'utf8'));
+    assert.equal(hist.runs.length, 2); assert.equal(hist.runs[0].costKind, 'réel'); assert.equal(hist.runs[1].costKind, 'estimé');
+    const c = await runCli(['costs', '--out', out], {}, '');
+    assert.equal(c.code, 0); assert.match(c.out, /Total : 0\.030 \$ sur 2 lancements/); assert.match(c.out, /~/);
+    assert.match((await runCli(['costs', '--out', path.join(dir, 'vide')], {}, '')).out, /Aucun lancement/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

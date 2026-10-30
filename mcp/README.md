@@ -103,6 +103,12 @@ Les réponses sont enregistrées dans `~/.config/xbs/transcribe.json` (lisible p
 2. **Dans le terminal**, dossier du projet : `npm run transcribe` (les liens sont lus dans le presse-papiers ; le fichier créé s'affiche dans le Finder sur macOS). Pour essayer : `npm run transcribe -- --limit 3`, ou `-- --dry-run` pour l'estimation du coût sans rien appeler.
 3. **Dans l'extension** : **⋯ › 📥 Importer des transcriptions…** et choisis `transcripts/results.json`. Les transcriptions sont indexées (mots et sens) comme les autres ; celles de la reconnaissance vocale portent la pastille « 🎙 Transcription audio ». Une vraie transcription déjà présente n'est jamais écrasée.
 
+**Combien ça coûte** : à la fin de chaque lancement, l'outil affiche le coût de la reconnaissance vocale, par vidéo puis au total :
+* **réel** quand la réponse d'OpenRouter l'indique (c'est le montant facturé) ; sinon **estimé** d'après la durée et `--price`, et c'est écrit ;
+* le **compteur de dépense de ta clé OpenRouter** avant et après le lancement, comme vérification (il inclut toute autre utilisation de la clé au même moment, et peut avoir quelques secondes de retard) ;
+* le **cumul** de tous tes lancements. `npm run transcribe -- costs` affiche l'historique (un lancement par ligne, « ~ » = estimé) ; il est enregistré dans `transcripts/costs.json`.
+Le coût de chaque vidéo est aussi dans `results.json` : l'import dans l'extension affiche le total de ce qui vient d'être ajouté, et le survol de la pastille « 🎙 Transcription audio » donne le coût de la vidéo.
+
 Un raccourci global est possible : `npm link` dans le dossier du projet crée la commande `xbs-transcribe` utilisable partout.
 
 Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste toutes) : `--audio` / `--no-audio`, `--budget 2` (plafond en $), `--price 0.0035` (prix d'une minute d'après la fiche OpenRouter de Voxtral Mini Transcribe 3 : à vérifier), `--model mistralai/voxtral-mini-transcribe-3-0`, `--eu` (point d'accès européen d'OpenRouter), `--provider mistral` (API de Mistral en direct, clé `MISTRAL_API_KEY`), `--lang fr`, `--cookies-from-browser chrome`, `--sleep 3` (pause entre deux vidéos), `--out dossier`. Commandes : `setup`, `config` (affiche les réglages, clé masquée). Un fichier de liens ou une entrée redirigée (`pbpaste | …`, `liens.txt`) remplace le presse-papiers.

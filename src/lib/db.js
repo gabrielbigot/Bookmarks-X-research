@@ -267,7 +267,7 @@ export async function putTranscript(id, chunks, extra = {}) {
   const tx = db.transaction(['transcripts', 'tweets'], 'readwrite');
   tx.objectStore('transcripts').put({ id, chunks, at: Date.now(), ...extra });
   const old = await wrap(tx.objectStore('tweets').get(id));
-  if (old) tx.objectStore('tweets').put({ ...old, trState: 'ok', trAt: Date.now(), trChars: chunks.reduce((n, c) => n + c.text.length, 0), ...(extra.trSource ? { trSource: extra.trSource } : { trSource: undefined }) });
+  if (old) tx.objectStore('tweets').put({ ...old, trState: 'ok', trAt: Date.now(), trChars: chunks.reduce((n, c) => n + c.text.length, 0), ...(extra.trSource ? { trSource: extra.trSource } : { trSource: undefined }), ...(typeof extra.trCost === 'number' ? { trCost: extra.trCost } : { trCost: undefined }) });
   await done(tx);
 }
 export async function markNoTranscript(ids) {

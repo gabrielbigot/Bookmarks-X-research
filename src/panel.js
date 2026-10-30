@@ -461,7 +461,7 @@ function trBadge(t) {
   if (t.unavailable) return '';
   const k = t.trChars ? ` ≈ ${Math.max(1, Math.round(t.trChars / 1000))} k caractères de texte parlé.` : '';
   const when = t.trAt ? ` Récupérée le ${new Date(t.trAt).toLocaleDateString('fr-FR')}.` : '';
-  if (t.trState === 'ok' && t.trSource === 'stt') return `<span class="yt-trb stt" title="Transcription par reconnaissance vocale (audio de la vidéo transcrit en local avec l’outil mcp/transcribe.mjs). Horodatage exact, quelques erreurs de mots possibles.${esc(k + when)}">🎙 Transcription audio</span>`;
+  if (t.trState === 'ok' && t.trSource === 'stt') return `<span class="yt-trb stt" title="Transcription par reconnaissance vocale (audio de la vidéo transcrit en local avec l’outil mcp/transcribe.mjs). Quelques erreurs de mots possibles.${esc(k + when + (typeof t.trCost === 'number' ? ` Coût : ${t.trCost < 0.01 ? t.trCost.toFixed(4) : t.trCost.toFixed(3)} $.` : ''))}">🎙 Transcription audio</span>`;
   if (t.trState === 'ok') return t.trSource === 'ai'
     ? `<span class="yt-trb ai" title="Transcription générée par une IA (peut contenir des erreurs), cherchée dans le texte parlé.${esc(k + when)}">🤖 Transcription IA</span>`
     : `<span class="yt-trb ok" title="Transcription de YouTube récupérée : la recherche porte aussi sur ce qui est dit dans la vidéo.${esc(k + when)}">🗒 Transcription</span>`;
@@ -832,7 +832,7 @@ $('tr-import').onchange = async (e) => {
     if (file.size > 300 * 1024 * 1024) throw new Error('fichier trop gros (300 Mo au plus)');
     const data = JSON.parse(await file.text());
     if (data?.format !== 'xbs-transcripts/1' || !Array.isArray(data.items)) throw new Error('ce n’est pas un fichier créé par mcp/transcribe.mjs (results.json)');
-    let ok = 0, unknown = 0, had = 0, bad = 0;
+    let ok = 0, unknown = 0, had = 0, bad = 0, cost = 0, costKnown = false;
     for (const it of data.items) {
       const id = String(it?.id || '');
       const segs = Array.isArray(it?.segments) ? it.segments.filter((s) => Number.isFinite(s?.t) && typeof s?.text === 'string' && s.text.trim()).slice(0, 40000) : [];
@@ -842,10 +842,11 @@ $('tr-import').onchange = async (e) => {
       if (v.trState === 'ok' && v.trSource !== 'ai') { had++; continue; } // une vraie transcription existante n'est jamais écrasée (celle d'une IA peut l'être)
       const chunks = chunkSegments(segs.map((s) => ({ t: Math.max(0, Math.round(s.t)), text: s.text.trim().slice(0, 2000) })));
       if (!chunks.length) { bad++; continue; }
-      await chrome.runtime.sendMessage({ type: 'ytTranscript', id, state: 'ok', chunks, extra: { trSource: it.source === 'stt' ? 'stt' : 'subs', ...(it.model ? { trModel: String(it.model).slice(0, 60) } : {}) } });
+      await chrome.runtime.sendMessage({ type: 'ytTranscript', id, state: 'ok', chunks, extra: { trSource: it.source === 'stt' ? 'stt' : 'subs', ...(it.model ? { trModel: String(it.model).slice(0, 60) } : {}), ...(typeof it.costUsd === 'number' && it.costUsd >= 0 ? { trCost: it.costUsd } : {}) } });
       ok++;
+      if (typeof it.costUsd === 'number') { cost += it.costUsd; costKnown = true; }
     }
-    out.textContent = `Import : ${ok} transcription${ok > 1 ? 's' : ''} ajoutée${ok > 1 ? 's' : ''}${had ? `, ${had} déjà présente${had > 1 ? 's' : ''}` : ''}${unknown ? `, ${unknown} vidéo${unknown > 1 ? 's' : ''} inconnue${unknown > 1 ? 's' : ''} de l’extension` : ''}${bad ? `, ${bad} illisible${bad > 1 ? 's' : ''}` : ''}. L’indexation par le sens des nouveaux passages démarre.`;
+    out.textContent = `Import : ${ok} transcription${ok > 1 ? 's' : ''} ajoutée${ok > 1 ? 's' : ''}${costKnown ? ` (reconnaissance vocale : ${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)} $)` : ''}${had ? `, ${had} déjà présente${had > 1 ? 's' : ''}` : ''}${unknown ? `, ${unknown} vidéo${unknown > 1 ? 's' : ''} inconnue${unknown > 1 ? 's' : ''} de l’extension` : ''}${bad ? `, ${bad} illisible${bad > 1 ? 's' : ''}` : ''}. L’indexation par le sens des nouveaux passages démarre.`;
     setTimeout(() => load(false).then(() => run()).catch(() => {}), 1500);
   } catch (err) { out.textContent = '⚠ Import impossible : ' + (err.message || err); }
 };

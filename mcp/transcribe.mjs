@@ -21,6 +21,7 @@ const HELP = `Usage : npm run transcribe [-- commande ou options]        (ou : n
 Commandes
   setup                      enregistre une fois pour toutes : clé Mistral, navigateur des cookies, réglages par défaut
   config                     affiche les réglages enregistrés (la clé est masquée)
+  costs                      historique des dépenses de reconnaissance vocale (un lancement par ligne) et total
   (aucune)                   transcrit les vidéos : liens lus dans un fichier, sinon l'entrée standard, sinon le PRESSE-PAPIERS
 
 Entrée : une vidéo par ligne (lien ou identifiant YouTube) ; colonnes optionnelles séparées par une tabulation : durée en secondes, titre.
@@ -89,6 +90,12 @@ export function mistralSegments(json, offset = 0, seconds = 0) {
   return sentences.map((s) => { const t = Math.round(offset + (acc / total) * seconds); acc += s.length + 1; return { t, text: s }; });
 }
 
+// Coût facturé annoncé par la réponse (OpenRouter renvoie usage.cost ; autres formats tolérés), sinon null
+export function responseCost(json) {
+  for (const v of [json?.usage?.cost, json?.cost, json?.usage?.total_cost, json?.usage?.cost_usd, json?.data?.usage?.cost]) if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v;
+  return null;
+}
+export const fmtUsd = (v) => (v < 0.01 ? v.toFixed(4) : v.toFixed(3)) + ' $';
 export const estimateAudioUsd = (videos, price) => videos.reduce((n, v) => n + ((v.seconds || 1800) / 60) * price, 0);
 
 // ---------- exécution ----------
@@ -161,6 +168,23 @@ async function readClipboard() {
   return '';
 }
 
+// Historique des dépenses : <dossier de sortie>/costs.json, une ligne par lancement
+export function recordRun(outDir, run) {
+  const f = path.join(outDir, 'costs.json');
+  let h = { runs: [] };
+  try { const old = JSON.parse(fs.readFileSync(f, 'utf8')); if (Array.isArray(old?.runs)) h = old; } catch { /* premier lancement */ }
+  if (run) { h.runs.push(run); fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(f, JSON.stringify(h, null, 1)); }
+  return { runs: h.runs, total: h.runs.reduce((n, r) => n + (r.costUsd || 0), 0) };
+}
+function showCosts(outDir) {
+  const { runs, total } = recordRun(outDir);
+  if (!runs.length) { console.log(`Aucun lancement enregistré dans ${path.resolve(outDir)}/costs.json.`); return 0; }
+  console.log('Date                  Vidéos  Sous-titres  Audio  Coût         Compteur clé');
+  for (const r of runs) console.log(`${String(r.at).slice(0, 16).replace('T', ' ').padEnd(22)}${String(r.videos).padEnd(8)}${String(r.subs).padEnd(13)}${String(r.stt).padEnd(7)}${(fmtUsd(r.costUsd) + (r.costKind === 'estimé' ? ' ~' : '')).padEnd(13)}${r.keyDeltaUsd != null ? '+' + fmtUsd(r.keyDeltaUsd) : '—'}`);
+  console.log(`\nTotal : ${fmtUsd(total)} sur ${runs.length} lancement${runs.length > 1 ? 's' : ''}  (« ~ » = estimé d'après la durée)`);
+  return 0;
+}
+
 function parseArgs(argv, cfg = {}) {
   const provider = cfg.provider === 'mistral' ? 'mistral' : 'openrouter';
   const o = { cmd: '', provider, eu: !!cfg.eu, out: 'transcripts', audio: !!cfg.audio, model: cfg.model || (provider === 'mistral' ? 'voxtral-mini-latest' : 'mistralai/voxtral-mini-transcribe-3-0'), price: cfg.price ?? (provider === 'mistral' ? 0.003 : 0.0035), budget: cfg.budget ?? 2, lang: cfg.lang || '', subLangs: cfg.subLangs || 'fr-orig,en-orig,fr,en', limit: 0, sleep: cfg.sleep ?? 3, cookiesBrowser: cfg.cookiesBrowser || '', cookies: '', dry: false, file: '', help: false, reveal: process.platform === 'darwin' };
@@ -183,7 +207,7 @@ function parseArgs(argv, cfg = {}) {
     else if (a === '--sleep') o.sleep = Number(v());
     else if (a === '--cookies-from-browser') o.cookiesBrowser = v();
     else if (a === '--cookies') o.cookies = v();
-    else if (!a.startsWith('--') && !o.cmd && !o.file && (a === 'setup' || a === 'config')) o.cmd = a;
+    else if (!a.startsWith('--') && !o.cmd && !o.file && (a === 'setup' || a === 'config' || a === 'costs')) o.cmd = a;
     else if (!a.startsWith('--') && !o.file) o.file = a;
     else { console.error(`Option inconnue : ${a}\n`); o.help = true; }
   }
@@ -200,10 +224,16 @@ async function readInput(file) {
 
 // Un morceau d'audio -> JSON du service. OpenRouter : format de la requête à confirmer (JSON base64 ou multipart) : les deux sont essayés.
 let sttMode = ''; // format qui a fonctionné ('json' | 'form'), mémorisé pour la suite du lancement
+const apiBase = (o) => (o.provider === 'openrouter' ? (process.env.OPENROUTER_API_BASE || (o.eu ? 'https://eu.openrouter.ai/api/v1' : 'https://openrouter.ai/api/v1')) : (process.env.MISTRAL_API_BASE || 'https://api.mistral.ai') + '/v1').replace(/\/+$/, '');
+// Compteur de dépense de la clé OpenRouter (GET /key) : sert à vérifier le coût réellement facturé pendant un lancement
+async function keyUsage(o, key) {
+  if (o.provider !== 'openrouter') return null;
+  try { const r = await fetch(`${apiBase(o)}/key`, { headers: { authorization: `Bearer ${key}` } }); if (!r.ok) return null; const u = (await r.json())?.data?.usage; return typeof u === 'number' ? u : null; } catch { return null; }
+}
 async function sttRequest(o, key, file, name) {
   const bytes = fs.readFileSync(file);
   const openrouter = o.provider === 'openrouter';
-  const base = (openrouter ? (process.env.OPENROUTER_API_BASE || (o.eu ? 'https://eu.openrouter.ai/api/v1' : 'https://openrouter.ai/api/v1')) : (process.env.MISTRAL_API_BASE || 'https://api.mistral.ai') + '/v1').replace(/\/+$/, '');
+  const base = apiBase(o);
   const headers = { authorization: `Bearer ${key}` };
   const asForm = () => {
     const form = new FormData();
@@ -238,7 +268,7 @@ async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, key) {
   const parts = fs.readdirSync(tmp).filter((f) => f.startsWith(v.id + '_') && f.endsWith('.mp3')).sort();
   if (!cut.ok || !parts.length) return { why: 'ffmpeg : découpage impossible' + (cut.missing ? ' (ffmpeg introuvable)' : '') };
   const segments = [];
-  let lang = '', seconds = 0;
+  let lang = '', seconds = 0, real = 0, realParts = 0;
   for (let k = 0; k < parts.length; k++) {
     const file = path.join(tmp, parts[k]);
     const dur = Math.min(SPLIT, Math.max(1, (fs.statSync(file).size * 8) / 32000)); // durée d'un morceau à 32 kbit/s
@@ -247,8 +277,10 @@ async function transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, key) {
     lang = lang || json.language || '';
     segments.push(...mistralSegments(json, k * SPLIT, dur));
     seconds += dur;
+    const c = responseCost(json); if (c != null) { real += c; realParts++; }
   }
-  return { segments, lang, seconds: Math.round(seconds) };
+  const allReal = realParts === parts.length;
+  return { segments, lang, seconds: Math.round(seconds), costUsd: allReal ? real : (seconds / 60) * o.price, costKind: allReal ? 'réel' : 'estimé' };
 }
 
 export async function main(argv) {
@@ -256,6 +288,7 @@ export async function main(argv) {
   const o = parseArgs(argv, cfg);
   if (o.help) { console.log(HELP); return 0; }
   if (o.cmd === 'setup') return setup();
+  if (o.cmd === 'costs') return showCosts(o.out);
   if (o.cmd === 'config') { console.log(`Fichier : ${configPath()}\n` + JSON.stringify({ ...cfg, ...(cfg.mistralKey ? { mistralKey: mask(cfg.mistralKey) } : {}), ...(cfg.openrouterKey ? { openrouterKey: mask(cfg.openrouterKey) } : {}) }, null, 2)); return 0; }
   const sttKey = o.provider === 'mistral' ? (process.env.MISTRAL_API_KEY || cfg.mistralKey || '') : (process.env.OPENROUTER_API_KEY || cfg.openrouterKey || '');
   let text = await readInput(o.file);
@@ -284,7 +317,7 @@ export async function main(argv) {
   }
   const cookieArgs = o.cookiesBrowser ? ['--cookies-from-browser', o.cookiesBrowser] : o.cookies ? ['--cookies', o.cookies] : [];
   const langs = o.subLangs.split(',').map((x) => x.trim()).filter(Boolean);
-  let spent = 0, nSubs = 0, nStt = 0, blocked = 0;
+  let spent = 0, nSubs = 0, nStt = 0, blocked = 0, usageBefore = null, anyEstimated = false;
   const save = () => fs.writeFileSync(resultsFile, JSON.stringify(results));
   for (let i = 0; i < batch.length; i++) {
     const v = batch[i];
@@ -305,11 +338,12 @@ export async function main(argv) {
         if (o.audio && !bot) {
           const est = ((v.seconds || 1800) / 60) * o.price;
           if (spent + est > o.budget) { console.log(`${label} : plafond de ${o.budget} $ atteint : arrêt de l'audio.`); results.failed.push({ videoId: v.id, why: 'plafond' }); continue; }
+          if (usageBefore === null && o.provider === 'openrouter') usageBefore = (await keyUsage(o, sttKey)) ?? false;
           const r = await transcribeAudio(o, v, tmp, ffmpeg, ytdlp, cookieArgs, sttKey);
           if (r.segments?.length) {
-            spent += ((r.seconds || v.seconds || 1800) / 60) * o.price;
-            results.items.push({ id: 'yt:' + v.id, videoId: v.id, source: 'stt', lang: r.lang, model: o.model, segments: r.segments }); nStt++; blocked = 0;
-            console.log(`${label} : reconnaissance vocale (${r.segments.length} segments, ≈ ${spent.toFixed(3)} $ au total)`);
+            spent += r.costUsd; if (r.costKind !== 'réel') anyEstimated = true;
+            results.items.push({ id: 'yt:' + v.id, videoId: v.id, source: 'stt', lang: r.lang, model: o.model, costUsd: Math.round(r.costUsd * 1e6) / 1e6, costKind: r.costKind, segments: r.segments }); nStt++; blocked = 0;
+            console.log(`${label} : reconnaissance vocale (${r.segments.length} segments) — coût ${fmtUsd(r.costUsd)} (${r.costKind}), total du lancement ${fmtUsd(spent)}`);
           } else { console.log(`${label} : ✗ ${r.why || 'aucune parole reconnue'}`); results.failed.push({ videoId: v.id, why: r.why || 'vide' }); if (r.blocked) blocked++; }
         } else {
           const why = bot ? 'YouTube demande une vérification anti-robot' : 'aucun sous-titre' + (o.audio ? '' : ' (essaie --audio)');
@@ -323,7 +357,16 @@ export async function main(argv) {
     if (i < batch.length - 1 && o.sleep > 0) await sleep(o.sleep);
   }
   save();
-  console.log(`\nTerminé : ${nSubs} par sous-titres, ${nStt} par reconnaissance vocale (≈ ${spent.toFixed(3)} $), ${results.failed.length} sans résultat.`);
+  console.log(`\nTerminé : ${nSubs} par sous-titres, ${nStt} par reconnaissance vocale, ${results.failed.length} sans résultat.`);
+  // coût : celui annoncé par chaque réponse (réel) ; à défaut estimé ; et le compteur de dépense de la clé, avant / après, comme vérification
+  let keyDelta = null;
+  if (nStt && typeof usageBefore === 'number') { await sleep(o.sleep > 0 ? 2 : 0); const after = await keyUsage(o, sttKey); if (typeof after === 'number') keyDelta = Math.max(0, after - usageBefore); }
+  if (nStt) {
+    console.log(`Coût de ce lancement : ${fmtUsd(spent)} (${anyEstimated ? 'estimé d\'après la durée et --price : la réponse du service n\'indiquait pas tout' : 'réel, annoncé par OpenRouter'}).`);
+    if (keyDelta !== null) console.log(`Compteur de dépense de ta clé OpenRouter pendant le lancement : +${fmtUsd(keyDelta)} (inclut toute autre utilisation de la clé en même temps ; peut avoir quelques secondes de retard).`);
+  }
+  const hist = recordRun(o.out, { at: new Date().toISOString(), videos: batch.length, subs: nSubs, stt: nStt, failed: results.failed.length, costUsd: Math.round(spent * 1e6) / 1e6, costKind: anyEstimated ? 'estimé' : 'réel', ...(keyDelta !== null ? { keyDeltaUsd: Math.round(keyDelta * 1e6) / 1e6 } : {}), model: o.model });
+  if (nStt) console.log(`Cumul de toutes tes transcriptions audio dans ce dossier : ${fmtUsd(hist.total)} sur ${hist.runs.length} lancement${hist.runs.length > 1 ? 's' : ''} (détail : npm run transcribe -- costs).`);
   console.log(`Fichier à importer dans l'extension (⋯ › Importer des transcriptions…) : ${path.resolve(resultsFile)}`);
   if (o.reveal && results.items.length) await run('open', ['-R', path.resolve(resultsFile)], { timeout: 10_000 }); // macOS : le montre dans le Finder
   return 0;
