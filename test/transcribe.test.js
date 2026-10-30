@@ -64,6 +64,7 @@ const startMistral = (opts = {}) => new Promise((res) => {
   const calls = [];
   let usage = 1.5; // compteur de dépense de la clé (GET /key)
   const srv = http.createServer((req, rsp) => {
+    if (opts.badKey) { rsp.writeHead(401, { 'content-type': 'application/json' }); return rsp.end('{"error":{"message":"User not found.","code":401}}'); }
     if (req.url.endsWith('/key')) { rsp.writeHead(200, { 'content-type': 'application/json' }); return rsp.end(JSON.stringify({ data: { usage } })); }
     const chunks = [];
     req.on('data', (c) => chunks.push(c));
@@ -272,5 +273,27 @@ test('yt-dlp refuse la commande : arrêt immédiat au lieu de boucler sur toutes
   try {
     const r = await runCli(['--sleep', '0', '--out', path.join(dir, 'o')], { XBS_YTDLP: bad }, ['aaaaaaaaaa1', 'aaaaaaaaaa2', 'aaaaaaaaaa3'].join('\n'));
     assert.equal(r.code, 1); assert.match(r.err, /yt-dlp refuse la commande/); assert.equal((r.err.match(/\[\d+\/3\]/g) || []).length, 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('clé refusée (401 « User not found ») : vérifiée avant tout téléchargement ; coût 0 $ affiché quand il n’y a pas d’audio ; clé collée nettoyée', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xbs-trkey-'));
+  const { ytdlp, ffmpeg } = fakeTools(dir);
+  const log = path.join(dir, 'calls.log');
+  const base = { XBS_YTDLP: ytdlp, XBS_FFMPEG: ffmpeg, XBS_FAKE_LOG: log };
+  try {
+    const a = await startMistral({ badKey: true });
+    try {
+      const r = await runCli(['--sleep', '0', '--audio', '--out', path.join(dir, 'o')], { ...base, OPENROUTER_API_KEY: 'sk-or-v1-abcdef1234', OPENROUTER_API_BASE: `http://127.0.0.1:${a.port}/api/v1` }, 'https://www.youtube.com/watch?v=cccccccccc1');
+      assert.equal(r.code, 1); assert.match(r.err, /OpenRouter refuse ta clé \(HTTP 401/); assert.match(r.err, /settings\/keys/); assert.match(r.err, /sk-…234/);
+      assert.ok(!fs.existsSync(log) || !fs.readFileSync(log, 'utf8').includes('--skip-download'), 'rien téléchargé');
+    } finally { a.srv.close(); }
+    // sous-titres seulement : le coût nul est affiché
+    const b = await runCli(['--sleep', '0', '--out', path.join(dir, 'o2')], base, 'https://www.youtube.com/watch?v=aaaaaaaaaaa');
+    assert.match(b.out, /Coût de ce lancement : 0 \$ \(sous-titres YouTube : gratuits; l'audio est désactivé/);
+    // setup : espaces et caractères de contrôle d'un collage retirés
+    const cfg = path.join(dir, 'cfg.json');
+    const s = await runCli(['setup'], { XBS_CONFIG: cfg }, ' sk-or-v1-zzz \u001b[200~\n\n\n\n');
+    assert.equal(JSON.parse(fs.readFileSync(cfg, 'utf8')).openrouterKey, 'sk-or-v1-zzz[200~'.replace('[200~', '[200~'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -103,7 +103,7 @@ Les réponses sont enregistrées dans `~/.config/xbs/transcribe.json` (lisible p
 2. **Dans le terminal**, dossier du projet : `npm run transcribe` (les liens sont lus dans le presse-papiers ; le fichier créé s'affiche dans le Finder sur macOS). Pour essayer : `npm run transcribe -- --limit 3`, ou `-- --dry-run` pour l'estimation du coût sans rien appeler.
 3. **Dans l'extension** : **⋯ › 📥 Importer des transcriptions…** et choisis `transcripts/results.json`. Les transcriptions sont indexées (mots et sens) comme les autres ; celles de la reconnaissance vocale portent la pastille « 🎙 Transcription audio ». Une vraie transcription déjà présente n'est jamais écrasée.
 
-**Combien ça coûte** : à la fin de chaque lancement, l'outil affiche le coût de la reconnaissance vocale, par vidéo puis au total :
+**Combien ça coûte** : les sous-titres YouTube sont gratuits (« Coût de ce lancement : 0 $ » est affiché dans ce cas). À la fin de chaque lancement avec reconnaissance vocale, l'outil affiche le coût de la reconnaissance vocale, par vidéo puis au total :
 * **réel** quand la réponse d'OpenRouter l'indique (c'est le montant facturé) ; sinon **estimé** d'après la durée et `--price`, et c'est écrit ;
 * le **compteur de dépense de ta clé OpenRouter** avant et après le lancement, comme vérification (il inclut toute autre utilisation de la clé au même moment, et peut avoir quelques secondes de retard) ;
 * le **cumul** de tous tes lancements. `npm run transcribe -- costs` affiche l'historique (un lancement par ligne, « ~ » = estimé) ; il est enregistré dans `transcripts/costs.json`.
@@ -120,6 +120,7 @@ Options (elles l'emportent sur les réglages enregistrés ; `--help` les liste t
 * Un réglage de navigateur invalide est signalé dès le départ, et si `yt-dlp` refuse la commande l'outil s'arrête immédiatement au lieu d'essayer chaque vidéo.
 
 À savoir :
+* **Clé refusée** (« HTTP 401 User not found ») : la clé est vérifiée avant tout téléchargement. Recopie-la en entier depuis https://openrouter.ai/settings/keys (une clé supprimée ou tronquée est refusée) avec `npm run transcribe -- setup` ; `npm run transcribe -- config` en montre le début et la fin pour la comparer.
 * **La reprise est automatique** : relancer ne refait pas les vidéos déjà dans `results.json`. Après 3 refus anti-robot de suite, l'outil s'arrête pour ne pas faire bloquer ton IP ; `--cookies-from-browser` (navigateur connecté à YouTube) règle le plus souvent le problème.
 * **Les sous-titres d'abord** : ils existent pour la plupart des vidéos, même quand l'extension n'a pas pu les lire ; la reconnaissance vocale (payante) n'est tentée que sans aucun sous-titre.
 * **Conditions d'utilisation de YouTube** : télécharger des vidéos n'est pas prévu par ses conditions ; pour de l'audio à des fins personnelles c'est une zone grise, à ta décision. L'audio est envoyé à OpenRouter, puis à Mistral (point d'accès européen avec `--eu`).

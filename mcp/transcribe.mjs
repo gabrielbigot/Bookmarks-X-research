@@ -164,7 +164,8 @@ async function setup() {
   const audio = await ask(`Transcrire par l'audio les vidéos sans sous-titre ? (o/n) [${cur.audio ? 'o' : 'n'}] : `);
   const budget = await ask(`Plafond de dépense par lancement, en $ [${cur.budget ?? 2}] : `);
   const next = { ...cur };
-  if (key === '-') delete next.openrouterKey; else if (key) { next.openrouterKey = key; next.provider = 'openrouter'; }
+  const cleanKey = key.replace(/[^\x21-\x7e]/g, ''); // un collage peut apporter des espaces ou des caractères de contrôle invisibles
+  if (key === '-') delete next.openrouterKey; else if (cleanKey) { next.openrouterKey = cleanKey; next.provider = 'openrouter'; if (cleanKey !== key) console.log('  (caractères invisibles retirés de la clé collée)'); }
   if (browser === '-') delete next.cookiesBrowser; else if (browser) { next.cookiesBrowser = browser; delete next.cookies; }
   if (cookiesFile) next.cookies = path.resolve(cookiesFile.replace(/^~(?=\/)/, os.homedir()));
   if (audio) next.audio = yes(audio, !!cur.audio);
@@ -248,6 +249,11 @@ async function keyUsage(o, key) {
   if (o.provider !== 'openrouter') return null;
   try { const r = await fetch(`${apiBase(o)}/key`, { headers: { authorization: `Bearer ${key}` } }); if (!r.ok) return null; const u = (await r.json())?.data?.usage; return typeof u === 'number' ? u : null; } catch { return null; }
 }
+// Vérifie la clé avant de télécharger quoi que ce soit : { ok, status, body }. Réseau injoignable : on continue (ok = true).
+async function keyCheck(o, key) {
+  if (o.provider !== 'openrouter') return { ok: true };
+  try { const r = await fetch(`${apiBase(o)}/key`, { headers: { authorization: `Bearer ${key}` } }); return { ok: r.status !== 401 && r.status !== 403, status: r.status, body: r.ok ? '' : (await r.text().catch(() => '')).slice(0, 160) }; } catch { return { ok: true }; }
+}
 async function sttRequest(o, key, file, name) {
   const bytes = fs.readFileSync(file);
   const openrouter = o.provider === 'openrouter';
@@ -271,7 +277,7 @@ async function sttRequest(o, key, file, name) {
     if (sttMode !== 'json' && [400, 415, 422].includes(res.status)) { const second = await asForm(); if (second.ok) { sttMode = 'form'; res = second; } }
     else if (res.ok) sttMode = 'json';
   }
-  if (!res.ok) throw new Error(`${openrouter ? 'OpenRouter' : 'Mistral'} : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`);
+  if (!res.ok) throw new Error(`${openrouter ? 'OpenRouter' : 'Mistral'} : HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}${res.status === 401 || res.status === 403 ? ' → clé refusée : npm run transcribe -- setup' : ''}`);
   return res.json();
 }
 
@@ -332,6 +338,8 @@ export async function main(argv) {
   if (o.audio) {
     if (!sttKey) { console.error(`✗ L'audio demande une clé ${o.provider === 'mistral' ? 'Mistral' : 'OpenRouter'} : lance « npm run transcribe -- setup » pour l'enregistrer, ou utilise --no-audio.`); return 1; }
     if (!(await run(ffmpeg, ['-version'], { timeout: 20_000 })).ok) { console.error('✗ ffmpeg est introuvable (nécessaire pour --audio). Installe-le : brew install ffmpeg.'); return 1; }
+    const kc = await keyCheck(o, sttKey);
+    if (!kc.ok) { console.error(`✗ ${o.provider === 'mistral' ? 'Mistral' : 'OpenRouter'} refuse ta clé (HTTP ${kc.status} ${kc.body}).\n  Vérifie-la sur ${o.provider === 'mistral' ? 'https://console.mistral.ai' : 'https://openrouter.ai/settings/keys'} (clé complète, non supprimée), puis : npm run transcribe -- setup\n  Clé enregistrée : ${mask(sttKey)} (npm run transcribe -- config). Sans audio : npm run transcribe -- --no-audio`); return 1; }
   }
   const bad = o.cookiesBrowser && checkBrowser(o.cookiesBrowser);
   if (bad) { console.error(`✗ ${bad}\n  → Utilise un de ces navigateurs, ou donne un fichier de cookies (--cookies cookies.txt, exporté depuis ton navigateur sur youtube.com),\n    ou essaie sans cookies : npm run transcribe -- --no-cookies\n    Pour changer le réglage enregistré : npm run transcribe -- setup`); return 1; }
@@ -386,7 +394,7 @@ export async function main(argv) {
   if (nStt) {
     console.log(`Coût de ce lancement : ${fmtUsd(spent)} (${anyEstimated ? 'estimé d\'après la durée et --price : la réponse du service n\'indiquait pas tout' : 'réel, annoncé par OpenRouter'}).`);
     if (keyDelta !== null) console.log(`Compteur de dépense de ta clé OpenRouter pendant le lancement : +${fmtUsd(keyDelta)} (inclut toute autre utilisation de la clé en même temps ; peut avoir quelques secondes de retard).`);
-  }
+  } else console.log(`Coût de ce lancement : 0 $ (${nSubs ? 'sous-titres YouTube : gratuits' : 'rien de payant'}${o.audio ? ', aucune reconnaissance vocale réussie' : '; l\'audio est désactivé : --audio pour traiter aussi les vidéos sans sous-titres'}).`);
   const hist = recordRun(o.out, { at: new Date().toISOString(), videos: batch.length, subs: nSubs, stt: nStt, failed: results.failed.length, costUsd: Math.round(spent * 1e6) / 1e6, costKind: anyEstimated ? 'estimé' : 'réel', ...(keyDelta !== null ? { keyDeltaUsd: Math.round(keyDelta * 1e6) / 1e6 } : {}), model: o.model });
   if (nStt) console.log(`Cumul de toutes tes transcriptions audio dans ce dossier : ${fmtUsd(hist.total)} sur ${hist.runs.length} lancement${hist.runs.length > 1 ? 's' : ''} (détail : npm run transcribe -- costs).`);
   console.log(`Fichier à importer dans l'extension (⋯ › Importer des transcriptions…) : ${path.resolve(resultsFile)}`);
