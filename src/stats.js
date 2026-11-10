@@ -2,6 +2,7 @@ import { getAllTweets, getMeta, setMeta, getAllVectors, getAllChunkVecs } from '
 import { getSettings } from './lib/settings.js';
 import { modelOf } from './lib/models.js';
 import { savedInfo, dayKey } from './lib/time.js';
+import { DETECTOR_PRESETS } from './lib/detpresets.js';
 import { detsOf, evalWidget, evalMulti, seriesDefs, detectorScores, detectorSet, detectorMargin, learnedLabels, LEARN_SIM, ambiguousIds, scoreStats, suggestThreshold, verdictKey, CONFIRM_BAND, textOf, slugOf, OFFICIAL_DESC, OFFICIAL_MIN, condKey, condOf, judgeText, suggestPrimary, handleKey } from './lib/widgets.js';
 import { jevJudge, estimateJudgeCost, fmtDollars } from './lib/jev.js';
 import { decodeEntities } from './lib/text.js';
@@ -142,6 +143,24 @@ async function embedTexts(texts) {
     out.push(Array.from(res.vec));
   }
   return out;
+}
+
+// Crée d'un coup les détecteurs « prêts à l'emploi » qui n'existent pas encore (même nom) : exemples vectorisés avec le modèle actuel, seuil de départ
+// affiné d'après les scores réels quand l'index en contient assez. onProgress(i, n, nom) pour l'affichage.
+async function addPresetDetectors(presets, onProgress = () => {}) {
+  const { mid } = await loadVectors();
+  let added = 0, skipped = 0;
+  for (const [i, p] of presets.entries()) {
+    if (detectors.some((d) => d.name.trim().toLowerCase() === p.name.toLowerCase())) { skipped++; continue; }
+    onProgress(i + 1, presets.length, p.name);
+    const tx = [p.desc, ...p.examples];
+    const det = { id: uid(), name: p.name, desc: p.desc, examples: [...p.examples], threshold: p.threshold, pos: [], neg: [], protos: { [mid]: await embedTexts(tx) }, protoKey: tx.join('␞') };
+    try { const sc = await scoresOf(det), sg = sc && suggestThreshold(sc); if (sg) det.threshold = sg.threshold; } catch { /* index trop pauvre : seuil de départ conservé */ }
+    detectors.push(det); added++;
+    await saveDetectors(); // un par un : si le modèle tombe en route, ceux déjà créés sont gardés
+  }
+  scoreCache.clear();
+  return { added, skipped };
 }
 
 const KINDS = { compare: 'Comparaison de stats', number: 'Nombre', series: 'Courbe / comparaison', top: 'Classement', ratio: 'Ratio (A ÷ B)', heat: 'Carte de chaleur (jour × heure)', trend: 'Tendances (ce qui monte)' };
@@ -597,6 +616,7 @@ function manageDetectors() {
     <p class="muted">Un détecteur reconnaît un <b>type de contenu</b> par son sens (« annonce d’un lancement », « recrutement »…), dans toutes les langues. Il sert dans les stats et dans la recherche (<code>is:nom</code>).</p>
     <ul class="dets">${detectors.map((x, k) => `<li><b>${esc(x.name)}</b> <span class="muted">is:${esc(slugOf(x.name))} · seuil ${x.threshold.toFixed(2)}</span> <button type="button" class="gbtn" data-e="${k}">Modifier</button> <button type="button" class="gbtn" data-x="${k}">Supprimer</button></li>`).join('') || '<li class="muted">Aucun détecteur.</li>'}</ul>
     <div class="row2"><button type="button" class="gbtn" id="dn">+ Nouveau</button><button type="button" class="gbtn" id="dl">+ Modèle « Lancements »</button></div>
+    <div class="row2"><select id="dp" class="gbtn"><option value="">+ Modèles IA et robotique…</option>${DETECTOR_PRESETS.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('')}</select><button type="button" class="gbtn" id="dp-all">Ajouter les ${DETECTOR_PRESETS.length} détecteurs IA</button></div><div id="dp-msg" class="muted"></div>
     <menu><button value="cancel" class="pbtn">Fermer</button></menu></form>`;
   d.querySelectorAll('[data-e]').forEach((b) => (b.onclick = () => { d.close('cancel'); editDetector(+b.dataset.e); }));
   d.querySelectorAll('[data-x]').forEach((b) => (b.onclick = async () => {
@@ -608,6 +628,16 @@ function manageDetectors() {
   }));
   $('dn').onclick = () => { d.close('cancel'); editDetector(null); };
   $('dl').onclick = () => { d.close('cancel'); editDetector(null, LAUNCH_DETECTOR); };
+  $('dp').onchange = (e) => { if (e.target.value === '') return; const p = DETECTOR_PRESETS[+e.target.value]; d.close('cancel'); editDetector(null, structuredClone(p)); };
+  $('dp-all').onclick = async () => {
+    $('dp-all').disabled = true;
+    try {
+      const r = await addPresetDetectors(DETECTOR_PRESETS, (i, n, nom) => { $('dp-msg').textContent = `Analyse des exemples ${i}/${n} : ${nom}… (le modèle se charge la première fois)`; });
+      $('dp-msg').textContent = `${r.added} détecteur${r.added > 1 ? 's' : ''} ajouté${r.added > 1 ? 's' : ''}${r.skipped ? `, ${r.skipped} déjà présent${r.skipped > 1 ? 's' : ''}` : ''}. Ils se précisent au fil de l’indexation ; ajuste le seuil de chacun avec « Modifier ».`;
+      render();
+    } catch (err) { $('dp-msg').textContent = '⚠ ' + (err.message || err); }
+    $('dp-all').disabled = false;
+  };
   d.onclose = null;
   d.showModal();
 }

@@ -1483,6 +1483,29 @@ assert.ok(!/Reportage/.test(estLog), 'pas de reportage listé pour la semaine pr
   await panel.evaluate(async () => { const { settings } = await chrome.storage.local.get('settings'); await chrome.storage.local.set({ settings: { ...settings, autoBackup: false } }); });
   await panel.goto(panelUrl); await panel.waitForSelector('.tw');
 }
+{ // détecteurs IA prêts à l'emploi : création en un clic (modèle d'embedding simulé), sans doublon au 2e clic
+  const sp = await ctx.newPage();
+  await sp.goto(`chrome-extension://${extId}/stats.html`);
+  await sp.waitForSelector('#source button');
+  await sp.click('#source button:has-text("Mes stats")');
+  await sp.waitForSelector('#d-manage');
+  await sp.evaluate(() => { const orig = chrome.runtime.sendMessage.bind(chrome.runtime); chrome.runtime.sendMessage = (m, ...r) => (m?.type === 'q:embed' ? Promise.resolve({ vec: Array.from({ length: 256 }, (_, i) => (i === 0 ? 1 : 0)) }) : orig(m, ...r)); });
+  const metaDets = () => sp.evaluate(async () => { const db = await new Promise((res, rej) => { const r = indexedDB.open('xbs'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); return new Promise((res) => { const q = db.transaction('meta').objectStore('meta').get('dashDetectors'); q.onsuccess = () => res((q.result?.value || []).map((d) => ({ name: d.name, n: Object.values(d.protos || {})[0]?.length || 0, examples: d.examples.length }))); }); });
+  const before = (await metaDets()).length;
+  await sp.click('#d-manage');
+  await sp.click('#dlg #dp-all');
+  await waitFor(async () => /7 détecteurs ajoutés/.test(await sp.locator('#dp-msg').innerText().catch(() => '')), 'création des 7 détecteurs', 30000);
+  const after = await metaDets();
+  assert.equal(after.length, before + 7);
+  for (const name of ['Lancements de modèles d’IA', 'Lancements de robots et robots open-source', 'Tests et analyses de nouveaux modèles d’IA', 'Rapport qualité-prix des modèles d’IA', 'Économie de l’IA', 'Réflexions sur l’IA en général', 'IA, travail et entreprise']) {
+    const d = after.find((x) => x.name === name);
+    assert.ok(d && d.n === d.examples + 1, name + ' : exemples vectorisés (' + JSON.stringify(d) + ')');
+  }
+  await sp.click('#dlg #dp-all');
+  await waitFor(async () => /0 détecteur ajouté, 7 déjà présents/.test(await sp.locator('#dp-msg').innerText().catch(() => '')), 'pas de doublon au 2e clic', 15000);
+  assert.equal((await metaDets()).length, before + 7);
+  await sp.close();
+}
 { // grille ×4 sur une fenêtre de ≈ 1000 px (3 colonnes seulement avant : minimum 320 px par carte)
   await panel.setViewportSize({ width: 1000, height: 800 });
   await panel.selectOption('#view', '4');
